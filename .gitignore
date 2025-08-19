@@ -11,3 +11,5 @@
 **/*.sh
 /statements/*
 .env
+*.json
+*.txt

@@ -1,16 +1,31 @@
-import pathlib
+import re
 import time
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 import boto3
-import pdfplumber
 from mypy_boto3_textract import TextractClient
 
+import pdfplumber
 from configuration.config import AWS_PROFILE, AWS_REGION
 
 session = boto3.session.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
 textract: TextractClient = session.client("textract")
+
+def normalize_text(text: str) -> str:
+    """
+    Make line-based text consistent:
+    - strip trailing/leading spaces per line
+    - collapse multiple spaces to one
+    - drop empty lines
+    """
+    lines = []
+    for raw in text.splitlines():
+        # collapse internal whitespace
+        line = re.sub(r"\s+", " ", raw).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
 
 # ---------- Textract text ----------
 
@@ -78,27 +93,3 @@ def count_pdf_pages(pdf_bytes: bytes) -> Optional[int]:
             return len(pdf.pages)
     except Exception:
         return None  # not a PDF or corrupted
-
-# ---------- Legacy ----------
-
-def extract_text_with_pdfplumber(file_path: str) -> str:
-    """
-    Extracts text from a PDF using pdfplumber. If a page returns None, treat as empty.
-    """
-    with pdfplumber.open(file_path) as pdf:
-        return "\n".join((page.extract_text() or "") for page in pdf.pages)
-
-def extract_text_with_textract(file_path: str) -> str:
-    """
-    Extract all LINE text from a (single-page) PDF/JPG/PNG/TIFF
-    and return as one big string.
-    """
-    data = pathlib.Path(file_path).read_bytes()
-    resp = textract.detect_document_text(Document={"Bytes": data})
-
-    lines = [
-        block["Text"]
-        for block in resp.get("Blocks", [])
-        if block.get("BlockType") == "LINE" and "Text" in block
-    ]
-    return "\n".join(lines)
