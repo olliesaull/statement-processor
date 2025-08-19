@@ -1,11 +1,13 @@
-*.zip
 **/.venv
 **/venv
 **/cache
 **/__pycache__
 **/cdk.out
 **package-lock.json
-config.py
 .DS_Store
 **vscode
 .idea/
+*.pdf
+**/*.sh
+/statements/*
+.env

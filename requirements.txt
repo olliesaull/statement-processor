@@ -1,0 +1,7 @@
+# AWS
+boto3
+boto3-stubs[essential]
+boto3-stubs[textract]
+
+dotenv
+pdfplumber
