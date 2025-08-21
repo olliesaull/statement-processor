@@ -174,6 +174,62 @@ def _analyze_tables_s3(bucket: str, key: str) -> List[List[List[str]]]:
 
     return _collect_table_grids(blocks)
 
+# --- helpers for skipping opening/carried-forward rows ---
+def _looks_money(s: str) -> bool:
+    if s is None:
+        return False
+    t = re.sub(r"\s+", "", s).replace(",", "")
+    return bool(re.fullmatch(r"-?\d+(?:\.\d+)?", t))
+
+def _is_forward_label(text: str) -> bool:
+    """
+    Matches variations like:
+      B/F, B/FWD, BFWD, BALANCE B/F, BROUGHT FORWARD, C/FWD, CARRIED FORWARD,
+      OPENING BALANCE, PREVIOUS BALANCE, etc.
+    """
+    t = re.sub(r"[^a-z0-9 ]+", "", (_norm(text) or ""))  # strip punctuation (/, #, .) and lowercase
+    if not t:
+        return False
+    keywords = (
+        "brought forward",
+        "carried forward",
+        "opening balance",
+        "opening bal",
+        "previous balance",
+        "balance forward",
+        "balance bf",
+        "balance b f",
+        "bal bf",
+        "bal b f",
+    )
+    short_forms = {"bf", "b f", "bfwd", "b fwd", "cf", "c f", "cfwd", "c fwd"}
+    return t in short_forms or any(k in t for k in keywords)
+
+def _row_is_opening_or_carried_forward(raw_row: List[str], mapped_item: Dict[str, Any]) -> bool:
+    """
+    Heuristics:
+      - Contains a forward-like label in document_type / description_details / any raw cell
+      - Very sparse row (<= 3 non-empty cells) AND only one money value present
+        AND no useful identifiers (doc/customer/supplier refs)
+    """
+    # 1) Label-based detection
+    if _is_forward_label(mapped_item.get("document_type", "")) or _is_forward_label(mapped_item.get("description_details", "")):
+        return True
+    if isinstance(mapped_item.get("raw"), dict):
+        if any(_is_forward_label(v) for v in mapped_item["raw"].values() if v):
+            return True
+
+    # 2) Sparsity + money pattern
+    non_empty = sum(1 for c in raw_row if (c or "").strip())
+    money_count = sum(1 for c in raw_row if _looks_money(c))
+    ids_empty = all(not (mapped_item.get(k) or "").strip() for k in ("supplier_reference", "customer_reference"))
+    doc_like_empty = all(not (mapped_item.get(k) or "").strip() for k in ("document_type", "description_details"))
+    if non_empty <= 3 and money_count <= 1 and ids_empty and doc_like_empty:
+        return True
+
+    return False
+
+
 def select_relevant_table(tables: List[List[List[str]]], candidates: List[str]) -> Optional[List[List[str]]]:
     """
     Choose the best "main statement" table among all Textract tables.
@@ -374,6 +430,10 @@ def table_to_json(key: str, tables: List[List[List[str]]], config_dir: str = "./
                 raw_obj[raw_key] = get_by_header(r, col_index, chosen_header)
             item["raw"] = raw_obj
 
+        # ---- NEW: skip opening/brought-forward/carried-forward rows ----
+        if _row_is_opening_or_carried_forward(r, item):
+            continue
+
         # ---- row quality check: skip header-like rows ----
         # If we have no date AND all mapped fields are empty -> skip.
         dt_empty = not item.get("transaction_date", {}).get("value")
@@ -396,7 +456,7 @@ def table_to_json(key: str, tables: List[List[List[str]]], config_dir: str = "./
 
 # ---------------- Example ----------------
 if __name__ == "__main__":
-    tables_by_key = get_tables(include_keys=["Bill Riley Z91.PDF"])
+    tables_by_key = get_tables(include_keys=["Bill Riley Z91.PDF", "ARSTMT11 (54).pdf"])
 
     for key, tables in tables_by_key.items():
         print(f"\n=== {key} ===")
