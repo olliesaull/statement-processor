@@ -1,7 +1,7 @@
-import re
 import time
+from collections import defaultdict
 from io import BytesIO
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
 from mypy_boto3_textract import TextractClient
@@ -12,24 +12,52 @@ from configuration.config import AWS_PROFILE, AWS_REGION
 session = boto3.session.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
 textract: TextractClient = session.client("textract")
 
-def normalize_text(text: str) -> str:
-    """
-    Make line-based text consistent:
-    - strip trailing/leading spaces per line
-    - collapse multiple spaces to one
-    - drop empty lines
-    """
-    lines = []
-    for raw in text.splitlines():
-        # collapse internal whitespace
-        line = re.sub(r"\s+", " ", raw).strip()
-        if line:
-            lines.append(line)
-    return "\n".join(lines)
-
 # ---------- Textract text ----------
 
-def _collect_lines_from_blocks(blocks: List[Dict[str, Any]]) -> str:
+def _collect_lines_from_blocks(
+    blocks: List[Dict[str, Any]],
+    *,
+    reconstruct_from_words: bool = True,
+    y_precision: int = 2,
+) -> str:
+    """
+    Build text lines from Textract Blocks.
+
+    If reconstruct_from_words=True (default), lines are reconstructed from WORD
+    blocks based on their geometry so that items visually on the same line are
+    kept together. This avoids Textract's occasional splitting of lines.
+
+    Fallback: if no WORD blocks are present (or reconstruct_from_words=False),
+    use LINE blocks directly.
+    """
+    if reconstruct_from_words:
+        # Group words by (page, approximate y position)
+        # Using the y *center* is a bit more robust than Top alone
+        grouped: defaultdict[Tuple[int, float], List[Tuple[float, str]]] = defaultdict(list)
+        found_word = False
+
+        for b in blocks:
+            if b.get("BlockType") == "WORD" and "Text" in b and "Geometry" in b:
+                geom = b["Geometry"].get("BoundingBox") or {}
+                left = float(geom.get("Left", 0.0))
+                top = float(geom.get("Top", 0.0))
+                height = float(geom.get("Height", 0.0))
+                y_center = top + height / 2.0
+                y_key = round(y_center, y_precision)
+                page = int(b.get("Page", 1))
+                grouped[(page, y_key)].append((left, b["Text"]))
+                found_word = True
+
+        if found_word:
+            # Sort lines by page, then y; words left-to-right within each line
+            out_lines: List[str] = []
+            for (page, y_key) in sorted(grouped.keys()):
+                words = grouped[(page, y_key)]
+                words.sort(key=lambda x: x[0])  # sort by Left
+                out_lines.append(" ".join(w for _, w in words))
+            return "\n".join(out_lines)
+
+    # Fallback: use LINE blocks as-is
     lines: List[str] = []
     for b in blocks:
         if b.get("BlockType") == "LINE" and "Text" in b:
@@ -68,8 +96,8 @@ def extract_text_from_textract_s3(bucket: str, key: str, pdf_pages: Optional[int
 
     # Gather all pages (pagination over NextToken)
     blocks: List[Dict[str, Any]] = []
-    next_token = status.get("NextToken")
     blocks.extend(status.get("Blocks", []))
+    next_token = status.get("NextToken")
     while next_token:
         page = textract.get_document_text_detection(JobId=job_id, NextToken=next_token, MaxResults=1000)  # type: ignore
         blocks.extend(page.get("Blocks", []))
