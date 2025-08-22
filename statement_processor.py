@@ -470,8 +470,13 @@ if __name__ == "__main__":
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(statement_json, f, ensure_ascii=False, indent=2)
 
-        statement_json, summary = apply_outlier_flags(statement_json, remove=False, one_based_index=True)
-
+        statement_json, summary = apply_outlier_flags(
+            statement_json,
+            remove=False,
+            one_based_index=True,
+            threshold_method="iqr",   # or "percentile"/"zscore"
+            percentile=0.98,
+        )
         print(json.dumps(summary, indent=2))
 
         # Optionally save the annotated JSON as-is, or remove flagged rows:

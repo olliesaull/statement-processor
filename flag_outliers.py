@@ -1,54 +1,113 @@
-# flag_outliers.py
-from collections import Counter, defaultdict
+# flag_outliers.py  (EXPLAINABLE IsolationForest)
+import math
+from collections import defaultdict, Counter
 from typing import Any, Dict, List, Tuple
 
-# ---------------- basic helpers ----------------
+import numpy as np
+
+try:
+    from sklearn.ensemble import IsolationForest
+    from sklearn.preprocessing import RobustScaler
+except Exception as e:
+    raise ImportError(
+        "This outlier module requires scikit-learn. Install with `pip install scikit-learn`."
+    ) from e
+
+# ----------------- feature meta -----------------
+FEATURE_NAMES = [
+    "date_present",              # 0
+    "doctype_present",           # 1
+    "supplier_ref_present",      # 2
+    "customer_ref_present",      # 3
+    "description_present",       # 4
+    "debit_present",             # 5
+    "credit_present",            # 6
+    "invbal_present",            # 7
+    "balance_present",           # 8
+    "day_of_month",              # 9
+    "log_abs_debit",             # 10
+    "log_abs_credit",            # 11
+    "log_abs_balance",           # 12
+    "sign_debit",                # 13  (-1,0,1)
+    "sign_credit",               # 14
+    "sign_balance",              # 15
+    "len_description",           # 16
+    "len_supplier_ref",          # 17
+    "len_customer_ref",          # 18
+    "debit_only",                # 19 (1 if debit and not credit)
+    "credit_only",               # 20
+    "both_amounts",              # 21
+    "no_amounts",                # 22
+]
+
+HUMAN_LABEL = {
+    "date_present": "Date present",
+    "doctype_present": "Document type present",
+    "supplier_ref_present": "Supplier ref present",
+    "customer_ref_present": "Customer ref present",
+    "description_present": "Description present",
+    "debit_present": "Debit present",
+    "credit_present": "Credit present",
+    "invbal_present": "Invoice balance present",
+    "balance_present": "Balance present",
+    "day_of_month": "Day of month",
+    "log_abs_debit": "Debit magnitude",
+    "log_abs_credit": "Credit magnitude",
+    "log_abs_balance": "Balance magnitude",
+    "sign_debit": "Debit sign",
+    "sign_credit": "Credit sign",
+    "sign_balance": "Balance sign",
+    "len_description": "Description length",
+    "len_supplier_ref": "Supplier ref length",
+    "len_customer_ref": "Customer ref length",
+    "debit_only": "Debit-only row",
+    "credit_only": "Credit-only row",
+    "both_amounts": "Both debit & credit",
+    "no_amounts": "No debit or credit",
+}
+
+# ----------------- tiny utils -----------------
 def _has_value(v: Any) -> bool:
     if v is None:
         return False
     if isinstance(v, (int, float)):
-        return True
+        return not (isinstance(v, float) and math.isnan(v))
     if isinstance(v, str):
         return v.strip() != ""
     return True
 
-def _is_number(v: Any) -> bool:
-    return isinstance(v, (int, float))
+def _get_num(v: Any) -> float:
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        t = v.replace(",", "").replace(" ", "").strip()
+        try:
+            return float(t) if t != "" else 0.0
+        except ValueError:
+            return 0.0
+    return 0.0
 
-def _presence_vector_any_amount(item: Dict[str, Any]) -> Tuple[bool, ...]:
-    """
-    Presence signature but with a single 'has_amount' flag = (debit or credit).
-    This avoids penalizing credit-only rows when debit is the global majority.
-    """
-    td = item.get("transaction_date", {}) or {}
-    has_debit = _has_value(item.get("debit"))
-    has_credit = _has_value(item.get("credit"))
-    has_amount = has_debit or has_credit
-    return (
-        _has_value(td.get("value")),
-        _has_value(item.get("document_type")),
-        _has_value(item.get("supplier_reference")),
-        _has_value(item.get("customer_reference")),
-        _has_value(item.get("description_details")),
-        has_amount,                           # << collapsed amount presence
-        _has_value(item.get("invoice_balance")),
-        _has_value(item.get("balance")),
-    )
+def _len_s(s: Any) -> int:
+    return len(str(s).strip()) if _has_value(s) else 0
 
-def _hamming(a: Tuple[bool, ...], b: Tuple[bool, ...]) -> int:
-    return sum(x != y for x, y in zip(a, b))
+def _parse_day_of_month(date_str: Any) -> int:
+    if not isinstance(date_str, str):
+        return 0
+    s = date_str.strip()
+    parts = s.split("/")
+    if len(parts) >= 1:
+        try:
+            d = int(parts[0])
+            return d if 1 <= d <= 31 else 0
+        except ValueError:
+            return 0
+    return 0
 
-# ---------------- doc-type normalization ----------------
 def _norm_doc_type(s: str) -> str:
-    """
-    Very light normalization to group obvious synonyms.
-    Extend/adjust as you see more vendors.
-    """
     t = (s or "").strip().lower()
     if not t:
         return ""
-    # common variants
-    if any(k in t for k in ("inv", "invoice")):            # IN, INV, Invoice
+    if any(k in t for k in ("inv", "invoice")):
         return "invoice"
     if any(k in t for k in ("pymt", "pmt", "paymnt", "pay", "receipt", "py")):
         return "payment"
@@ -60,176 +119,281 @@ def _norm_doc_type(s: str) -> str:
         return "adjustment"
     if "fee" in t or "charge" in t:
         return "charge"
-    return t  # fallback: original lowercased text
+    return t
 
-def _amount_orientation(item: Dict[str, Any]) -> str:
-    has_debit = _has_value(item.get("debit"))
-    has_credit = _has_value(item.get("credit"))
-    if has_debit and has_credit:
-        return "both"
-    if has_debit:
-        return "debit_only"
-    if has_credit:
-        return "credit_only"
-    return "none"
+# ----------------- features -----------------
+def _build_feature_matrix(items: List[Dict[str, Any]]) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    feats: List[List[float]] = []
+    meta: List[Dict[str, Any]] = []
 
-# ---------------- profiling & flagging ----------------
-def _build_profiles(items: List[Dict[str, Any]]):
-    """
-    Build per-doc_type profiles:
-      - majority presence vector (with 'any amount' collapsed)
-      - expected amount orientation (debit_only / credit_only / either)
-    """
-    by_type = defaultdict(list)
-    for it in items:
-        dt = _norm_doc_type(it.get("document_type", ""))
-        by_type[dt].append(it)
+    for idx, it in enumerate(items):
+        td = (it.get("transaction_date") or {}).get("value", "")
+        doc_type_raw = it.get("document_type", "")
+        doc_type = _norm_doc_type(doc_type_raw)
 
-    profiles = {}
-    for dt, rows in by_type.items():
-        # presence majority
-        vecs = [_presence_vector_any_amount(it) for it in rows]
-        maj_vec, _ = Counter(vecs).most_common(1)[0]
+        debit = it.get("debit", "")
+        credit = it.get("credit", "")
+        invbal = it.get("invoice_balance", "")
+        bal = it.get("balance", "")
 
-        # amount orientation distribution within this doc type
-        orients = [_amount_orientation(it) for it in rows]
-        orient_counts = Counter(orients)
-        total = sum(orient_counts.values())
+        d = _get_num(debit)
+        c = _get_num(credit)
+        b = _get_num(invbal if _has_value(invbal) else bal)
 
-        # choose expectation with support threshold; otherwise "either"
-        # e.g., if 60% of payments are credit_only -> expect credit_only
-        support_threshold = 0.6
-        expected_orient = "either"
-        for choice in ("debit_only", "credit_only"):
-            if orient_counts[choice] / max(total, 1) >= support_threshold:
-                expected_orient = choice
-                break
+        sign_d = 0 if d == 0 else (1 if d > 0 else -1)
+        sign_c = 0 if c == 0 else (1 if c > 0 else -1)
+        sign_b = 0 if b == 0 else (1 if b > 0 else -1)
 
-        profiles[dt] = {
-            "majority_vec": maj_vec,
-            "expected_orient": expected_orient,
-            "orient_counts": dict(orient_counts),
-            "count": total,
-        }
+        feat = [
+            1.0 if _has_value(td) else 0.0,
+            1.0 if _has_value(doc_type_raw) else 0.0,
+            1.0 if _has_value(it.get("supplier_reference")) else 0.0,
+            1.0 if _has_value(it.get("customer_reference")) else 0.0,
+            1.0 if _has_value(it.get("description_details")) else 0.0,
+            1.0 if _has_value(debit) else 0.0,
+            1.0 if _has_value(credit) else 0.0,
+            1.0 if _has_value(invbal) else 0.0,
+            1.0 if _has_value(bal) else 0.0,
+            float(_parse_day_of_month(td)),
+            float(np.log1p(abs(d))),
+            float(np.log1p(abs(c))),
+            float(np.log1p(abs(b))),
+            float(sign_d),
+            float(sign_c),
+            float(sign_b),
+            float(_len_s(it.get("description_details"))),
+            float(_len_s(it.get("supplier_reference"))),
+            float(_len_s(it.get("customer_reference"))),
+            1.0 if (_has_value(debit) and not _has_value(credit)) else 0.0,
+            1.0 if (_has_value(credit) and not _has_value(debit)) else 0.0,
+            1.0 if (_has_value(debit) and _has_value(credit)) else 0.0,
+            1.0 if (not _has_value(debit) and not _has_value(credit)) else 0.0,
+        ]
 
-    # global fallback (in case a row has unknown/empty doc_type)
-    all_vecs = [_presence_vector_any_amount(it) for it in items]
-    global_majority_vec, _ = Counter(all_vecs).most_common(1)[0]
-    profiles["_global"] = {"majority_vec": global_majority_vec, "expected_orient": "either", "orient_counts": {}, "count": len(items)}
-    return profiles
-
-def flag_outliers(statement: Dict[str, Any], *, hamming_threshold: int = 3) -> List[Dict[str, Any]]:
-    """
-    Returns diagnostics parallel to statement_items:
-      [{ "flags": [...], "presence": tuple, "hamming_to_majority": n, "doc_type_group": <str> }, ...]
-    """
-    items = statement.get("statement_items", []) or []
-    if not items:
-        return []
-
-    profiles = _build_profiles(items)
-
-    results: List[Dict[str, Any]] = []
-    for it in items:
-        dt_group = _norm_doc_type(it.get("document_type", "")) or "_global"
-        prof = profiles.get(dt_group, profiles["_global"])
-
-        vec = _presence_vector_any_amount(it)
-        ham = _hamming(vec, prof["majority_vec"])
-
-        flags: List[str] = []
-        # a) presence outlier vs same-type majority
-        if ham >= hamming_threshold:
-            flags.append(f"presence-outlier:{ham}-fields-differ")
-
-        # b) amount orientation checks per doc type
-        orient = _amount_orientation(it)
-        exp = prof["expected_orient"]
-        if orient == "both":
-            flags.append("both-debit-and-credit")
-        elif exp in ("debit_only", "credit_only"):
-            if orient == "none":
-                flags.append("no-amounts")
-            elif orient != exp:
-                flags.append(f"unexpected-amount-column:expected-{exp}")
-
-        # c) missing date if the doc-type majority has a date
-        maj_has_date = prof["majority_vec"][0]  # first bit is date presence
-        td_val = (it.get("transaction_date") or {}).get("value", "")
-        if maj_has_date and not _has_value(td_val):
-            flags.append("missing-date")
-
-        # d) balance-only rows (common for totals), unchanged
-        has_doc_like = _has_value(it.get("document_type")) or _has_value(it.get("description_details"))
-        has_invbal = _has_value(it.get("invoice_balance"))
-        has_bal = _has_value(it.get("balance"))
-        has_debit = _has_value(it.get("debit"))
-        has_credit = _has_value(it.get("credit"))
-        if (has_invbal or has_bal) and (not has_debit) and (not has_credit) and (not has_doc_like):
-            flags.append("balance-only-row")
-
-        results.append({
-            "flags": flags,
-            "presence": vec,
-            "hamming_to_majority": ham,
-            "doc_type_group": dt_group,
-        })
-
-    return results
-
-def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_based_index: bool = False):
-    """
-    Annotate each row with _flags (or drop flagged rows if remove=True).
-    Summary includes which rows were flagged and by what reasons.
-    """
-    items = statement.get("statement_items", []) or []
-    flags_info = flag_outliers(statement)
-
-    if not items:
-        return statement, {"total": 0, "flagged": 0, "reasons": {}, "flagged_items": [], "doc_type_profiles": {}}
-
-    # Build doc-type profile summary for transparency/debug
-    # (how many rows per doc type and amount orientation frequencies)
-    doc_type_profiles = defaultdict(lambda: {"count": 0, "orient_counts": Counter()})
-    for it in items:
-        dt = _norm_doc_type(it.get("document_type", "")) or "_global"
-        doc_type_profiles[dt]["count"] += 1
-        doc_type_profiles[dt]["orient_counts"][_amount_orientation(it)] += 1
-    doc_type_profiles = {
-        dt: {"count": v["count"], "orient_counts": dict(v["orient_counts"])}
-        for dt, v in doc_type_profiles.items()
-    }
-
-    flagged_items = []
-    for idx, (it, fi) in enumerate(zip(items, flags_info)):
-        if not fi["flags"]:
-            continue
-        flagged_items.append({
-            "index": (idx + 1) if one_based_index else idx,
-            "doc_type_group": fi["doc_type_group"],
-            "reasons": fi["flags"],
-            "date": (it.get("transaction_date") or {}).get("value", ""),
+        feats.append(feat)
+        meta.append({
+            "index": idx,
+            "doc_type_group": doc_type or "_global",
+            "date": td,
             "document_type": it.get("document_type", ""),
             "supplier_reference": it.get("supplier_reference", ""),
             "customer_reference": it.get("customer_reference", ""),
-            "debit": it.get("debit", ""),
-            "credit": it.get("credit", ""),
-            "balance": it.get("balance", ""),
+            "debit": debit,
+            "credit": credit,
+            "balance": bal,
         })
 
-    # mutate or not
-    if remove:
-        statement["statement_items"] = [it for it, fi in zip(items, flags_info) if not fi["flags"]]
-    else:
-        for it, fi in zip(items, flags_info):
-            it["_flags"] = fi["flags"]
+    X = np.array(feats, dtype=np.float64)
+    return X, meta
 
-    reason_counts = Counter([r for fi in flags_info for r in fi["flags"]])
+# ----------------- model & threshold -----------------
+def _scores_isoforest(X: np.ndarray, random_state: int = 42) -> Tuple[np.ndarray, RobustScaler]:
+    scaler = RobustScaler()
+    Xs = scaler.fit_transform(X)
+    clf = IsolationForest(
+        n_estimators=200,
+        max_samples="auto",
+        bootstrap=False,
+        contamination="auto",
+        random_state=random_state,
+        n_jobs=-1,
+    )
+    clf.fit(Xs)
+    scores = -clf.score_samples(Xs)  # higher = more anomalous
+    return scores, scaler
+
+def _threshold(scores: np.ndarray, method: str = "iqr", *, iqr_k: float = 1.5, z: float = 3.0, pct: float = 0.98) -> float:
+    if scores.size == 0:
+        return float("inf")
+    if method == "percentile":
+        return float(np.quantile(scores, pct))
+    if method == "zscore":
+        mu = float(np.mean(scores))
+        sd = float(np.std(scores)) or 1.0
+        return mu + z * sd
+    q1, q3 = np.quantile(scores, [0.25, 0.75])
+    iqr = q3 - q1
+    return q3 + iqr_k * iqr
+
+# ----------------- explanations -----------------
+def _robust_stats(X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    med = np.median(X, axis=0)
+    q1 = np.quantile(X, 0.25, axis=0)
+    q3 = np.quantile(X, 0.75, axis=0)
+    iqr = q3 - q1
+    iqr[iqr == 0] = 1e-9
+    return med, iqr
+
+def _row_explanations(x: np.ndarray, med: np.ndarray, iqr: np.ndarray, top_k: int = 5) -> List[Dict[str, Any]]:
+    rz = (x - med) / iqr
+    # top absolute deviations
+    idxs = np.argsort(np.abs(rz))[::-1][:top_k]
+    out = []
+    for j in idxs:
+        name = FEATURE_NAMES[j] if j < len(FEATURE_NAMES) else f"f{j}"
+        out.append({
+            "feature": name,
+            "label": HUMAN_LABEL.get(name, name),
+            "value": float(x[j]),
+            "median": float(med[j]),
+            "iqr": float(iqr[j]),
+            "robust_z": float(rz[j]),
+        })
+    return out
+
+def _human_reasons(x: np.ndarray, med: np.ndarray) -> List[str]:
+    reasons = []
+    # presence flips
+    def _flip(name):
+        j = FEATURE_NAMES.index(name)
+        v, m = x[j], med[j]
+        if m >= 0.5 and v < 0.5:
+            reasons.append(f"Missing {HUMAN_LABEL[name]} while peers have it")
+        if m < 0.5 and v >= 0.5:
+            reasons.append(f"Has {HUMAN_LABEL[name]} while peers usually don't")
+
+    for n in ["date_present", "supplier_ref_present", "customer_ref_present", "description_present",
+              "debit_present", "credit_present"]:
+        _flip(n)
+
+    # orientation anomalies
+    for n in ["both_amounts", "no_amounts"]:
+        j = FEATURE_NAMES.index(n)
+        if x[j] >= 0.5 and med[j] < 0.5:
+            reasons.append(HUMAN_LABEL[n])
+
+    # magnitude anomalies (compare to median)
+    for n in ["log_abs_debit", "log_abs_credit", "log_abs_balance"]:
+        j = FEATURE_NAMES.index(n)
+        if x[j] > med[j] + 2.0:  # ~ large vs median (on log-scale)
+            pretty = HUMAN_LABEL[n].replace("log_abs_", "").replace(" magnitude", "").capitalize()
+            reasons.append(f"Unusually large {pretty}")
+    return reasons
+
+# ----------------- public API -----------------
+def apply_outlier_flags(
+    statement: Dict[str, Any],
+    *,
+    remove: bool = False,
+    one_based_index: bool = False,
+    group_by_doc_type: bool = True,
+    min_group_size: int = 8,
+    threshold_method: str = "iqr",
+    percentile: float = 0.98,
+    iqr_k: float = 1.5,
+    zscore_z: float = 3.0,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    IsolationForest scoring + statistical threshold + EXPLANATIONS.
+    Explanations list the top deviating features (robust z-scores) and readable reasons.
+    """
+    items = statement.get("statement_items", []) or []
+    if not items:
+        return statement, {"total": 0, "flagged": 0, "reasons": {}, "flagged_items": [], "profiles": {}}
+
+    X_all, meta_all = _build_feature_matrix(items)
+
+    # group by document type (or global)
+    groups: Dict[str, List[int]] = defaultdict(list)
+    for i, m in enumerate(meta_all):
+        g = (m["doc_type_group"] if group_by_doc_type else "_global") or "_global"
+        groups[g].append(i)
+
+    # move tiny groups into _global
+    for g in list(groups.keys()):
+        if g != "_global" and len(groups[g]) < min_group_size:
+            groups["_global"].extend(groups[g])
+            del groups[g]
+    groups.setdefault("_global", [])
+
+    flagged_mask = np.zeros(len(items), dtype=bool)
+    scores_all = np.zeros(len(items), dtype=float)
+    explanations: Dict[int, Dict[str, Any]] = {}
+    profile_summary = {}
+
+    for g, idxs in groups.items():
+        if not idxs:
+            continue
+        Xg = X_all[idxs]
+
+        # train, score, threshold
+        scores, _ = _scores_isoforest(Xg)
+        thr = _threshold(scores, method=threshold_method, iqr_k=iqr_k, z=zscore_z, pct=percentile)
+        group_flags = scores > thr
+
+        flagged_mask[idxs] = group_flags
+        scores_all[idxs] = scores
+
+        # robust stats for explanations
+        med, iqr = _robust_stats(Xg)
+
+        for local_i, is_flagged in enumerate(group_flags):
+            if not is_flagged:
+                continue
+            global_i = idxs[local_i]
+            x = X_all[global_i]
+            top_feats = _row_explanations(x, med, iqr, top_k=6)
+            reasons = _human_reasons(x, med)
+            explanations[global_i] = {
+                "top_features": top_feats,
+                "reasons": reasons,
+            }
+
+        profile_summary[g] = {
+            "count": int(len(idxs)),
+            "threshold_method": threshold_method,
+            "threshold": float(thr),
+            "score_min": float(scores.min()),
+            "score_q50": float(np.quantile(scores, 0.5)),
+            "score_q90": float(np.quantile(scores, 0.9)),
+            "score_max": float(scores.max()),
+            "flagged": int(np.count_nonzero(group_flags)),
+        }
+
+    # attach / remove & build summary
+    flagged_items = []
+    new_items = []
+    for i, it in enumerate(items):
+        if flagged_mask[i]:
+            ex = explanations.get(i, {"top_features": [], "reasons": []})
+            reasons = ["ml-outlier"] + ex["reasons"]
+            detail_feats = ex["top_features"]
+
+            if remove:
+                pass
+            else:
+                it["_flags"] = reasons
+                it["_explain"] = detail_feats
+                new_items.append(it)
+
+            flagged_items.append({
+                "index": (i + 1) if one_based_index else i,
+                "doc_type_group": meta_all[i]["doc_type_group"],
+                "score": float(scores_all[i]),
+                "reasons": reasons,
+                "top_features": detail_feats,
+                "date": meta_all[i]["date"],
+                "document_type": meta_all[i]["document_type"],
+                "supplier_reference": meta_all[i]["supplier_reference"],
+                "customer_reference": meta_all[i]["customer_reference"],
+                "debit": meta_all[i]["debit"],
+                "credit": meta_all[i]["credit"],
+                "balance": meta_all[i]["balance"],
+            })
+        else:
+            new_items.append(it)
+
+    if remove:
+        statement["statement_items"] = new_items
+
+    # reason counts (by human reason, excluding the generic "ml-outlier")
+    reason_counts = Counter([r for fi in flagged_items for r in fi["reasons"] if r != "ml-outlier"])
+
     summary = {
         "total": len(items),
         "flagged": len(flagged_items),
         "reasons": dict(reason_counts),
         "flagged_items": flagged_items,
-        "doc_type_profiles": doc_type_profiles,  # helpful to see why things were/weren't flagged
+        "profiles": profile_summary,
     }
     return statement, summary

@@ -4,7 +4,12 @@ boto3-stubs[essential]
 boto3-stubs[textract]
 
 ollama
+pandas
 pydantic
 
 dotenv
 pdfplumber
+
+# Outlier detection
+scikit-learn
+numpy

@@ -9,8 +9,8 @@ from core.extract_text_from_pdf import (
     extract_text_from_pdf_bytes,
     extract_text_from_textract_s3,
 )
-from utils.aws import get_s3_object_bytes, get_statements_from_s3
-from utils.json_statement_helpers import build_statement_prompt, write_json
+from helpers.aws import get_s3_object_bytes, get_statements_from_s3
+from helpers.json_statement_helpers import build_statement_prompt, write_json
 
 
 def remove_unprintable(s: str) -> str:
