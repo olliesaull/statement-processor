@@ -10,6 +10,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from configuration.config import S3_BUCKET_NAME
+from flag_outliers import apply_outlier_flags
 
 s3 = boto3.client("s3")
 textract = boto3.client("textract")
@@ -228,7 +229,6 @@ def _row_is_opening_or_carried_forward(raw_row: List[str], mapped_item: Dict[str
         return True
 
     return False
-
 
 def select_relevant_table(tables: List[List[List[str]]], candidates: List[str]) -> Optional[List[List[str]]]:
     """
@@ -471,3 +471,10 @@ if __name__ == "__main__":
 
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(statement_json, f, ensure_ascii=False, indent=2)
+
+        statement_json, summary = apply_outlier_flags(statement_json, remove=False, one_based_index=True)
+
+        print(json.dumps(summary, indent=2))
+
+        # Optionally save the annotated JSON as-is, or remove flagged rows:
+        # statement_json, _ = apply_outlier_flags(statement_json, remove=True)
