@@ -4,7 +4,7 @@ import re
 import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 import boto3
 from botocore.exceptions import ClientError
@@ -14,6 +14,11 @@ from flag_outliers import apply_outlier_flags
 
 s3 = boto3.client("s3")
 textract = boto3.client("textract")
+
+
+class TableOnPage(TypedDict):
+    page: int
+    grid: List[List[str]]
 
 # ---------- Helpers ----------
 def _norm(s: str) -> str:
@@ -95,12 +100,14 @@ def _block_text(block: Dict[str, Any], by_id: Dict[str, Dict[str, Any]]) -> str:
                     out.append("[x]" if ch.get("SelectionStatus") == "SELECTED" else "[ ]")
     return " ".join(t for t in out if t).strip()
 
-def _collect_table_grids(blocks: List[Dict[str, Any]]) -> List[List[List[str]]]:
-    """Return a list of tables across all pages; each is a 2D grid of strings."""
+def _collect_table_grids_with_pages(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return [{'page': int, 'grid': List[List[str]]}, ...] across all pages."""
     by_id = {b["Id"]: b for b in blocks}
-    tables: List[List[List[str]]] = []
+    out: List[Dict[str, Any]] = []
 
     for tbl in [b for b in blocks if b.get("BlockType") == "TABLE"]:
+
+        # gather cells
         cells = []
         for rel in tbl.get("Relationships", []):
             if rel["Type"] == "CHILD":
@@ -108,10 +115,10 @@ def _collect_table_grids(blocks: List[Dict[str, Any]]) -> List[List[List[str]]]:
                     cb = by_id.get(cid)
                     if cb and cb.get("BlockType") == "CELL":
                         cells.append(cb)
-
         if not cells:
             continue
 
+        # build grid
         max_r = max(c.get("RowIndex", 1) + c.get("RowSpan", 1) - 1 for c in cells)
         max_c = max(c.get("ColumnIndex", 1) + c.get("ColumnSpan", 1) - 1 for c in cells)
         grid = [["" for _ in range(max_c)] for _ in range(max_r)]
@@ -121,18 +128,20 @@ def _collect_table_grids(blocks: List[Dict[str, Any]]) -> List[List[List[str]]]:
             col = c.get("ColumnIndex", 1) - 1
             grid[r][col] = _block_text(c, by_id).strip()
 
-        # drop empty rows and columns
+        # prune empty rows/cols
         grid = [row for row in grid if any(x.strip() for x in row)]
         if grid:
             keep_cols = [i for i in range(len(grid[0])) if any(row[i].strip() for row in grid)]
             grid = [[row[i] for i in keep_cols] for row in grid]
 
         if grid:
-            tables.append(grid)
+            out.append({"page": int(tbl.get("Page", 1)), "grid": grid})
 
-    return tables
+    # sort by page order (stable)
+    out.sort(key=lambda t: t["page"])
+    return out
 
-def _analyze_tables_s3(bucket: str, key: str) -> List[List[List[str]]]:
+def _analyze_tables_s3(bucket: str, key: str) -> List[TableOnPage]:
     """
     Use async StartDocumentAnalysis for PDFs/TIFFs.
     Use analyze_document for single-page images.
@@ -173,7 +182,7 @@ def _analyze_tables_s3(bucket: str, key: str) -> List[List[List[str]]]:
         )
         blocks = resp.get("Blocks", [])
 
-    return _collect_table_grids(blocks)
+    return _collect_table_grids_with_pages(blocks)
 
 # --- helpers for skipping opening/carried-forward rows ---
 def _looks_money(s: str) -> bool:
@@ -230,62 +239,64 @@ def _row_is_opening_or_carried_forward(raw_row: List[str], mapped_item: Dict[str
 
     return False
 
-def select_relevant_table(tables: List[List[List[str]]], candidates: List[str]) -> Optional[List[List[str]]]:
+def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], candidates: List[str]) -> List[Dict[str, Any]]:
     """
-    Choose the best "main statement" table among all Textract tables.
-    Scoring:
-      - header hits: how many candidate header labels match the chosen header row
-      - date hits: how many rows in first few data rows look like dates (dd/mm/yy or dd/mm/yyyy)
-      - size bonus: rows * cols
+    From [{'page': p, 'grid': G}, ...], choose one best table per page.
+    Returns a list of the same shape, sorted by page.
     """
-    if not tables:
-        return None
+    if not tables_with_pages:
+        return []
 
     cand_set = {c.strip().lower() for c in candidates if c}
     date_re = re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}$")
 
-    best_tbl = None
-    best_score = -1
+    # group by page
+    by_page: Dict[int, List[List[List[str]]]] = {}
+    for t in tables_with_pages:
+        by_page.setdefault(int(t["page"]), []).append(t["grid"])
 
-    for grid in tables:
-        if not grid:
-            continue
+    selected: List[Dict[str, Any]] = []
 
-        # Use your robust header-row finder to cope with multi-line headers
-        hdr_idx, header_row = _best_header_row(grid, list(cand_set))
-        data_rows = grid[hdr_idx + 1 :]
+    for page, grids in sorted(by_page.items()):
+        best_grid = None
+        best_score = -1.0
 
-        # Header score: count of candidate labels present in header row (case/space-insensitive)
-        header_norm = [ _norm(h) for h in header_row ]
-        header_hits = sum(1 for h in header_norm if h in cand_set or any(c in h or h in c for c in cand_set))
+        for grid in grids:
+            if not grid:
+                continue
 
-        # Date score: first column often contains dates; reward rows that look like dates
-        date_hits = 0
-        for r in data_rows[:10]:  # look at a few rows only
-            if r and date_re.match((r[0] or "").strip()):
-                date_hits += 1
+            hdr_idx, header_row = _best_header_row(grid, list(cand_set))
+            data_rows = grid[hdr_idx + 1 :]
 
-        # Size bonus to break ties in favor of larger tables
-        size_bonus = len(grid) * (len(grid[0]) if grid and grid[0] else 0)
+            header_norm = [_norm(h) for h in header_row]
+            header_hits = sum(1 for h in header_norm if h in cand_set or any(c in h or h in c for c in cand_set))
 
-        score = header_hits * 10 + date_hits * 2 + size_bonus * 0.001
+            date_hits = 0
+            for r in data_rows[:10]:
+                if r and date_re.match((r[0] or "").strip()):
+                    date_hits += 1
 
-        if score > best_score:
-            best_score = score
-            best_tbl = grid
+            size_bonus = len(grid) * (len(grid[0]) if grid and grid[0] else 0)
+            score = header_hits * 10 + date_hits * 2 + size_bonus * 0.001
 
-    # Fallback: largest table if nothing scored
-    if best_tbl is None:
-        best_tbl = max(tables, key=lambda g: (len(g), len(g[0]) if g else 0))
+            if score > best_score:
+                best_score = score
+                best_grid = grid
 
-    return best_tbl
+        if best_grid is None:
+            # fallback: largest table on page
+            best_grid = max(grids, key=lambda g: (len(g), len(g[0]) if g else 0))
+
+        selected.append({"page": page, "grid": best_grid})
+
+    return selected
 
 # =========================================================
 # 1) get_tables
 # =========================================================
-def get_tables(bucket: str = S3_BUCKET_NAME, prefix: str = "statements/", include_keys: Optional[List[str]] = None) -> Dict[str, List[List[List[str]]]]:
+def get_tables(bucket: str = S3_BUCKET_NAME, prefix: str = "statements/", include_keys: Optional[List[str]] = None) -> Dict[str, List[TableOnPage]]:
     """
-    Return {s3_key: [table_grids...]} for statements under 'prefix'.
+    Return {s3_key: [{"page": int, "grid": [[...], ...]}, ...]} for statements under 'prefix'.
     If include_keys is provided, only those keys are processed.
     Each table_grid is a 2D list of strings.
     """
@@ -294,11 +305,11 @@ def get_tables(bucket: str = S3_BUCKET_NAME, prefix: str = "statements/", includ
     else:
         keys = _list_s3_objects(bucket, prefix)
 
-    result: Dict[str, List[List[List[str]]]] = {}
+    result: Dict[str, List[TableOnPage]] = {}
     for key in keys:
         try:
-            tables = _analyze_tables_s3(bucket, key)
-            result[key] = tables
+            tables_wp = _analyze_tables_s3(bucket, key)
+            result[key] = tables_wp
         except ClientError as ce:
             print(f"AWS error for {key}: {ce}")
         except Exception as e:
@@ -308,19 +319,8 @@ def get_tables(bucket: str = S3_BUCKET_NAME, prefix: str = "statements/", includ
 # =========================================================
 # 2) table_to_json
 # =========================================================
-def table_to_json(key: str, tables: List[List[List[str]]], config_dir: str = "./statement_configs") -> Dict[str, Any]:
-    """
-    Builds a SupplierStatement JSON using:
-      - ./statement_configs/<stem>.json mapping template
-      - (optional) canonical schema file (not enforced here)
-    Now selects the most relevant table first, then parses only that table.
-
-    Still includes:
-      * robust header row detection (skips multiple header lines)
-      * raw map auto-fills when template value is empty
-      * numeric coercion strips ALL whitespace and commas
-      * skips empty/header-like rows
-    """
+def table_to_json(key: str, tables: List[Any], config_dir: str = "./statement_configs") -> Dict[str, Any]:
+    # --- load configs (unchanged) ---
     stem = Path(key).stem
     cfg_path = Path(config_dir) / f"{stem}.json"
     canon_path = Path(config_dir) / "canonical_schema.json"
@@ -329,7 +329,7 @@ def table_to_json(key: str, tables: List[List[List[str]]], config_dir: str = "./
         map_cfg: Dict[str, Any] = json.load(f)
     try:
         with open(canon_path, "r", encoding="utf-8") as f:
-            _canonical_schema = json.load(f)  # available if you later want validation
+            _canonical_schema = json.load(f)
     except FileNotFoundError:
         _canonical_schema = None
 
@@ -342,12 +342,11 @@ def table_to_json(key: str, tables: List[List[List[str]]], config_dir: str = "./
     tmpl_list = map_cfg.get("statement_items", [])
     if not tmpl_list:
         return out
-
     row_template: Dict[str, Any] = deepcopy(tmpl_list[0])
 
-    # Build mapping config
-    simple_map: Dict[str, str] = {}      # field -> header label
-    raw_map: Dict[str, str] = {}         # raw_key -> header label (may be "")
+    # ----- build mapping config (unchanged) -----
+    simple_map: Dict[str, str] = {}
+    raw_map: Dict[str, str] = {}
     date_value_header = None
     date_format = None
 
@@ -360,23 +359,23 @@ def table_to_json(key: str, tables: List[List[List[str]]], config_dir: str = "./
         elif isinstance(value, str) and value.strip():
             simple_map[field] = value
 
-    # Candidate headers used to find the best header row + pick the right table
     candidates = list(simple_map.values())
     if date_value_header:
         candidates.append(date_value_header)
-    # also include raw keys and non-empty raw values as hints
     candidates.extend(list(raw_map.keys()))
     candidates.extend([v for v in raw_map.values() if v])
 
-    # ---- NEW: select the relevant table first ----
-    selected = select_relevant_table(tables or [], candidates=candidates)
-    if not selected:
-        # nothing usable
-        return out
+    # ----- normalize input shape to [{'page','grid'}, ...] -----
+    if tables and isinstance(tables[0], list):
+        # came from the old _collect_table_grids; assume page=1
+        tables_with_pages = [{"page": 1, "grid": g} for g in tables]
+    else:
+        tables_with_pages = tables or []
 
-    # Process only the selected table
-    grid = selected
+    # ----- select ONE table per page -----
+    selected = select_relevant_tables_per_page(tables_with_pages, candidates=candidates)
 
+    # ----- helpers -----
     def build_col_index(header_row: List[str]) -> Dict[str, int]:
         col_index: Dict[str, int] = {}
         for i, h in enumerate(header_row):
@@ -393,65 +392,64 @@ def table_to_json(key: str, tables: List[List[List[str]]], config_dir: str = "./
             return ""
         return (row[idx] or "").strip()
 
-    # choose the best header row, then data starts after it
-    hdr_idx, header_row = _best_header_row(grid, candidates)
-    data_rows = grid[hdr_idx + 1 :]  # skip all header lines up to the chosen one
+    # ----- parse selected tables (page order) -----
+    for entry in selected:
+        grid = entry["grid"]
+        hdr_idx, header_row = _best_header_row(grid, candidates)
+        data_rows = grid[hdr_idx + 1 :]
 
-    col_index = build_col_index(header_row)
+        col_index = build_col_index(header_row)
 
-    for r in data_rows:
-        if not any((c or "").strip() for c in r):
-            continue  # blank row
+        for r in data_rows:
+            if not any((c or "").strip() for c in r):
+                continue
 
-        # Build item from template (but DO NOT include template values themselves)
-        item = deepcopy(row_template)
+            item = deepcopy(row_template)
 
-        # ---- transaction_date ----
-        if isinstance(item.get("transaction_date"), dict):
-            dt_val = get_by_header(r, col_index, date_value_header or "")
-            item["transaction_date"]["value"] = dt_val
-            item["transaction_date"]["format"] = date_format or item["transaction_date"].get("format", "")
+            # transaction_date
+            if isinstance(item.get("transaction_date"), dict):
+                dt_val = get_by_header(r, col_index, date_value_header or "")
+                item["transaction_date"]["value"] = dt_val
+                item["transaction_date"]["format"] = date_format or item["transaction_date"].get("format", "")
 
-        # ---- simple mapped fields ----
-        for field, header_name in simple_map.items():
-            cell = get_by_header(r, col_index, header_name)
-            if field in {"debit", "credit", "invoice_balance", "balance"}:
-                item[field] = _to_number_if_possible(cell)
-            else:
-                item[field] = cell
+            # simple fields + numeric coercion
+            for field, header_name in simple_map.items():
+                cell = get_by_header(r, col_index, header_name)
+                if field in {"debit", "credit", "invoice_balance", "balance"}:
+                    item[field] = _to_number_if_possible(cell)
+                else:
+                    item[field] = cell
 
-        # ---- raw object ----
-        # If template gives a header -> use it.
-        # If template value is "", try to match raw_key to an actual header of same name.
-        if isinstance(item.get("raw"), dict):
-            raw_obj = {}
-            for raw_key, raw_src_header in raw_map.items():
-                chosen_header = raw_src_header or raw_key  # auto-match by raw key if empty
-                raw_obj[raw_key] = get_by_header(r, col_index, chosen_header)
-            item["raw"] = raw_obj
+            # raw object (auto-fill when mapping empty)
+            if isinstance(item.get("raw"), dict):
+                raw_obj = {}
+                for raw_key, raw_src_header in raw_map.items():
+                    chosen_header = raw_src_header or raw_key
+                    raw_obj[raw_key] = get_by_header(r, col_index, chosen_header)
+                item["raw"] = raw_obj
 
-        # ---- NEW: skip opening/brought-forward/carried-forward rows ----
-        if _row_is_opening_or_carried_forward(r, item):
-            continue
+            if _row_is_opening_or_carried_forward(r, item):
+                continue
 
-        # ---- row quality check: skip header-like rows ----
-        # If we have no date AND all mapped fields are empty -> skip.
-        dt_empty = not item.get("transaction_date", {}).get("value")
-        mapped_values = [
-            item.get("document_type", ""),
-            item.get("description_details", ""),
-            item.get("debit", ""),
-            item.get("credit", ""),
-            item.get("invoice_balance", ""),
-            item.get("balance", ""),
-            item.get("supplier_reference", ""),
-            item.get("customer_reference", ""),
-        ]
-        if dt_empty and all(v in ("", None) for v in mapped_values):
-            continue
+            # skip header-like rows / sparse carried-forward (your existing checks)
+            dt_empty = not item.get("transaction_date", {}).get("value")
+            mapped_values = [
+                item.get("document_type", ""),
+                item.get("description_details", ""),
+                item.get("debit", ""),
+                item.get("credit", ""),
+                item.get("invoice_balance", ""),
+                item.get("balance", ""),
+                item.get("supplier_reference", ""),
+                item.get("customer_reference", ""),
+            ]
+            if dt_empty and all(v in ("", None) for v in mapped_values):
+                continue
 
-        out["statement_items"].append(item)
+            # Optional: if you kept the carried-forward skipper, call it here:
+            # if _row_is_opening_or_carried_forward(r, item): continue
 
+            out["statement_items"].append(item)
     return out
 
 # ---------------- Example ----------------
