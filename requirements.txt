@@ -3,13 +3,15 @@ boto3
 boto3-stubs[essential]
 boto3-stubs[textract]
 
-ollama
-pandas
-pydantic
-
-dotenv
+# Item count validation
 pdfplumber
 
 # Outlier detection
 scikit-learn
 numpy
+
+# Other
+ollama
+pandas
+pydantic
+dotenv

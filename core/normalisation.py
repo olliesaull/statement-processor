@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List
 
-from models import StatementItem, StatementMeta, SupplierStatement
+from core.models import StatementItem, StatementMeta, SupplierStatement
 from utils import (
     best_header_row,
     build_col_index,
