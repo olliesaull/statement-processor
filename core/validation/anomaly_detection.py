@@ -4,7 +4,7 @@ import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import RobustScaler
 
-from models import StatementItem  # your Pydantic model
+from core.models import StatementItem
 
 # ---------------- helpers ----------------
 def _has(x): return not (x is None or (isinstance(x, str) and x.strip() == ""))
@@ -15,6 +15,23 @@ def _num(x):
         try: return float(t) if t else 0.0
         except: return 0.0
     return 0.0
+
+def _num_with_flag(x) -> Tuple[float, float]:
+    """
+    Returns (value, parse_error_flag).
+    parse_error_flag is 1.0 if a numeric string failed to parse, else 0.0.
+    """
+    if isinstance(x, (int, float)):
+        return float(x), 0.0
+    if isinstance(x, str):
+        t = x.replace(",", "").replace(" ", "").strip()
+        if not t:
+            return 0.0, 0.0
+        try:
+            return float(t), 0.0
+        except Exception:
+            return 0.0, 1.0
+    return 0.0, 0.0
 
 def _day(s):
     if not isinstance(s, str): return 0
@@ -181,7 +198,8 @@ def apply_outlier_flags(
         # model & scores
         scaler = RobustScaler()
         Xs = scaler.fit_transform(X)
-        clf = IsolationForest(n_estimators=200, contamination="auto", random_state=42, n_jobs=-1)
+        # CHANGED: set contamination low so only clearly different rows are flagged
+        clf = IsolationForest(n_estimators=200, contamination=0.02, random_state=42, n_jobs=-1)  # CHANGED
         clf.fit(Xs)
         scores = -clf.score_samples(Xs)  # higher == more anomalous
 

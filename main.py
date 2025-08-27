@@ -29,6 +29,6 @@ def run(include_keys=None):
             json.dump(statement, f, ensure_ascii=False, indent=2)
 
 if __name__ == "__main__":
-    # run(include_keys=["Bill Riley Z91.PDF", "ARSTMT11 (54).pdf"])
+    run(include_keys=["Bill Riley Z91.PDF", "ARSTMT11 (54).pdf"])
     # run(include_keys=["Bill Riley Z91.PDF"])
-    run(include_keys=["ARSTMT11 (54).pdf"])
+    # run(include_keys=["ARSTMT11 (54).pdf"])

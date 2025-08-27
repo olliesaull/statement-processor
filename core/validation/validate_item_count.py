@@ -169,12 +169,23 @@ def extract_pdf_candidates_with_pattern(pdf_path: str, pattern: re.Pattern, ngra
 def validate_references_roundtrip(pdf_path: str, statement_items: List[Dict], ref_field: str = "supplier_reference") -> Dict:
     """
     1) JSON -> PDF: every JSON ref should be present in PDF (after normalization).
-    2) PDF -> JSON: learn pattern from JSON refs, find all matches in PDF, and ensure
-       every PDF match exists in JSON.
+    2) PDF -> JSON: learn pattern from JSON refs, find all matches in PDF, and ensure every PDF match exists in JSON.
+    3) If the PDF has no extractable text (likely scanned), skip validation and flag it.
     """
+    # Quick text layer check
+    has_text = False
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            if page.extract_text():
+                has_text = True
+                break
+
+    if not has_text:
+        print(f"[WARNING] {pdf_path} appears to be image-only (scanned). Skipping validation.")
+
     # Collect JSON refs
     raw_refs = [(i, (it.get(ref_field) or "").strip()) for i, it in enumerate(statement_items)]
-    raw_refs = [(i, r) for i, r in raw_refs if r]
+    raw_refs = [(i, r) for i, r in raw_refs if r] # remove empty suppler references
     json_norm_set = {normalise(r) for _, r in raw_refs}
 
     # ---- Pass 1: JSON -> PDF
@@ -182,9 +193,7 @@ def validate_references_roundtrip(pdf_path: str, statement_items: List[Dict], re
     found, not_found = [], []
     for i, raw in raw_refs:
         norm_ref = normalise(raw)
-        (found if norm_ref in norm_pdf_text else not_found).append(
-            {"index": i, "supplier_reference": raw}
-        )
+        (found if norm_ref in norm_pdf_text else not_found).append({"index": i, "supplier_reference": raw})
 
     # ---- Pass 2: PDF -> JSON
     learned_rx = make_family_regex_from_examples([r for _, r in raw_refs])

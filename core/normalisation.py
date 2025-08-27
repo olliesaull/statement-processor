@@ -15,12 +15,7 @@ from utils import (
 )
 
 
-def select_relevant_tables_per_page(
-    tables_with_pages: List[Dict[str, Any]],
-    *,
-    candidates: List[str],
-    small_table_penalty: float = 2.5,
-) -> List[Dict[str, Any]]:
+def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], candidates: List[str], small_table_penalty: float = 2.5) -> List[Dict[str, Any]]:
     if not tables_with_pages:
         return []
     cand_set = {c.strip().lower() for c in candidates if c}
@@ -49,11 +44,7 @@ def select_relevant_tables_per_page(
         selected.append({"page": page, "grid": best_grid})
     return selected
 
-def table_to_json(
-    key: str,
-    tables_with_pages: List[Dict[str, Any]],
-    config_dir: str = "./statement_configs",
-) -> Dict[str, Any]:
+def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], config_dir: str = "./statement_configs") -> Dict[str, Any]:
     """Produce canonical dict (validated by Pydantic)."""
     stem = Path(key).stem
     cfg_path = Path(config_dir) / f"{stem}.json"
