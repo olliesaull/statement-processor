@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Select a Contact{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-column align-items-center" style="margin-top: 25vh;">
+    <h1>Contacts</h1>
+
+    <form method="POST" action="{{ url_for('contacts') }}" class="d-flex flex-column align-items-center">
+        <!-- Text input with datalist for autocomplete -->
+        <input type="text" name="contact_name" class="form-control mt-3" style="max-width: 300px;"
+            placeholder="Enter contact name" list="contacts-list" autocomplete="off">
+
+        <!-- The suggestions -->
+        <datalist id="contacts-list">
+            {% for contact in contacts %}
+            <option value="{{ contact['name'] }}"></option>
+            {% endfor %}
+        </datalist>
+
+        <button type="submit" class="btn btn-primary mt-3">Submit</button>
+    </form>
+</div>
+{% endblock %}

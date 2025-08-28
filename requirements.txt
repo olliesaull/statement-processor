@@ -10,8 +10,12 @@ pdfplumber
 scikit-learn
 numpy
 
+# Web app
+flask
+requests
+xero-python
+
 # Other
-ollama
 pandas
 pydantic
 dotenv
