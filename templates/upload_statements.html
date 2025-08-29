@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Upload Statements{% endblock %}
+
+{% block content %}
+  <div class="d-flex flex-column align-items-center" style="margin-top: 25vh;">
+    <h1>Upload Statements</h1>
+
+    <form method="POST"
+          action="{{ url_for('upload_statements') }}"
+          enctype="multipart/form-data"
+          class="mt-3"
+          style="max-width: 480px; width: 100%;">
+
+      <input type="file"
+             class="form-control"
+             id="statements"
+             name="statements"
+             accept="application/pdf,.pdf"
+             multiple>
+
+      <div class="form-text">Only PDF files are allowed.</div>
+
+      <button type="submit" class="btn btn-primary mt-3">Upload</button>
+    </form>
+
+    {% if uploaded_filenames %}
+      <div class="alert alert-success mt-3 w-100" style="max-width: 480px;">
+        Uploaded: {{ uploaded_filenames | join(', ') }}
+      </div>
+    {% endif %}
+
+    {% if errors %}
+      <div class="alert alert-danger mt-3 w-100" style="max-width: 480px;">
+        {% for e in errors %}
+          <div>{{ e }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}

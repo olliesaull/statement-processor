@@ -2,6 +2,7 @@ import os
 import secrets
 import urllib.parse
 from datetime import date, datetime
+from pathlib import Path
 
 import requests
 from flask import (
@@ -13,6 +14,7 @@ from flask import (
     session,
     url_for,
 )
+from werkzeug.utils import secure_filename
 from xero_python.accounting import AccountingApi
 from xero_python.api_client import ApiClient  # type: ignore
 from xero_python.api_client.configuration import Configuration  # type: ignore
@@ -33,6 +35,9 @@ SCOPES = [
     "offline_access", "openid", "profile", "email", "accounting.transactions", "accounting.reports.read", "accounting.journals.read",
     "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
 ]
+
+ALLOWED_EXTENSIONS = {'.pdf'}
+UPLOAD_DIR = Path('uploads')  # relative to your project root (create if missing)
 
 def scope_str():
     return " ".join(SCOPES)
@@ -62,6 +67,12 @@ api_client = ApiClient(
 api = AccountingApi(api_client)
 
 # region Functions
+
+def is_allowed_pdf(filename: str, mimetype: str) -> bool:
+    ext_ok = Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+    # Some browsers may send 'application/pdf' or 'application/octet-stream' for PDFs.
+    mime_ok = (mimetype == 'application/pdf')
+    return ext_ok and mime_ok
 
 def _fmt_date(d):
     # Xero SDK returns datetime/date or None
@@ -148,7 +159,7 @@ def get_contacts():
         result = api.get_contacts(
             xero_tenant_id=tenant_id,
             page=1,
-            page_size=50,  # default is 100; keep smaller for testing
+            page_size=60,  # default is 100; keep smaller for testing
         )
 
         contacts = [
@@ -182,6 +193,7 @@ def contacts():
         return redirect(url_for("index"))
 
     contacts = get_contacts()
+    contacts = sorted(contacts, key=lambda c: c["name"].casefold())
 
     if request.method == 'POST':
         contact_name = request.form.get('contact_name')
@@ -197,7 +209,38 @@ def invoices(contact_id):
         return redirect(url_for("index"))
 
     invoices = get_invoices(contact_id)
-    return render_template("invoices.html", invoices=invoices)
+    contact_name = invoices[0]["contact"]["name"] if invoices else None
+    return render_template("invoices.html", invoices=invoices, contact_name=contact_name)
+
+@app.route("/upload-statements", methods=['GET', 'POST'])
+def upload_statements():
+    if "access_token" not in session or "xero_tenant_id" not in session:
+        return redirect(url_for("index"))
+
+    uploaded_filenames = []
+    errors = []
+
+    if request.method == 'POST':
+        files = request.files.getlist('statements')
+        if not files or (len(files) == 1 and files[0].filename == ''):
+            errors.append("Please choose at least one PDF file.")
+        else:
+            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            for f in files:
+                if f and is_allowed_pdf(f.filename, f.mimetype):
+                    fname = secure_filename(f.filename)
+                    save_path = UPLOAD_DIR / fname
+                    f.save(save_path)
+                    uploaded_filenames.append(fname)
+                    print(f"[upload-statements] Saved PDF -> {save_path.resolve()}")
+                else:
+                    errors.append(f"Rejected '{f.filename}': only PDFs are allowed.")
+
+    return render_template(
+        "upload_statements.html",
+        uploaded_filenames=uploaded_filenames if uploaded_filenames else None,
+        errors=errors if errors else None
+    )
 
 @app.route("/")
 def index():

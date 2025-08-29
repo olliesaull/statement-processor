@@ -8,8 +8,8 @@
 **vscode
 .idea/
 *.pdf
+*.PDF
 **/*.sh
-/statements/*
 .env
 *.json
 *.txt
