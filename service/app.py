@@ -1,10 +1,14 @@
 import os
 import secrets
 import urllib.parse
+import uuid
 from datetime import date, datetime
 from pathlib import Path
+from typing import Dict
 
 import requests
+from boto3.dynamodb.conditions import Attr
+from botocore.exceptions import BotoCoreError, ClientError
 from flask import (
     Flask,
     abort,
@@ -20,6 +24,8 @@ from xero_python.api_client import ApiClient  # type: ignore
 from xero_python.api_client.configuration import Configuration  # type: ignore
 from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 from xero_python.exceptions import AccountingBadRequestException
+
+from configuration.resources import ddb, s3
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
@@ -176,12 +182,50 @@ def get_contacts():
 
         return contacts
 
-    except AccountingBadRequestException:
+    except AccountingBadRequestException as e:
         # Xero returned a 400
+        print(f"AccountingBadRequestException: {e}")
         return []
-    except Exception:
+    except Exception as e:
         # Catch-all for other errors (network, token, etc.)
+        print(f"Error: {e}")
         return []
+
+def add_statement_to_table(tenant_id: str, entry: Dict[str, str]):
+    dynamo_table = ddb.Table("StatementProcessorTable")
+
+    item = {
+        "TenantID": tenant_id,
+        "ContactID": entry["contact_id"],
+        "ContactName": entry["contact_name"],
+        "StatementID": entry["statement_id"]
+    }
+    try:
+        dynamo_table.put_item(
+            Item=item,
+            ConditionExpression=Attr("TenantID").not_exists() & Attr("ContactID").not_exists(),
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            raise ValueError(f"Statement {entry["statement_id"]} already exists") from e
+        raise
+
+def upload_statement_to_s3(tenant_id: str, f, entry: Dict[str, str]):
+    key = f"{tenant_id}/{entry["statement_id"]}"
+
+    try:
+        # Ensure stream is at start before upload
+        f.stream.seek(0)
+        s3.upload_fileobj(
+            Fileobj=f.stream,
+            Bucket="dexero-statement-processor-prod",
+            Key=key,
+            ExtraArgs={
+                "ContentType": "application/pdf",
+            },
+        )
+    except (BotoCoreError, ClientError) as e:
+        print(f"Failed to upload '{key}' to S3: {e}")
 
 # endregion Functions
 
@@ -221,28 +265,59 @@ def upload_statements():
     if "access_token" not in session or "xero_tenant_id" not in session:
         return redirect(url_for("index"))
 
-    uploaded_filenames = []
     errors = []
+    mapping = []
+
+    contacts = get_contacts()
+    contacts = sorted(contacts, key=lambda c: c["name"].casefold())
+    contact_lookup = {c["name"]: c["contact_id"] for c in contacts}
 
     if request.method == 'POST':
-        files = request.files.getlist('statements')
-        if not files or (len(files) == 1 and files[0].filename == ''):
-            errors.append("Please choose at least one PDF file.")
+        files = [f for f in request.files.getlist('statements') if f and f.filename]
+        names = [n for n in request.form.getlist('contact_names')]
+
+        if not files:
+            errors.append("Please add at least one statement (PDF).")
+        elif len(files) != len(names):
+            errors.append("Each statement must have a contact selected.")
         else:
+            # Create statement identifier etc
+            tenant_id = session.get("xero_tenant_id")
+
             UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-            for f in files:
-                if f and is_allowed_pdf(f.filename, f.mimetype):
-                    fname = secure_filename(f.filename)
-                    save_path = UPLOAD_DIR / fname
-                    f.save(save_path)
-                    uploaded_filenames.append(fname)
-                    print(f"[upload-statements] Saved PDF -> {save_path.resolve()}")
-                else:
+            for f, contact in zip(files, names):
+                if not contact.strip():
+                    errors.append(f"Missing contact for '{f.filename}'.")
+                    continue
+                if not is_allowed_pdf(f.filename, f.mimetype):
                     errors.append(f"Rejected '{f.filename}': only PDFs are allowed.")
+                    continue
+
+                fname = secure_filename(f.filename)
+                save_path = UPLOAD_DIR / fname
+                f.save(save_path)
+
+                contact_id: str = contact_lookup.get(contact.strip())
+
+                entry = {
+                    "statement_id": str(uuid.uuid4()),
+                    "statement": fname,
+                    "contact_name": contact.strip(),
+                    "contact_id": contact_id,
+                }
+                mapping.append(entry)
+                print(entry)
+
+                # Upload statement to S3
+                upload_statement_to_s3(tenant_id, f, entry)
+
+                # Upload statement to ddb
+                add_statement_to_table(tenant_id, entry)
 
     return render_template(
         "upload_statements.html",
-        uploaded_filenames=uploaded_filenames if uploaded_filenames else None,
+        contacts=contacts,
+        mapping=mapping if mapping else None,
         errors=errors if errors else None
     )
 

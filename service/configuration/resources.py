@@ -5,4 +5,6 @@ import boto3
 from configuration.config import AWS_PROFILE, AWS_REGION
 
 aws_session = boto3.session.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
+
 s3 = aws_session.client("s3")
+ddb = aws_session.resource("dynamodb")
