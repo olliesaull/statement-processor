@@ -21,7 +21,7 @@ from xero_python.api_client.configuration import Configuration  # type: ignore
 from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 from xero_python.exceptions import AccountingBadRequestException
 
-app = Flask(__name__) # flask run -p 8080
+app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
 
 CLIENT_ID = os.environ.get("XERO_CLIENT_ID")
@@ -37,7 +37,7 @@ SCOPES = [
 ]
 
 ALLOWED_EXTENSIONS = {'.pdf'}
-UPLOAD_DIR = Path('uploads')  # relative to your project root (create if missing)
+UPLOAD_DIR = Path('uploads')
 
 def scope_str():
     return " ".join(SCOPES)
@@ -186,6 +186,10 @@ def get_contacts():
 # endregion Functions
 
 # region Routes
+
+@app.route('/favicon.ico')
+def ignore_favicon():
+    return ('', 204)  # Empty response, no content
 
 @app.route('/contacts', methods=['GET', 'POST'])
 def contacts():
