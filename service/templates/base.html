@@ -24,16 +24,16 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}"
-                            href="{{ url_for('index') }}">Home</a>
-                    </li>
-                    <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'contacts' %}active{% endif %}"
                             href="{{ url_for('contacts') }}">Contacts</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'upload_statements' %}active{% endif %}"
                             href="{{ url_for('upload_statements') }}">Upload Statements</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'statements' %}active{% endif %}"
+                            href="{{ url_for('statements') }}">Statements</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'logout' %}active{% endif %}"

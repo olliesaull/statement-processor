@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Incomplete Statements{% endblock %}
+
+{% block content %}
+  <div class="container mt-5">
+    <h1 class="mb-4">Incomplete Statements</h1>
+
+    {% if incomplete_statements %}
+      <table class="table table-striped table-bordered align-middle">
+        <thead class="table-light">
+          <tr>
+            <th scope="col">Contact Name</th>
+            <th scope="col">Statement Filename</th>
+            <th scope="col" class="text-center">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for stmt in incomplete_statements %}
+            <tr>
+              <td>{{ stmt["ContactName"] }}</td>
+              <td>{{ stmt["OriginalStatementFilename"] }}</td>
+              <td class="text-center">
+                <a href="{{ url_for('statement', statement_id=stmt['StatementID']) }}"
+                   class="btn btn-sm btn-primary">
+                  Reconcile
+                </a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="alert alert-info">
+        No incomplete statements found.
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}

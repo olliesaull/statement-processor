@@ -45,22 +45,6 @@
       <button type="submit" class="btn btn-primary">Upload</button>
     </div>
 
-    {% if mapping %}
-    <div class="alert alert-success mt-3">
-      <strong>Received:</strong>
-      <ul class="mb-0">
-        {% for item in mapping %}
-        <li>{{ item.statement }} → {{ item.contact }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-    {% endif %}
-
-    {% if errors %}
-    <div class="alert alert-danger mt-3">
-      {% for e in errors %}<div>{{ e }}</div>{% endfor %}
-    </div>
-    {% endif %}
   </form>
 </div>
 

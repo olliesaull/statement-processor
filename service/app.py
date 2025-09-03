@@ -1,13 +1,16 @@
+import io
+import json
 import os
 import secrets
 import urllib.parse
 import uuid
 from datetime import date, datetime
+from functools import wraps
 from pathlib import Path
 from typing import Dict
 
 import requests
-from boto3.dynamodb.conditions import Attr
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
 from flask import (
     Flask,
@@ -18,14 +21,15 @@ from flask import (
     session,
     url_for,
 )
-from werkzeug.utils import secure_filename
+from werkzeug.datastructures import FileStorage
 from xero_python.accounting import AccountingApi
 from xero_python.api_client import ApiClient  # type: ignore
 from xero_python.api_client.configuration import Configuration  # type: ignore
 from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 from xero_python.exceptions import AccountingBadRequestException
 
-from configuration.resources import ddb, s3
+from configuration.resources import s3_client, statement_processor_table
+from main import run_textraction
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
@@ -42,8 +46,9 @@ SCOPES = [
     "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
 ]
 
-ALLOWED_EXTENSIONS = {'.pdf'}
-UPLOAD_DIR = Path('uploads')
+ALLOWED_EXTENSIONS = {'.pdf', '.PDF'}
+
+S3_BUCKET_NAME = "dexero-statement-processor-prod"
 
 def scope_str():
     return " ".join(SCOPES)
@@ -73,6 +78,14 @@ api_client = ApiClient(
 api = AccountingApi(api_client)
 
 # region Functions
+
+def xero_token_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "access_token" not in session or "xero_tenant_id" not in session:
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated_function
 
 def is_allowed_pdf(filename: str, mimetype: str) -> bool:
     ext_ok = Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
@@ -191,41 +204,105 @@ def get_contacts():
         print(f"Error: {e}")
         return []
 
-def add_statement_to_table(tenant_id: str, entry: Dict[str, str]):
-    dynamo_table = ddb.Table("StatementProcessorTable")
+def get_incomplete_statements() -> list[dict]:
+    """
+    Return all statements for the given tenant where `complete` is not True
+    (i.e., either False or attribute missing).
+    """
+    tenant_id = session.get("xero_tenant_id")
+    items: list[dict] = []
+    kwargs = {
+        "KeyConditionExpression": Key("TenantID").eq(tenant_id),
+        "FilterExpression": Attr("complete").not_exists() | Attr("complete").eq(False),
+    }
 
+    while True:
+        resp = statement_processor_table.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+
+    return items
+
+def add_statement_to_table(tenant_id: str, entry: Dict[str, str]):
     item = {
         "TenantID": tenant_id,
+        "StatementID": entry["statement_id"],
+        "OriginalStatementFilename": entry["statement_name"],
         "ContactID": entry["contact_id"],
         "ContactName": entry["contact_name"],
-        "StatementID": entry["statement_id"]
     }
     try:
-        dynamo_table.put_item(
+        statement_processor_table.put_item(
             Item=item,
             ConditionExpression=Attr("TenantID").not_exists() & Attr("ContactID").not_exists(),
         )
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            raise ValueError(f"Statement {entry["statement_id"]} already exists") from e
+            raise ValueError(f"Statement {entry["statement_name"]} already exists") from e
         raise
 
-def upload_statement_to_s3(tenant_id: str, f, entry: Dict[str, str]):
-    key = f"{tenant_id}/{entry["statement_id"]}"
+def upload_statement_to_s3(fs_like, key: str) -> bool:
+    """
+    Uploads a file-like object (PDF or JSON stream) to S3.
+    """
+    stream = getattr(fs_like, "stream", fs_like)
+
+    # Always reset to start
+    stream.seek(0)
 
     try:
-        # Ensure stream is at start before upload
-        f.stream.seek(0)
-        s3.upload_fileobj(
-            Fileobj=f.stream,
-            Bucket="dexero-statement-processor-prod",
+        s3_client.upload_fileobj(
+            Fileobj=stream,
+            Bucket=S3_BUCKET_NAME,
             Key=key,
-            ExtraArgs={
-                "ContentType": "application/pdf",
-            },
         )
+        return True
     except (BotoCoreError, ClientError) as e:
         print(f"Failed to upload '{key}' to S3: {e}")
+        return False
+
+def get_or_create_json_statement(bucket: str, pdf_key: str, json_key: str) -> tuple[dict, FileStorage]:
+    """
+    Look for JSON statement in S3. If it exists, download and return it.
+    Otherwise, run Textract on the PDF, upload the JSON, and return it.
+
+    Returns:
+        (data_dict, FileStorage) where:
+          - data_dict is the parsed JSON object
+          - FileStorage is a file-like wrapper around the JSON (for reuse)
+    """
+    try:
+        # Check if JSON already exists
+        s3_client.head_object(Bucket=bucket, Key=json_key)
+        print(f"Found existing JSON at {json_key}, downloading...")
+        obj = s3_client.get_object(Bucket=bucket, Key=json_key)
+        json_bytes = obj["Body"].read()
+        data = json.loads(json_bytes.decode("utf-8"))
+        fs = FileStorage(stream=io.BytesIO(json_bytes), filename=json_key.rsplit("/", 1)[-1])
+        return data, fs
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "404":
+            raise  # some other error, not "Not Found"
+
+    # Not found → run Textract
+    print(f"No JSON at {json_key}, running Textract for {pdf_key}...")
+    json_fs = run_textraction(bucket=S3_BUCKET_NAME, keys=[pdf_key])
+    json_fs.stream.seek(0)
+    json_bytes = json_fs.stream.read()
+
+    # Parse
+    data = json.loads(json_bytes.decode("utf-8"))
+
+    # Upload new JSON
+    upload_statement_to_s3(io.BytesIO(json_bytes), json_key)
+
+    # Return both
+    fs = FileStorage(stream=io.BytesIO(json_bytes), filename=json_key.rsplit("/", 1)[-1])
+    return data, fs
+
 
 # endregion Functions
 
@@ -236,10 +313,8 @@ def ignore_favicon():
     return ('', 204)  # Empty response, no content
 
 @app.route('/contacts', methods=['GET', 'POST'])
+@xero_token_required
 def contacts():
-    if "access_token" not in session or "xero_tenant_id" not in session:
-        return redirect(url_for("index"))
-
     contacts = get_contacts()
     contacts = sorted(contacts, key=lambda c: c["name"].casefold())
 
@@ -252,22 +327,15 @@ def contacts():
     return render_template("contacts.html", contacts=contacts)
 
 @app.route("/invoices/<contact_id>")
+@xero_token_required
 def invoices(contact_id):
-    if "access_token" not in session or "xero_tenant_id" not in session:
-        return redirect(url_for("index"))
-
     invoices = get_invoices(contact_id)
     contact_name = invoices[0]["contact"]["name"] if invoices else None
     return render_template("invoices.html", invoices=invoices, contact_name=contact_name)
 
 @app.route("/upload-statements", methods=['GET', 'POST'])
+@xero_token_required
 def upload_statements():
-    if "access_token" not in session or "xero_tenant_id" not in session:
-        return redirect(url_for("index"))
-
-    errors = []
-    mapping = []
-
     contacts = get_contacts()
     contacts = sorted(contacts, key=lambda c: c["name"].casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts}
@@ -277,55 +345,72 @@ def upload_statements():
         names = [n for n in request.form.getlist('contact_names')]
 
         if not files:
-            errors.append("Please add at least one statement (PDF).")
+            print("Please add at least one statement (PDF).")
         elif len(files) != len(names):
-            errors.append("Each statement must have a contact selected.")
+            print("Each statement must have a contact selected.")
         else:
             # Create statement identifier etc
             tenant_id = session.get("xero_tenant_id")
 
-            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
             for f, contact in zip(files, names):
                 if not contact.strip():
-                    errors.append(f"Missing contact for '{f.filename}'.")
+                    print(f"Missing contact for '{f.filename}'.")
                     continue
                 if not is_allowed_pdf(f.filename, f.mimetype):
-                    errors.append(f"Rejected '{f.filename}': only PDFs are allowed.")
+                    print(f"Rejected '{f.filename}': only PDFs are allowed.")
                     continue
 
-                fname = secure_filename(f.filename)
-                save_path = UPLOAD_DIR / fname
-                f.save(save_path)
-
                 contact_id: str = contact_lookup.get(contact.strip())
+                statement_id = str(uuid.uuid4())
 
                 entry = {
-                    "statement_id": str(uuid.uuid4()),
-                    "statement": fname,
+                    "statement_id": statement_id,
+                    "statement_name": f.filename,
                     "contact_name": contact.strip(),
                     "contact_id": contact_id,
                 }
-                mapping.append(entry)
-                print(entry)
 
-                # Upload statement to S3
-                upload_statement_to_s3(tenant_id, f, entry)
+                # Upload pdf statement to S3
+                pdf_statement_key = f"{tenant_id}/{statement_id}.pdf"
+                upload_statement_to_s3(fs_like=f, key=pdf_statement_key)
 
                 # Upload statement to ddb
                 add_statement_to_table(tenant_id, entry)
 
-    return render_template(
-        "upload_statements.html",
-        contacts=contacts,
-        mapping=mapping if mapping else None,
-        errors=errors if errors else None
-    )
+    return render_template("upload_statements.html", contacts=contacts)
+
+@app.route("/statements")
+@xero_token_required
+def statements():
+    return render_template("statements.html", incomplete_statements=get_incomplete_statements())
+
+@app.route("/statement/<statement_id>", methods=['GET', 'POST'])
+@xero_token_required
+def statement(statement_id):
+    tenant_id = session.get("xero_tenant_id")
+
+    route_key = f"{tenant_id}/{statement_id}"
+    pdf_statement_key  = f"{route_key}.pdf"
+    json_statement_key = f"{route_key}.json"
+
+    # Get existing JSON or build/upload via Textract
+    data, _ = get_or_create_json_statement(S3_BUCKET_NAME, pdf_statement_key, json_statement_key)
+
+    items = data.get("statement_items", []) or []
+    raw_statement_headers = list(items[0].get("raw", {}).keys()) if items else []
+    raw_statement_rows = [[it.get("raw", {}).get(k, "") for k in raw_statement_headers] for it in items]
+
+    print("*"*88)
+    print(raw_statement_rows)
+    print("*"*88)
+
+    return render_template("statement.html", statement_id=statement_id, raw_statement_headers=raw_statement_headers, raw_statement_rows=raw_statement_rows)
 
 @app.route("/")
 def index():
     if "access_token" in session:
         return render_template("index.html")
-    return '<a href="/login">Login with Xero</a>'
+    return render_template("login.html")
 
 @app.route("/login")
 def login():

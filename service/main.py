@@ -1,22 +1,23 @@
+# from core.validation.validate_item_count import validate_references_roundtrip
+# from core.validation.anomaly_detection import apply_outlier_flags
+import io
 import json
 from pathlib import Path
 
+from werkzeug.datastructures import FileStorage
+
+from core.extraction import get_tables
 from core.normalisation import table_to_json
 
-from configuration.config import S3_BUCKET_NAME
-from core.extraction import get_tables
-from core.validation.validate_item_count import validate_references_roundtrip
-# from core.validation.anomaly_detection import apply_outlier_flags
 
-
-def run(include_keys=None):
-    tables_by_key = get_tables(bucket=S3_BUCKET_NAME, prefix="statements/", include_keys=include_keys)
+def run_textraction(bucket, keys) -> FileStorage:
+    tables_by_key = get_tables(bucket, keys)
     for key, tables_wp in tables_by_key.items():
         print(f"\n=== {key} ===")
         statement = table_to_json(key, tables_wp, config_dir="./statement_configs")
 
-        statement_items = [item for item in statement["statement_items"]]
-        validate_references_roundtrip(key, statement_items)
+        # statement_items = [item for item in statement["statement_items"]]
+        # validate_references_roundtrip(key, statement_items)
 
         # optional: ML outlier pass
         # statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True, threshold_method="iqr")
@@ -28,7 +29,9 @@ def run(include_keys=None):
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(statement, f, ensure_ascii=False, indent=2)
 
-if __name__ == "__main__":
-    run(include_keys=["Bill Riley Z91.PDF", "ARSTMT11 (54).pdf"])
-    # run(include_keys=["Bill Riley Z91.PDF"])
-    # run(include_keys=["ARSTMT11 (54).pdf"])
+        # Serialize to bytes in memory
+        buf = io.BytesIO(json.dumps(statement, ensure_ascii=False, indent=2).encode("utf-8"))
+        buf.seek(0)
+
+        filename = f"{Path(key).stem}.json"
+        return FileStorage(stream=buf, filename=filename, content_type="application/json")

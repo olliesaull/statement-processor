@@ -14,14 +14,24 @@ class StatementProcessorStack(Stack):
         stage = stage.lower()
         is_production: bool = stage == "prod"
 
-        SP_DDB_TABLE_NAME = "StatementProcessorTable"
+        TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
+        TENANT_CONTACTS_TABLE_NAME = "TenantContactsTable"
         STATEMENTS_S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
 
         #region ---------- DynamoDB ----------
 
-        review_table = dynamodb.Table(
-            self, SP_DDB_TABLE_NAME,
-            table_name=SP_DDB_TABLE_NAME,
+        dynamodb.Table(
+            self, TENANT_STATEMENTS_TABLE_NAME,
+            table_name=TENANT_STATEMENTS_TABLE_NAME,
+            partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="StatementID", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
+        )
+
+        dynamodb.Table(
+            self, TENANT_CONTACTS_TABLE_NAME,
+            table_name=TENANT_CONTACTS_TABLE_NAME,
             partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="ContactID", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -32,7 +42,7 @@ class StatementProcessorStack(Stack):
 
         #region ---------- S3 ----------
 
-        review_s3_bucket = s3.Bucket(
+        s3.Bucket(
             self, STATEMENTS_S3_BUCKET_NAME,
             bucket_name=STATEMENTS_S3_BUCKET_NAME,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,

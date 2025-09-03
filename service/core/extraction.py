@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, TypedDict
 
 import boto3
 from botocore.exceptions import ClientError
@@ -108,11 +108,7 @@ def analyze_tables_s3(bucket: str, key: str) -> List[TableOnPage]:
         blocks = resp.get("Blocks", [])
     return _collect_table_grids_with_pages(blocks)
 
-def get_tables(bucket: str, prefix: str, include_keys: Optional[List[str]] = None) -> Dict[str, List[TableOnPage]]:
-    if include_keys:
-        keys = [k if k.startswith(prefix) else f"{prefix}{k}" for k in include_keys]
-    else:
-        keys = list_s3_objects(bucket, prefix)
+def get_tables(bucket: str, keys) -> Dict[str, List[TableOnPage]]:
     result: Dict[str, List[TableOnPage]] = {}
     for key in keys:
         try:
