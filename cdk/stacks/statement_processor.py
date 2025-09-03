@@ -15,7 +15,7 @@ class StatementProcessorStack(Stack):
         is_production: bool = stage == "prod"
 
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
-        TENANT_CONTACTS_TABLE_NAME = "TenantContactsTable"
+        TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
         STATEMENTS_S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
 
         #region ---------- DynamoDB ----------
@@ -30,8 +30,8 @@ class StatementProcessorStack(Stack):
         )
 
         dynamodb.Table(
-            self, TENANT_CONTACTS_TABLE_NAME,
-            table_name=TENANT_CONTACTS_TABLE_NAME,
+            self, TENANT_CONTACTS_CONFIG_TABLE_NAME,
+            table_name=TENANT_CONTACTS_CONFIG_TABLE_NAME,
             partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="ContactID", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,

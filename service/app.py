@@ -28,7 +28,7 @@ from xero_python.api_client.configuration import Configuration  # type: ignore
 from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 from xero_python.exceptions import AccountingBadRequestException
 
-from configuration.resources import s3_client, statement_processor_table
+from configuration.resources import s3_client, tenant_statements_table
 from main import run_textraction
 
 app = Flask(__name__)
@@ -98,6 +98,87 @@ def _fmt_date(d):
     if isinstance(d, (datetime, date)):
         return d.strftime("%Y-%m-%d")
     return None
+
+def get_invoices_by_numbers(invoice_numbers):
+    """
+    Fetch invoices for a list of invoice numbers.
+    Batches to avoid URL length limits and respects paging.
+    """
+    tenant_id = session["xero_tenant_id"]
+    if not invoice_numbers:
+        return []
+
+    def _fmt(inv):
+        c = getattr(inv, "contact", None)
+        contact = {
+            "contact_id": getattr(c, "contact_id", None),
+            "name": getattr(c, "name", None),
+            "email": getattr(c, "email_address", None),
+            "is_customer": getattr(c, "is_customer", None),
+            "is_supplier": getattr(c, "is_supplier", None),
+            "status": getattr(c, "contact_status", None),
+        } if c else None
+
+        total = getattr(inv, "total", None)
+        amount_paid = getattr(inv, "amount_paid", None)
+        amount_credited = getattr(inv, "amount_credited", None)
+        amount_due = getattr(inv, "amount_due", None)
+        if amount_due is None and None not in (total, amount_paid, amount_credited):
+            amount_due_calc = (total or 0) - (amount_paid or 0) - (amount_credited or 0)
+        else:
+            amount_due_calc = amount_due
+
+        return {
+            "invoice_id": getattr(inv, "invoice_id", None),
+            "number": getattr(inv, "invoice_number", None),
+            "type": getattr(inv, "type", None),
+            "status": getattr(inv, "status", None),
+            "date": _fmt_date(getattr(inv, "date", None)),
+            "due_date": _fmt_date(getattr(inv, "due_date", None)),
+            "reference": getattr(inv, "reference", None),
+            "subtotal": getattr(inv, "sub_total", None),
+            "total_tax": getattr(inv, "total_tax", None),
+            "total": total,
+            "amount_paid": amount_paid,
+            "amount_credited": amount_credited,
+            "amount_due": amount_due_calc,
+            "contact": contact,
+        }
+
+    invoices = []
+    BATCH = 40  # safe batch size to avoid long URLs
+    nums = [str(n) for n in invoice_numbers]
+
+    try:
+        for i in range(0, len(nums), BATCH):
+            batch = nums[i:i+BATCH]
+            page = 1
+            while True:
+                result = api.get_invoices(
+                    tenant_id,
+                    invoice_numbers=batch,
+                    order="InvoiceNumber ASC",
+                    page=page,
+                    include_archived=False,
+                    created_by_my_app=False,
+                    unitdp=2,
+                    summary_only=False,
+                    page_size=50,
+                )
+                invs = result.invoices or []
+                invoices.extend(_fmt(inv) for inv in invs)
+
+                # stop if fewer than a full page returned
+                if len(invs) < 50:
+                    break
+                page += 1
+
+        return invoices
+
+    except AccountingBadRequestException:
+        return []
+    except Exception:
+        return []
 
 def get_invoices(contact_id):
     tenant_id = session["xero_tenant_id"]
@@ -217,7 +298,7 @@ def get_incomplete_statements() -> list[dict]:
     }
 
     while True:
-        resp = statement_processor_table.query(**kwargs)
+        resp = tenant_statements_table.query(**kwargs)
         items.extend(resp.get("Items", []))
         lek = resp.get("LastEvaluatedKey")
         if not lek:
@@ -235,7 +316,7 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]):
         "ContactName": entry["contact_name"],
     }
     try:
-        statement_processor_table.put_item(
+        tenant_statements_table.put_item(
             Item=item,
             ConditionExpression=Attr("TenantID").not_exists() & Attr("ContactID").not_exists(),
         )
@@ -302,7 +383,6 @@ def get_or_create_json_statement(bucket: str, pdf_key: str, json_key: str) -> tu
     # Return both
     fs = FileStorage(stream=io.BytesIO(json_bytes), filename=json_key.rsplit("/", 1)[-1])
     return data, fs
-
 
 # endregion Functions
 
@@ -400,9 +480,10 @@ def statement(statement_id):
     raw_statement_headers = list(items[0].get("raw", {}).keys()) if items else []
     raw_statement_rows = [[it.get("raw", {}).get(k, "") for k in raw_statement_headers] for it in items]
 
+    invoices = get_invoices_by_numbers(invoice_numbers=[raw_statement_rows[0][1]])
+
     print("*"*88)
-    print(raw_statement_rows)
-    print("*"*88)
+    print(invoices)
 
     return render_template("statement.html", statement_id=statement_id, raw_statement_headers=raw_statement_headers, raw_statement_rows=raw_statement_rows)
 
