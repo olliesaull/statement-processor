@@ -1,6 +1,10 @@
 import re
 from typing import Any, Dict, List, Tuple
 
+from botocore.exceptions import ClientError
+
+from configuration.resources import tenant_contacts_config_table
+
 
 def norm(s: str) -> str:
     return " ".join((s or "").split()).strip().lower()
@@ -85,3 +89,31 @@ def row_is_opening_or_carried_forward(raw_row: List[str], mapped_item: Dict[str,
     ids_empty = all(not (mapped_item.get(k) or "").strip() for k in ("supplier_reference", "customer_reference"))
     doc_like_empty = all(not (mapped_item.get(k) or "").strip() for k in ("document_type", "description_details"))
     return non_empty <= 3 and money_count <= 1 and ids_empty and doc_like_empty
+
+def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
+    """
+    Fetch config from DynamoDB.
+
+    :param tenant_id: TenantID partition key value
+    :param contact_id: ContactID sort key value
+    :return: Config dict
+    """
+    attr_name = "config"
+    try:
+        resp = tenant_contacts_config_table.get_item(
+            Key={"TenantID": tenant_id, "ContactID": contact_id},
+            ProjectionExpression="#cfg",
+            ExpressionAttributeNames={"#cfg": attr_name},
+        )
+    except ClientError as e:
+        raise RuntimeError(f"DynamoDB error fetching config: {e}")
+
+    item = resp.get("Item")
+    if not item or attr_name not in item:
+        raise KeyError(f"Config not found for TenantID={tenant_id}, ContactID={contact_id}")
+
+    cfg = item[attr_name]
+    if not isinstance(cfg, dict):
+        raise TypeError(f"Config attribute '{attr_name}' is not a dict: {type(cfg)}")
+
+    return cfg

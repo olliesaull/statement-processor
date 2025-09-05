@@ -6,7 +6,7 @@
     <h1 class="mb-4">Statement {{ statement_id }}</h1>
 
     <div class="row g-4">
-      <!-- Left column: raw table -->
+      <!-- Left column: raw statement table -->
       <div class="col-12 col-lg-6">
         <div class="table-responsive">
           <table class="table table-striped table-bordered align-middle">
@@ -18,16 +18,20 @@
               </tr>
             </thead>
             <tbody>
-              {% for row in raw_statement_rows %}
+              {% if raw_statement_rows %}
+                {% for row in raw_statement_rows %}
+                  {% set idx = loop.index0 %}
+                  <tr class="{{ 'table-success' if row_matches[idx] else 'table-danger' }}">
+                    {% for h in raw_statement_headers %}
+                      <td class="{{ 'table-success' if cell_matches[idx][h] else 'table-danger' }}">
+                        {{ row[loop.index0] }}
+                      </td>
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              {% else %}
                 <tr>
-                  {% for cell in row %}
-                    <td>{{ cell }}</td>
-                  {% endfor %}
-                </tr>
-              {% endfor %}
-              {% if not raw_statement_rows %}
-                <tr>
-                  <td colspan="{{ raw_headers|length }}" class="text-center text-muted">
+                  <td colspan="{{ raw_statement_headers|length }}" class="text-center text-muted">
                     No raw data found.
                   </td>
                 </tr>
@@ -37,13 +41,42 @@
         </div>
       </div>
 
-      <!-- Right column: placeholder for your next table/content -->
+      <!-- Right column: mirrored table (same headers), supplier ref column shows invoice_number -->
       <div class="col-12 col-lg-6">
-        <div class="card h-100">
-          <div class="card-body">
-            <h5 class="card-title">Coming soon</h5>
-            <p class="mb-0 text-muted">Add your second table or content here.</p>
-          </div>
+        <div class="table-responsive">
+          <table class="table table-striped table-bordered align-middle">
+            <thead class="table-light">
+              <tr>
+                {% for h in raw_statement_headers %}
+                  <th>{{ h|capitalize }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% if aligned_rows %}
+                {% for ar in aligned_rows %}
+                  {% set idx = loop.index0 %}
+                  <tr class="{{ 'table-success' if row_matches[idx] else 'table-danger' }}">
+                    {% for h in raw_statement_headers %}
+                      <td class="{{ 'table-success' if cell_matches[idx][h] else 'table-danger' }}">
+                        {% if h == supplier_reference_header %}
+                          {{ ar.invoice_number }}
+                        {% else %}
+                          {{ ar.statement.get(h, '') }}
+                        {% endif %}
+                      </td>
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              {% else %}
+                <tr>
+                  <td colspan="{{ raw_statement_headers|length }}" class="text-center text-muted">
+                    No invoice data found.
+                  </td>
+                </tr>
+              {% endif %}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

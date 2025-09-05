@@ -10,11 +10,11 @@ from core.extraction import get_tables
 from core.normalisation import table_to_json
 
 
-def run_textraction(bucket, keys) -> FileStorage:
+def run_textraction(bucket, keys, tenant_id, contact_id) -> FileStorage:
     tables_by_key = get_tables(bucket, keys)
     for key, tables_wp in tables_by_key.items():
         print(f"\n=== {key} ===")
-        statement = table_to_json(key, tables_wp, config_dir="./statement_configs")
+        statement = table_to_json(key, tables_wp, tenant_id, contact_id)
 
         # statement_items = [item for item in statement["statement_items"]]
         # validate_references_roundtrip(key, statement_items)

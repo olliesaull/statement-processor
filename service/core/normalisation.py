@@ -1,4 +1,3 @@
-import json
 import re
 from copy import deepcopy
 from pathlib import Path
@@ -9,6 +8,7 @@ from utils import (
     best_header_row,
     build_col_index,
     get_by_header,
+    get_contact_config,
     norm,
     row_is_opening_or_carried_forward,
     to_number_if_possible,
@@ -44,13 +44,9 @@ def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], can
         selected.append({"page": page, "grid": best_grid})
     return selected
 
-def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], config_dir: str = "./statement_configs") -> Dict[str, Any]:
+def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: str, contact_id: str) -> Dict[str, Any]:
     """Produce canonical dict (validated by Pydantic)."""
-    stem = Path(key).stem
-    cfg_path = Path(config_dir) / f"{stem}.json"
-
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        map_cfg: Dict[str, Any] = json.load(f)
+    map_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
 
     meta_cfg = map_cfg.get("statement_meta", {}) or {}
     items_template = deepcopy((map_cfg.get("statement_items") or [{}])[0])

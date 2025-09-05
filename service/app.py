@@ -5,6 +5,7 @@ import secrets
 import urllib.parse
 import uuid
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
 from typing import Dict
@@ -30,6 +31,7 @@ from xero_python.exceptions import AccountingBadRequestException
 
 from configuration.resources import s3_client, tenant_statements_table
 from main import run_textraction
+from utils import get_contact_config
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
@@ -99,14 +101,47 @@ def _fmt_date(d):
         return d.strftime("%Y-%m-%d")
     return None
 
+def _norm_number(x):
+    if x is None:
+        return None
+    if isinstance(x, (int, float, Decimal)):
+        try:
+            return Decimal(str(x))
+        except InvalidOperation:
+            return None
+    # strip currency symbols, commas, spaces
+    s = str(x).strip().replace(",", "")
+    s = s.replace("£", "").replace("$", "").replace("€", "")
+    if s == "":
+        return None
+    try:
+        return Decimal(s)
+    except InvalidOperation:
+        return None
+
+def _equal(a, b):
+    """Lenient equality: numeric-aware, else case/space-normalized string compare."""
+    na, nb = _norm_number(a), _norm_number(b)
+    if na is not None or nb is not None:
+        return na == nb  # numeric compare (Decimal)
+    # string-ish compare
+    sa = "" if a is None else str(a).strip()
+    sb = "" if b is None else str(b).strip()
+    return sa == sb
+
 def get_invoices_by_numbers(invoice_numbers):
     """
     Fetch invoices for a list of invoice numbers.
-    Batches to avoid URL length limits and respects paging.
+    Returns a dict keyed by invoice number: { "INV-001": {...}, ... }
+
+    - Batches requests to avoid URL length limits
+    - Handles paging
+    - Normalizes invoice numbers to strings and strips whitespace
+    - If duplicates arrive from the API, the *last* one wins (simple + predictable)
     """
     tenant_id = session["xero_tenant_id"]
     if not invoice_numbers:
-        return []
+        return {}
 
     def _fmt(inv):
         c = getattr(inv, "contact", None)
@@ -145,13 +180,20 @@ def get_invoices_by_numbers(invoice_numbers):
             "contact": contact,
         }
 
-    invoices = []
-    BATCH = 40  # safe batch size to avoid long URLs
-    nums = [str(n) for n in invoice_numbers]
+    # normalize & de-dupe while preserving order (helps batching)
+    normalized = []
+    seen = set()
+    for n in (str(x).strip() for x in invoice_numbers if str(x).strip()):
+        if n not in seen:
+            seen.add(n)
+            normalized.append(n)
+
+    by_number = {}
+    BATCH = 40
 
     try:
-        for i in range(0, len(nums), BATCH):
-            batch = nums[i:i+BATCH]
+        for i in range(0, len(normalized), BATCH):
+            batch = normalized[i:i+BATCH]
             page = 1
             while True:
                 result = api.get_invoices(
@@ -166,19 +208,23 @@ def get_invoices_by_numbers(invoice_numbers):
                     page_size=50,
                 )
                 invs = result.invoices or []
-                invoices.extend(_fmt(inv) for inv in invs)
+                for inv in invs:
+                    rec = _fmt(inv)
+                    n = rec.get("number")
+                    if n:
+                        # last one wins if duplicates appear
+                        by_number[n] = rec
 
-                # stop if fewer than a full page returned
                 if len(invs) < 50:
                     break
                 page += 1
 
-        return invoices
+        return by_number
 
     except AccountingBadRequestException:
-        return []
+        return {}
     except Exception:
-        return []
+        return {}
 
 def get_invoices(contact_id):
     tenant_id = session["xero_tenant_id"]
@@ -285,6 +331,21 @@ def get_contacts():
         print(f"Error: {e}")
         return []
 
+def get_contact_for_statement(tenant_id: str, statement_id: str):
+    """Get the contact ID for a given statement ID"""
+    response = tenant_statements_table.get_item(
+        Key={
+            "TenantID": tenant_id,
+            "StatementID": statement_id
+        },
+        ProjectionExpression="ContactID"  # fetch only the needed attribute
+    )
+
+    item = response.get("Item")
+    if item:
+        return item.get("ContactID")
+    return None
+
 def get_incomplete_statements() -> list[dict]:
     """
     Return all statements for the given tenant where `complete` is not True
@@ -345,7 +406,7 @@ def upload_statement_to_s3(fs_like, key: str) -> bool:
         print(f"Failed to upload '{key}' to S3: {e}")
         return False
 
-def get_or_create_json_statement(bucket: str, pdf_key: str, json_key: str) -> tuple[dict, FileStorage]:
+def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, pdf_key: str, json_key: str) -> tuple[dict, FileStorage]:
     """
     Look for JSON statement in S3. If it exists, download and return it.
     Otherwise, run Textract on the PDF, upload the JSON, and return it.
@@ -370,7 +431,7 @@ def get_or_create_json_statement(bucket: str, pdf_key: str, json_key: str) -> tu
 
     # Not found → run Textract
     print(f"No JSON at {json_key}, running Textract for {pdf_key}...")
-    json_fs = run_textraction(bucket=S3_BUCKET_NAME, keys=[pdf_key])
+    json_fs = run_textraction(bucket=S3_BUCKET_NAME, keys=[pdf_key], tenant_id=tenant_id, contact_id=contact_id)
     json_fs.stream.seek(0)
     json_bytes = json_fs.stream.read()
 
@@ -474,18 +535,70 @@ def statement(statement_id):
     json_statement_key = f"{route_key}.json"
 
     # Get existing JSON or build/upload via Textract
-    data, _ = get_or_create_json_statement(S3_BUCKET_NAME, pdf_statement_key, json_statement_key)
+    contact_id = get_contact_for_statement(tenant_id, statement_id)
+    data, _ = get_or_create_json_statement(tenant_id, contact_id, S3_BUCKET_NAME, pdf_statement_key, json_statement_key)
 
     items = data.get("statement_items", []) or []
     raw_statement_headers = list(items[0].get("raw", {}).keys()) if items else []
     raw_statement_rows = [[it.get("raw", {}).get(k, "") for k in raw_statement_headers] for it in items]
 
-    invoices = get_invoices_by_numbers(invoice_numbers=[raw_statement_rows[0][1]])
+    # Contact config -> which header holds the invoice number?
+    contact_config = get_contact_config(tenant_id, contact_id)
+    supplier_reference = ((contact_config.get("statement_items") or [{}])[0].get("supplier_reference"))
 
-    print("*"*88)
-    print(invoices)
+    # 1) Turn row lists into row dicts keyed by header
+    rows_by_header = [dict(zip(raw_statement_headers, row)) for row in raw_statement_rows]
 
-    return render_template("statement.html", statement_id=statement_id, raw_statement_headers=raw_statement_headers, raw_statement_rows=raw_statement_rows)
+    # 2) Extract invoice numbers from the supplier_reference column
+    #    If supplier_reference is missing/not in headers, this will just be []
+    if supplier_reference and supplier_reference in raw_statement_headers:
+        invoice_numbers = [r.get(supplier_reference, "") for r in rows_by_header if r.get(supplier_reference)]
+    else:
+        invoice_numbers = []
+
+    # 3) Fetch invoices keyed by invoice number
+    invoices_by_number = get_invoices_by_numbers(invoice_numbers=invoice_numbers)
+
+    # 4) Build aligned rows so tables line up row-for-row
+    #    Each entry has the original statement row dict and the matched invoice (or None)
+    aligned_rows = []
+    for r in rows_by_header:
+        inv_no = r.get(supplier_reference) if supplier_reference else None
+        aligned_rows.append({
+            "statement": r,
+            "invoice": invoices_by_number.get(inv_no) if inv_no else None,
+            "invoice_number": inv_no
+        })
+
+    # 5) Build a “right table” that mirrors left columns (dicts by header)
+    #    Here we just echo the statement values (same as your mirrored table),
+    #    but you could map invoice fields into specific columns if you prefer.
+    right_rows_by_header = [ar["statement"] for ar in aligned_rows]
+
+    # 6) Per-cell and per-row comparison flags
+    cell_matches = []
+    row_matches = []
+    for left, right in zip(rows_by_header, right_rows_by_header):
+        row_ok = True
+        cell_row = {}
+        for h in raw_statement_headers:
+            eq = _equal(left.get(h), right.get(h))
+            cell_row[h] = eq
+            if not eq:
+                row_ok = False
+        cell_matches.append(cell_row)
+        row_matches.append(row_ok)
+
+    return render_template(
+        "statement.html",
+        statement_id=statement_id,
+        raw_statement_headers=raw_statement_headers,
+        raw_statement_rows=raw_statement_rows,
+        supplier_reference_header=supplier_reference,
+        aligned_rows=aligned_rows,
+        row_matches=row_matches,       # list[bool] parallel to rows
+        cell_matches=cell_matches,     # list[dict[header->bool]]
+    )
 
 @app.route("/")
 def index():
