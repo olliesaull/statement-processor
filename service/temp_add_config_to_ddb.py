@@ -7,41 +7,43 @@ from botocore.exceptions import ClientError
 import boto3
 
 CONFIG = {
-  "statement_meta": {
-    "supplier_name": "",
-    "statement_date": {
-      "value": "",
-      "format": "DD/MM/YY"
+    "statement_meta": {
+        "supplier_name": "",
+        "statement_date": {
+            "value": "",
+            "format": "DD/MM/YY"
+        },
+        "currency": "",
+        "source_filename": ""
     },
-    "currency": "",
-    "source_filename": ""
-  },
-  "statement_items": [
-    {
-      "transaction_date": {
-        "value": "date",
-        "format": "DD/MM/YY"
-      },
-      "customer_account_number": "",
-      "branch_store_shop": "",
-      "document_type": "description",
-      "description_details": "",
-      "debit": "debit",
-      "credit": "credit",
-      "invoice_balance": "",
-      "balance": "",
-      "customer_reference": "",
-      "supplier_reference": "reference",
-      "allocated_to": "",
-      "raw": {
-        "date": "date",
-        "reference": "reference",
-        "description": "description",
-        "debit": "debit",
-        "credit": "credit"
-      }
-    }
-  ]
+    "statement_items": [
+        {
+            "transaction_date": {
+                "value": "date",
+                "format": "DD/MM/YY"
+            },
+            "customer_account_number": "",
+            "branch_store_shop": "",
+            "document_type": "description",
+            "description_details": "",
+            "debit": "",
+            "credit": "",
+            "invoice_balance": "invoice amount",
+            "balance": "balance zar",
+            "customer_reference": "reference",
+            "supplier_reference": "activity",
+            "allocated_to": "",
+            "raw": {
+                "date": "date",
+                "activity": "activity",
+                "reference": "reference",
+                "due date": "due date",
+                "invoice amount": "invoice amount",
+                "payments": "payments",
+                "balance zar": "balance zar"
+            }
+        }
+    ]
 }
 
 def main():
@@ -83,12 +85,10 @@ def main():
 if __name__ == "__main__":
     main()
 
-
-
 # python3 temp_add_config_to_ddb.py \
 #  --profile dotelastic-production \
 #  --region eu-west-1 \
 #  --table TenantContactsConfigTable \
 #  --tenant-id 234a8cb8-33d4-45d9-a1cc-d6075fb65533 \
-#  --contact-id f4b95eb5-b7c8-4028-b770-d9d69d946399 \
+#  --contact-id cc1e8ee2-30e2-400d-ac10-404b3c01784c \
 #  --overwrite

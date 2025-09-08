@@ -23,9 +23,7 @@
                   {% set idx = loop.index0 %}
                   <tr class="{{ 'table-success' if row_matches[idx] else 'table-danger' }}">
                     {% for h in raw_statement_headers %}
-                      <td class="{{ 'table-success' if cell_matches[idx][h] else 'table-danger' }}">
-                        {{ row[loop.index0] }}
-                      </td>
+                      <td>{{ row[loop.index0] }}</td>
                     {% endfor %}
                   </tr>
                 {% endfor %}
@@ -41,7 +39,7 @@
         </div>
       </div>
 
-      <!-- Right column: mirrored table (same headers), supplier ref column shows invoice_number -->
+      <!-- Right column: same headers, values from Xero invoice -->
       <div class="col-12 col-lg-6">
         <div class="table-responsive">
           <table class="table table-striped table-bordered align-middle">
@@ -58,13 +56,7 @@
                   {% set idx = loop.index0 %}
                   <tr class="{{ 'table-success' if row_matches[idx] else 'table-danger' }}">
                     {% for h in raw_statement_headers %}
-                      <td class="{{ 'table-success' if cell_matches[idx][h] else 'table-danger' }}">
-                        {% if h == supplier_reference_header %}
-                          {{ ar.invoice_number }}
-                        {% else %}
-                          {{ ar.statement.get(h, '') }}
-                        {% endif %}
-                      </td>
+                      <td>{{ right_rows_by_header[idx][h] }}</td>
                     {% endfor %}
                   </tr>
                 {% endfor %}

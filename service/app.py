@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import secrets
 import urllib.parse
 import uuid
@@ -100,34 +101,6 @@ def _fmt_date(d):
     if isinstance(d, (datetime, date)):
         return d.strftime("%Y-%m-%d")
     return None
-
-def _norm_number(x):
-    if x is None:
-        return None
-    if isinstance(x, (int, float, Decimal)):
-        try:
-            return Decimal(str(x))
-        except InvalidOperation:
-            return None
-    # strip currency symbols, commas, spaces
-    s = str(x).strip().replace(",", "")
-    s = s.replace("£", "").replace("$", "").replace("€", "")
-    if s == "":
-        return None
-    try:
-        return Decimal(s)
-    except InvalidOperation:
-        return None
-
-def _equal(a, b):
-    """Lenient equality: numeric-aware, else case/space-normalized string compare."""
-    na, nb = _norm_number(a), _norm_number(b)
-    if na is not None or nb is not None:
-        return na == nb  # numeric compare (Decimal)
-    # string-ish compare
-    sa = "" if a is None else str(a).strip()
-    sb = "" if b is None else str(b).strip()
-    return sa == sb
 
 def get_invoices_by_numbers(invoice_numbers):
     """
@@ -445,6 +418,36 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
     fs = FileStorage(stream=io.BytesIO(json_bytes), filename=json_key.rsplit("/", 1)[-1])
     return data, fs
 
+_CURRENCY_STRIP = re.compile(r"[^\d\-\.,]")  # remove currency symbols/letters
+
+def _norm_number(x):
+    """Return Decimal if x looks numeric (incl. currency/commas); else None."""
+    if x is None:
+        return None
+    if isinstance(x, (int, float, Decimal)):
+        try:
+            return Decimal(str(x))
+        except InvalidOperation:
+            return None
+    s = str(x).strip()
+    if not s:
+        return None
+    # strip currency symbols/letters, keep digits . , -
+    s = _CURRENCY_STRIP.sub("", s).replace(",", "")
+    try:
+        return Decimal(s)
+    except InvalidOperation:
+        return None
+
+def _equal(a, b):
+    """Numeric-aware equality; otherwise trimmed string equality."""
+    da, db = _norm_number(a), _norm_number(b)
+    if da is not None or db is not None:
+        return da == db
+    sa = "" if a is None else str(a).strip()
+    sb = "" if b is None else str(b).strip()
+    return sa == sb
+
 # endregion Functions
 
 # region Routes
@@ -542,62 +545,82 @@ def statement(statement_id):
     raw_statement_headers = list(items[0].get("raw", {}).keys()) if items else []
     raw_statement_rows = [[it.get("raw", {}).get(k, "") for k in raw_statement_headers] for it in items]
 
-    # Contact config -> which header holds the invoice number?
+    # Contact config -> defines which headers matter
     contact_config = get_contact_config(tenant_id, contact_id)
-    supplier_reference = ((contact_config.get("statement_items") or [{}])[0].get("supplier_reference"))
+    items_template = (contact_config.get("statement_items") or [{}])[0]
 
-    # 1) Turn row lists into row dicts keyed by header
-    rows_by_header = [dict(zip(raw_statement_headers, row)) for row in raw_statement_rows]
+    # Build header->invoice_field map (invert config)
+    header_to_field = {}
+    for canonical_field, mapped in items_template.items():
+        if isinstance(mapped, str) and mapped.strip():
+            header_to_field[mapped.strip()] = canonical_field
 
-    # 2) Extract invoice numbers from the supplier_reference column
-    #    If supplier_reference is missing/not in headers, this will just be []
-    if supplier_reference and supplier_reference in raw_statement_headers:
-        invoice_numbers = [r.get(supplier_reference, "") for r in rows_by_header if r.get(supplier_reference)]
+    # Only keep headers that appear in the config mapping
+    display_headers = [h for h in raw_statement_headers if h in header_to_field]
+
+    # 1) Turn row lists into row dicts (filtered by display_headers only)
+    rows_by_header = []
+    for row in raw_statement_rows:
+        row_dict_full = dict(zip(raw_statement_headers, row))
+        row_dict_filtered = {h: row_dict_full[h] for h in display_headers if h in row_dict_full}
+        rows_by_header.append(row_dict_filtered)
+
+    # 2) Extract invoice numbers using config-mapped header for "number"
+    item_number_header = None
+    for canonical_field, mapped in items_template.items():
+        if canonical_field == "number" and isinstance(mapped, str) and mapped in display_headers:
+            item_number_header = mapped
+            break
+
+    if item_number_header:
+        invoice_numbers = [r.get(item_number_header, "") for r in rows_by_header if r.get(item_number_header)]
     else:
         invoice_numbers = []
 
     # 3) Fetch invoices keyed by invoice number
     invoices_by_number = get_invoices_by_numbers(invoice_numbers=invoice_numbers)
 
-    # 4) Build aligned rows so tables line up row-for-row
-    #    Each entry has the original statement row dict and the matched invoice (or None)
+    # 4) Align rows
     aligned_rows = []
     for r in rows_by_header:
-        inv_no = r.get(supplier_reference) if supplier_reference else None
+        inv_no = r.get(item_number_header) if item_number_header else None
         aligned_rows.append({
             "statement": r,
             "invoice": invoices_by_number.get(inv_no) if inv_no else None,
             "invoice_number": inv_no
         })
 
-    # 5) Build a “right table” that mirrors left columns (dicts by header)
-    #    Here we just echo the statement values (same as your mirrored table),
-    #    but you could map invoice fields into specific columns if you prefer.
-    right_rows_by_header = [ar["statement"] for ar in aligned_rows]
+    # 5) Build right-hand rows using invoice + config map
+    right_rows_by_header = []
+    for ar in aligned_rows:
+        inv = ar["invoice"] or {}
+        row_right = {}
+        for h in display_headers:
+            invoice_field = header_to_field.get(h)
+            row_right[h] = inv.get(invoice_field, "") if invoice_field else ""
+        right_rows_by_header.append(row_right)
 
-    # 6) Per-cell and per-row comparison flags
-    cell_matches = []
+    # 6) Compare LEFT (statement) vs RIGHT (Xero) for the displayed headers
     row_matches = []
     for left, right in zip(rows_by_header, right_rows_by_header):
-        row_ok = True
-        cell_row = {}
-        for h in raw_statement_headers:
+        ok = True
+        cells = {}
+        for h in display_headers:
             eq = _equal(left.get(h), right.get(h))
-            cell_row[h] = eq
+            cells[h] = eq
             if not eq:
-                row_ok = False
-        cell_matches.append(cell_row)
-        row_matches.append(row_ok)
+                ok = False
+        row_matches.append(ok)
 
     return render_template(
         "statement.html",
         statement_id=statement_id,
-        raw_statement_headers=raw_statement_headers,
-        raw_statement_rows=raw_statement_rows,
-        supplier_reference_header=supplier_reference,
+        raw_statement_headers=display_headers,
+        raw_statement_rows=[[r[h] for h in display_headers] for r in rows_by_header],
+        item_number_header=item_number_header,
         aligned_rows=aligned_rows,
-        row_matches=row_matches,       # list[bool] parallel to rows
-        cell_matches=cell_matches,     # list[dict[header->bool]]
+        right_rows_by_header=right_rows_by_header,
+        row_matches=row_matches,
     )
 
 @app.route("/")
