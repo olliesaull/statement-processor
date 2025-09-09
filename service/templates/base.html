@@ -24,10 +24,6 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'contacts' %}active{% endif %}"
-                            href="{{ url_for('contacts') }}">Contacts</a>
-                    </li>
-                    <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'upload_statements' %}active{% endif %}"
                             href="{{ url_for('upload_statements') }}">Upload Statements</a>
                     </li>
