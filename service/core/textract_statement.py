@@ -7,7 +7,7 @@ from pathlib import Path
 from werkzeug.datastructures import FileStorage
 
 from core.extraction import get_tables
-from core.normalisation import table_to_json
+from core.transform import table_to_json
 
 
 def run_textraction(bucket, keys, tenant_id, contact_id) -> FileStorage:
