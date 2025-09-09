@@ -23,7 +23,7 @@ def run_textraction(bucket, keys, tenant_id, contact_id) -> FileStorage:
         # statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True, threshold_method="iqr")
         # print(json.dumps(summary, indent=2))
 
-        out_dir = Path("./structured_statements")
+        out_dir = Path("./statments/structured_statements")
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / (Path(key).stem + ".json")
         with open(out_path, "w", encoding="utf-8") as f:
