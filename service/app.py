@@ -1,5 +1,4 @@
 import os
-import difflib
 import secrets
 import urllib.parse
 import uuid
@@ -16,7 +15,7 @@ from flask import (
 )
 
 from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
-from core.transform import equal, get_contact_config
+from core.transform import get_contact_config
 from utils import (
     add_statement_to_table,
     api_client,
@@ -30,6 +29,11 @@ from utils import (
     scope_str,
     upload_statement_to_s3,
     xero_token_required,
+    prepare_display_mappings,
+    match_invoices_to_statement_items,
+    build_right_rows,
+    build_row_matches,
+    guess_statement_item_type,
 )
 
 app = Flask(__name__)
@@ -124,152 +128,40 @@ def statement(statement_id):
     contact_id = get_contact_for_statement(tenant_id, statement_id)
     data, _ = get_or_create_json_statement(tenant_id, contact_id, S3_BUCKET_NAME, pdf_statement_key, json_statement_key)
 
+    # 1) Parse display configuration and left-side rows
     items = data.get("statement_items", []) or []
-    raw_statement_headers = list(items[0].get("raw", {}).keys()) if items else []
-    raw_statement_rows = [[it.get("raw", {}).get(k, "") for k in raw_statement_headers] for it in items]
-
-    # Contact config -> defines which headers matter
     contact_config = get_contact_config(tenant_id, contact_id)
-    items_template = (contact_config.get("statement_items") or [{}])[0]
+    display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, contact_config)
 
-    # Build header->invoice_field map (invert config)
-    header_to_field = {}
-    for canonical_field, mapped in items_template.items():
-        if isinstance(mapped, str) and mapped.strip():
-            header_to_field[mapped.strip()] = canonical_field
-
-    # Only keep headers that appear in the config mapping
-    display_headers = [h for h in raw_statement_headers if h in header_to_field]
-
-    # 1) Turn row lists into row dicts (filtered by display_headers only)
-    rows_by_header = []
-    for row in raw_statement_rows:
-        row_dict_full = dict(zip(raw_statement_headers, row))
-        row_dict_filtered = {h: row_dict_full[h] for h in display_headers if h in row_dict_full}
-        rows_by_header.append(row_dict_filtered)
-
-    # 2) Identify which header column maps to the invoice "number" (if configured)
-    item_number_header = None
-    for canonical_field, mapped in items_template.items():
-        if canonical_field == "number" and isinstance(mapped, str) and mapped in display_headers:
-            item_number_header = mapped
-            break
-
-    # 2b) Fetch Xero invoices for the contact and build matches
+    # 2) Fetch Xero invoices for the contact and compute matches (exact + fuzzy)
     invoices = get_invoices_by_contact(contact_id)
+    matched_invoice_to_statement_item = match_invoices_to_statement_items(
+        items=items,
+        rows_by_header=rows_by_header,
+        item_number_header=item_number_header,
+        invoices=invoices,
+    )
 
-    # Match Xero invoices to statement items by the detected "number" header
-    matched_invoice_to_statement_item = {}
-    if item_number_header:
-        # Build fast lookup for statement items by their displayed invoice number
-        stmt_by_number = {}
-        for it in items:
-            raw = it.get("raw", {}) if isinstance(it, dict) else {}
-            num = raw.get(item_number_header, "")
-            if num:
-                key = str(num).strip()
-                if key:
-                    stmt_by_number[key] = it
+    # 3) Build right-hand rows from the matched invoices
+    right_rows_by_header = build_right_rows(
+        rows_by_header=rows_by_header,
+        display_headers=display_headers,
+        header_to_field=header_to_field,
+        matched_map=matched_invoice_to_statement_item,
+        item_number_header=item_number_header,
+    )
 
-        # Iterate Xero invoices from this contact and link to statement item (if present)
-        for inv in invoices or []:
-            inv_no = inv.get("number") if isinstance(inv, dict) else None
-            if not inv_no:
-                continue
-            key = str(inv_no).strip()
-            if not key:
-                continue
-            stmt_item = stmt_by_number.get(key)
-            if stmt_item is not None:
-                matched_invoice_to_statement_item[key] = {
-                    "invoice": inv,
-                    "statement_item": stmt_item,
-                    "match_type": "exact",
-                    "match_score": 1.0,
-                    "matched_invoice_number": key,
-                }
-                print(f"Exact match: statement number '{key}' -> invoice '{key}'")
+    # 4) Heuristically guess each row's document type for logging (temporary)
+    for it in items:
+        raw = it.get("raw", {}) if isinstance(it, dict) else {}
+        _ = guess_statement_item_type(contact_config, raw)
 
-        # Fallback: fuzzy match any unmatched statement numbers using the same contact invoices
-        def _norm_num(s: str) -> str:
-            # Uppercase and keep only letters+digits for robust comparison
-            s = str(s or "").upper().strip()
-            return "".join(ch for ch in s if ch.isalnum())
-
-        # Build candidate list once for speed
-        candidates = []
-        for inv in invoices or []:
-            inv_no = inv.get("number") if isinstance(inv, dict) else None
-            if not inv_no:
-                continue
-            inv_no_str = str(inv_no).strip()
-            if not inv_no_str:
-                continue
-            candidates.append((inv_no_str, inv, _norm_num(inv_no_str)))
-
-        # Determine which statement numbers are still unmatched
-        numbers_in_rows = [
-            (r.get(item_number_header) or "").strip()
-            for r in rows_by_header
-            if r.get(item_number_header)
-        ]
-        missing = [n for n in numbers_in_rows if n and n not in matched_invoice_to_statement_item]
-
-        for key in missing:
-            stmt_item = stmt_by_number.get(key)
-            if stmt_item is None:
-                continue
-            target_norm = _norm_num(key)
-            best = None
-            best_ratio = -1.0
-            for cand_no, inv, cand_norm in candidates:
-                if target_norm and cand_norm and (target_norm == cand_norm):
-                    ratio = 1.0
-                elif target_norm and cand_norm and (target_norm in cand_norm or cand_norm in target_norm):
-                    ratio = 0.95
-                else:
-                    ratio = difflib.SequenceMatcher(None, target_norm, cand_norm).ratio()
-                if ratio > best_ratio:
-                    best_ratio = ratio
-                    best = (cand_no, inv)
-
-            # Apply a reasonable threshold to avoid poor matches
-            if best and best_ratio >= 0.75:
-                inv_no_best, inv_obj = best
-                matched_invoice_to_statement_item[key] = {
-                    "invoice": inv_obj,
-                    "statement_item": stmt_item,
-                    "match_type": "fuzzy" if best_ratio < 1.0 else "exact",
-                    "match_score": round(best_ratio, 3),
-                    "matched_invoice_number": inv_no_best,
-                }
-                kind = "Exact" if best_ratio == 1.0 else "Fuzzy"
-                print(f"{kind} match: statement number '{key}' -> invoice '{inv_no_best}' (score {best_ratio:.3f})")
-            else:
-                print(f"No match for statement number '{key}'")
-
-    # 3) Build right-hand rows using matched invoices (fast lookup per row)
-    right_rows_by_header = []
-    for r in rows_by_header:
-        inv_no = (r.get(item_number_header) or "").strip() if item_number_header else ""
-        inv = (matched_invoice_to_statement_item.get(inv_no, {}) or {}).get("invoice", {})
-        row_right = {}
-        for h in display_headers:
-            invoice_field = header_to_field.get(h)
-            row_right[h] = inv.get(invoice_field, "") if invoice_field else ""
-        right_rows_by_header.append(row_right)
-
-    # 4) Compare LEFT (statement) vs RIGHT (Xero) for the displayed headers
-    row_matches = []
-    for left, right in zip(rows_by_header, right_rows_by_header):
-        ok = True
-        cells = {}
-        for h in display_headers:
-            eq = equal(left.get(h), right.get(h))
-            cells[h] = eq
-            if not eq:
-                ok = False
-        row_matches.append(ok)
+    # 5) Compare LEFT (statement) vs RIGHT (Xero) for row highlighting
+    row_matches = build_row_matches(
+        left_rows=rows_by_header,
+        right_rows=right_rows_by_header,
+        display_headers=display_headers,
+    )
 
     return render_template(
         "statement.html",

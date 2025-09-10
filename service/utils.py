@@ -3,7 +3,8 @@ import json
 from datetime import date, datetime
 from functools import wraps
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Tuple, Optional, Any
+import difflib
 
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
@@ -20,6 +21,7 @@ from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 from xero_python.exceptions import AccountingBadRequestException
 
 from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
+from core.transform import equal
 from configuration.resources import (
     s3_client,
     tenant_statements_table,
@@ -391,3 +393,253 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
     # Return both
     fs = FileStorage(stream=io.BytesIO(json_bytes), filename=json_key.rsplit("/", 1)[-1])
     return data, fs
+
+
+# -----------------------------
+# Helpers for statement view
+# -----------------------------
+
+def prepare_display_mappings(
+    items: List[Dict],
+    contact_config: Dict[str, Any],
+) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
+    """
+    Build the display headers, filtered left rows, header->invoice_field map,
+    and detect which header corresponds to the invoice "number".
+
+    Returns: (display_headers, rows_by_header, header_to_field, item_number_header)
+    """
+    # Derive raw headers from the JSON statement (order preserved)
+    raw_headers = list(items[0].get("raw", {}).keys()) if items else []
+
+    # Invert the mapping: statement header -> invoice field (e.g., "total" -> "total")
+    items_template = (contact_config.get("statement_items") or [{}])[0]
+    header_to_field: Dict[str, str] = {}
+    for canonical_field, mapped in (items_template or {}).items():
+        if isinstance(mapped, str) and mapped.strip():
+            header_to_field[mapped.strip()] = canonical_field
+
+    # Only display headers present in the mapping
+    display_headers = [h for h in raw_headers if h in header_to_field]
+
+    # Convert raw rows into dicts filtered by display headers
+    rows_by_header: List[Dict[str, str]] = []
+    for it in items:
+        raw = it.get("raw", {}) if isinstance(it, dict) else {}
+        rows_by_header.append({h: raw.get(h, "") for h in display_headers})
+
+    # Identify which header maps to the canonical "number" field
+    item_number_header: Optional[str] = None
+    for canonical_field, mapped in (items_template or {}).items():
+        if canonical_field == "number" and isinstance(mapped, str) and mapped in display_headers:
+            item_number_header = mapped
+            break
+
+    return display_headers, rows_by_header, header_to_field, item_number_header
+
+
+def match_invoices_to_statement_items(
+    items: List[Dict],
+    rows_by_header: List[Dict[str, str]],
+    item_number_header: Optional[str],
+    invoices: List[Dict],
+) -> Dict[str, Dict]:
+    """
+    Build mapping from statement invoice number -> { invoice, statement_item, match_type, match_score, matched_invoice_number }.
+    Performs an exact pass first, then fuzzy-matches any remaining numbers against the
+    provided invoice list.
+    """
+    matched: Dict[str, Dict] = {}
+    if not item_number_header:
+        return matched
+
+    # Build fast lookup for statement items by their displayed invoice number
+    stmt_by_number: Dict[str, Dict] = {}
+    for it in items:
+        raw = it.get("raw", {}) if isinstance(it, dict) else {}
+        num = raw.get(item_number_header, "")
+        if not num:
+            continue
+        key = str(num).strip()
+        if key:
+            stmt_by_number[key] = it
+
+    # 1) Exact matches
+    for inv in invoices or []:
+        inv_no = inv.get("number") if isinstance(inv, dict) else None
+        if not inv_no:
+            continue
+        key = str(inv_no).strip()
+        if not key:
+            continue
+        stmt_item = stmt_by_number.get(key)
+        if stmt_item is not None and key not in matched:
+            matched[key] = {
+                "invoice": inv,
+                "statement_item": stmt_item,
+                "match_type": "exact",
+                "match_score": 1.0,
+                "matched_invoice_number": key,
+            }
+            print(f"Exact match: statement number '{key}' -> invoice '{key}'")
+
+    # 2) Fuzzy matches for any unmatched numbers
+    def _norm_num(s: str) -> str:
+        s = str(s or "").upper().strip()
+        return "".join(ch for ch in s if ch.isalnum())
+
+    candidates = []
+    for inv in invoices or []:
+        inv_no = inv.get("number") if isinstance(inv, dict) else None
+        if not inv_no:
+            continue
+        inv_no_str = str(inv_no).strip()
+        if not inv_no_str:
+            continue
+        candidates.append((inv_no_str, inv, _norm_num(inv_no_str)))
+
+    numbers_in_rows = [
+        (r.get(item_number_header) or "").strip() for r in rows_by_header if r.get(item_number_header)
+    ]
+    missing = [n for n in numbers_in_rows if n and n not in matched]
+
+    for key in missing:
+        stmt_item = stmt_by_number.get(key)
+        if stmt_item is None:
+            continue
+        target_norm = _norm_num(key)
+        best = None
+        best_ratio = -1.0
+        for cand_no, inv, cand_norm in candidates:
+            if target_norm and cand_norm and (target_norm == cand_norm):
+                ratio = 1.0
+            elif target_norm and cand_norm and (target_norm in cand_norm or cand_norm in target_norm):
+                ratio = 0.95
+            else:
+                ratio = difflib.SequenceMatcher(None, target_norm, cand_norm).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best = (cand_no, inv)
+
+        if best and best_ratio >= 0.75:
+            inv_no_best, inv_obj = best
+            matched[key] = {
+                "invoice": inv_obj,
+                "statement_item": stmt_item,
+                "match_type": "fuzzy" if best_ratio < 1.0 else "exact",
+                "match_score": round(best_ratio, 3),
+                "matched_invoice_number": inv_no_best,
+            }
+            kind = "Exact" if best_ratio == 1.0 else "Fuzzy"
+            print(
+                f"{kind} match: statement number '{key}' -> invoice '{inv_no_best}' (score {best_ratio:.3f})"
+            )
+        else:
+            print(f"No match for statement number '{key}'")
+
+    return matched
+
+
+def build_right_rows(
+    rows_by_header: List[Dict[str, str]],
+    display_headers: List[str],
+    header_to_field: Dict[str, str],
+    matched_map: Dict[str, Dict],
+    item_number_header: Optional[str],
+) -> List[Dict[str, str]]:
+    """
+    Using the matched map, build the right-hand table rows with values from
+    the invoice, aligned to the same display headers and row order as the left.
+    """
+    right_rows = []
+    for r in rows_by_header:
+        inv_no = (r.get(item_number_header) or "").strip() if item_number_header else ""
+        inv = (matched_map.get(inv_no, {}) or {}).get("invoice", {})
+        row_right = {}
+        for h in display_headers:
+            invoice_field = header_to_field.get(h)
+            row_right[h] = inv.get(invoice_field, "") if invoice_field else ""
+        right_rows.append(row_right)
+    return right_rows
+
+
+def build_row_matches(
+    left_rows: List[Dict[str, str]],
+    right_rows: List[Dict[str, str]],
+    display_headers: List[str],
+) -> List[bool]:
+    """
+    Compare each left/right row cell-wise using numeric-aware equality and
+    return a list of row match booleans for UI highlighting.
+    """
+    row_matches: List[bool] = []
+    for left, right in zip(left_rows, right_rows):
+        ok = True
+        for h in display_headers:
+            if not equal(left.get(h), right.get(h)):
+                ok = False
+                break
+        row_matches.append(ok)
+    return row_matches
+
+
+# ---------------------------------
+# Type inference
+# ---------------------------------
+
+def guess_statement_item_type(contact_config: Dict[str, Any], raw_row: Dict[str, Any]) -> str:
+    """
+    Guess the document type for a statement row. Do a fuzzy match against a finite set of allowed types (invoice, credit_note, sales_order),
+    using the contact's mapping config to find which header contains the document-type label. If that label is empty, fall back to the invoice number header.
+
+    Returns the canonical type string. Also prints what it inferred for now.
+    """
+    items_template = (contact_config.get("statement_items") or [{}])[0]
+
+    # Determine headers for type and invoice number
+    doc_type_header = items_template.get("document_type") if isinstance(items_template.get("document_type"), str) else None
+    number_header = items_template.get("number") if isinstance(items_template.get("number"), str) else None
+
+    # Extract candidate label from the row
+    label = ""
+    if isinstance(raw_row, dict) and doc_type_header:
+        label = str(raw_row.get(doc_type_header, "") or "").strip()
+    if not label and isinstance(raw_row, dict) and number_header:
+        label = str(raw_row.get(number_header, "") or "").strip()
+
+    # Canonical types and some common synonyms/aliases
+    TYPE_SYNONYMS: Dict[str, List[str]] = {
+        "invoice": ["invoice", "inv", "tax invoice", "taxinvoice"],
+        "credit_note": ["credit note", "creditnote", "credit", "crn", "cn"],
+        "sales_order": ["sales order", "salesorder", "order", "so", "s/o"],
+    }
+
+    def _norm(s: str) -> str:
+        s = str(s or "").upper().strip()
+        return "".join(ch for ch in s if ch.isalnum())
+
+    label_norm = _norm(label)
+
+    best_type = "invoice"  # default
+    best_syn = ""
+    best_score = -1.0
+
+    for t, syns in TYPE_SYNONYMS.items():
+        for syn in syns:
+            syn_norm = _norm(syn)
+            if not label_norm and syn_norm:
+                score = 0.0
+            elif label_norm == syn_norm:
+                score = 1.0
+            elif label_norm and syn_norm and (label_norm in syn_norm or syn_norm in label_norm):
+                score = 0.95
+            else:
+                score = difflib.SequenceMatcher(None, label_norm, syn_norm).ratio()
+            if score > best_score:
+                best_score = score
+                best_type = t
+                best_syn = syn
+
+    # Temporary: print the guess for visibility
+    print(f"Guessed type: '{label}' -> {best_type} (score {best_score:.3f}, via '{best_syn}')")
+    return best_type
