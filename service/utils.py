@@ -58,6 +58,7 @@ api_client = ApiClient(
 )
 api = AccountingApi(api_client)
 
+
 def xero_token_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -66,17 +67,20 @@ def xero_token_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+
 def is_allowed_pdf(filename: str, mimetype: str) -> bool:
     ext_ok = Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
     # Some browsers may send 'application/pdf' or 'application/octet-stream' for PDFs.
     mime_ok = (mimetype == 'application/pdf')
     return ext_ok and mime_ok
 
+
 def _fmt_date(d):
     # Xero SDK returns datetime/date or None
     if isinstance(d, (datetime, date)):
         return d.strftime("%Y-%m-%d")
     return None
+
 
 def get_invoices_by_numbers(invoice_numbers):
     """
@@ -170,10 +174,13 @@ def get_invoices_by_numbers(invoice_numbers):
 
         return by_number
 
-    except AccountingBadRequestException:
+    except AccountingBadRequestException as e:
+        print(f"Exception occured: {e}")
         return {}
-    except Exception:
+    except Exception as e:
+        print(f"Exception occured: {e}")
         return {}
+
 
 def get_invoices_by_contact(contact_id):
     tenant_id = session["xero_tenant_id"]
@@ -240,12 +247,77 @@ def get_invoices_by_contact(contact_id):
 
         return invoices
 
-    except AccountingBadRequestException:
-        # Xero returned a 400
+    except AccountingBadRequestException as e:
+        print(f"Exception occured: {e}")
         return []
-    except Exception:
-        # Catch-all for other errors (network, token, etc.)
+    except Exception as e:
+        print(f"Exception occured: {e}")
         return []
+
+
+def get_credit_notes_by_contact(contact_id):
+    tenant_id = session["xero_tenant_id"]
+
+    try:
+        result = api.get_credit_notes(
+            tenant_id,
+            where=f'Contact.ContactID==Guid("{contact_id}")',
+            order="CreditNoteNumber ASC",
+            page=1,
+            unitdp=2,
+            page_size=50,
+        )
+
+        credit_notes = []
+        for cn in (result.credit_notes or []):
+            c = getattr(cn, "contact", None)
+            contact = {
+                "contact_id": getattr(c, "contact_id", None),
+                "name": getattr(c, "name", None),
+                "email": getattr(c, "email_address", None),
+                "is_customer": getattr(c, "is_customer", None),
+                "is_supplier": getattr(c, "is_supplier", None),
+                "status": getattr(c, "contact_status", None),
+            } if c else None
+
+            total = getattr(cn, "total", None)
+            amount_paid = getattr(cn, "amount_paid", None)
+            amount_credited = getattr(cn, "amount_credited", None)
+            remaining_credit = getattr(cn, "remaining_credit", None)
+
+            credit_notes.append({
+                "credit_note_id": getattr(cn, "credit_note_id", None),
+                "number": getattr(cn, "credit_note_number", None),
+                "type": getattr(cn, "type", None),                 # e.g., ACCRECCREDIT
+                "status": getattr(cn, "status", None),
+
+                "date": _fmt_date(getattr(cn, "date", None)),
+                "due_date": _fmt_date(getattr(cn, "due_date", None)),
+
+                "reference": getattr(cn, "reference", None),
+
+                "subtotal": getattr(cn, "sub_total", None),
+                "total_tax": getattr(cn, "total_tax", None),
+                "total": total,
+
+                "amount_paid": amount_paid,
+                "amount_credited": amount_credited,
+                # For credit notes, carry remaining_credit as amount_due analogue if present
+                "amount_due": remaining_credit,
+                "remaining_credit": remaining_credit,
+
+                "contact": contact,
+            })
+
+        return credit_notes
+
+    except AccountingBadRequestException as e:
+        print(f"Exception occured: {e}")
+        return []
+    except Exception as e:
+        print(f"Exception occured: {e}")
+        return []
+
 
 def get_contacts():
     tenant_id = session["xero_tenant_id"]
@@ -280,6 +352,7 @@ def get_contacts():
         print(f"Error: {e}")
         return []
 
+
 def get_contact_for_statement(tenant_id: str, statement_id: str):
     """Get the contact ID for a given statement ID"""
     response = tenant_statements_table.get_item(
@@ -294,6 +367,7 @@ def get_contact_for_statement(tenant_id: str, statement_id: str):
     if item:
         return item.get("ContactID")
     return None
+
 
 def get_incomplete_statements() -> list[dict]:
     """
@@ -317,6 +391,7 @@ def get_incomplete_statements() -> list[dict]:
 
     return items
 
+
 def add_statement_to_table(tenant_id: str, entry: Dict[str, str]):
     item = {
         "TenantID": tenant_id,
@@ -334,6 +409,7 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]):
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             raise ValueError(f"Statement {entry["statement_name"]} already exists") from e
         raise
+
 
 def upload_statement_to_s3(fs_like, key: str) -> bool:
     """
@@ -354,6 +430,7 @@ def upload_statement_to_s3(fs_like, key: str) -> bool:
     except (BotoCoreError, ClientError) as e:
         print(f"Failed to upload '{key}' to S3: {e}")
         return False
+
 
 def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, pdf_key: str, json_key: str) -> tuple[dict, FileStorage]:
     """
@@ -399,10 +476,22 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
 # Helpers for statement view
 # -----------------------------
 
-def prepare_display_mappings(
-    items: List[Dict],
-    contact_config: Dict[str, Any],
-) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
+def get_items_template_from_config(contact_config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return the items template mapping from a contact config, supporting both
+    the new structure (statement_items is a dict) and the legacy structure
+    (statement_items is a single-item list of dicts).
+    """
+    cfg = contact_config.get("statement_items") if isinstance(contact_config, dict) else None
+    if isinstance(cfg, dict):
+        return cfg
+    if isinstance(cfg, list) and cfg:
+        first = cfg[0]
+        return first if isinstance(first, dict) else {}
+    return {}
+
+
+def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
     """
     Build the display headers, filtered left rows, header->invoice_field map,
     and detect which header corresponds to the invoice "number".
@@ -413,7 +502,7 @@ def prepare_display_mappings(
     raw_headers = list(items[0].get("raw", {}).keys()) if items else []
 
     # Invert the mapping: statement header -> invoice field (e.g., "total" -> "total")
-    items_template = (contact_config.get("statement_items") or [{}])[0]
+    items_template = get_items_template_from_config(contact_config)
     header_to_field: Dict[str, str] = {}
     for canonical_field, mapped in (items_template or {}).items():
         if isinstance(mapped, str) and mapped.strip():
@@ -438,12 +527,7 @@ def prepare_display_mappings(
     return display_headers, rows_by_header, header_to_field, item_number_header
 
 
-def match_invoices_to_statement_items(
-    items: List[Dict],
-    rows_by_header: List[Dict[str, str]],
-    item_number_header: Optional[str],
-    invoices: List[Dict],
-) -> Dict[str, Dict]:
+def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Dict[str, str]], item_number_header: Optional[str], invoices: List[Dict]) -> Dict[str, Dict]:
     """
     Build mapping from statement invoice number -> { invoice, statement_item, match_type, match_score, matched_invoice_number }.
     Performs an exact pass first, then fuzzy-matches any remaining numbers against the
@@ -465,6 +549,8 @@ def match_invoices_to_statement_items(
             stmt_by_number[key] = it
 
     # 1) Exact matches
+    used_invoice_ids: set = set()
+    used_invoice_numbers: set = set()
     for inv in invoices or []:
         inv_no = inv.get("number") if isinstance(inv, dict) else None
         if not inv_no:
@@ -482,6 +568,11 @@ def match_invoices_to_statement_items(
                 "matched_invoice_number": key,
             }
             print(f"Exact match: statement number '{key}' -> invoice '{key}'")
+            # Track used invoice to exclude from fuzzy matching pool
+            inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
+            if inv_id:
+                used_invoice_ids.add(inv_id)
+            used_invoice_numbers.add(key)
 
     # 2) Fuzzy matches for any unmatched numbers
     def _norm_num(s: str) -> str:
@@ -495,6 +586,11 @@ def match_invoices_to_statement_items(
             continue
         inv_no_str = str(inv_no).strip()
         if not inv_no_str:
+            continue
+        # Exclude invoices already matched exactly
+        if (inv.get("invoice_id") if isinstance(inv, dict) else None) in used_invoice_ids:
+            continue
+        if inv_no_str in used_invoice_numbers:
             continue
         candidates.append((inv_no_str, inv, _norm_num(inv_no_str)))
 
@@ -511,6 +607,10 @@ def match_invoices_to_statement_items(
         best = None
         best_ratio = -1.0
         for cand_no, inv, cand_norm in candidates:
+            # Skip candidates already used by previous matches (exact or fuzzy)
+            inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
+            if inv_id in used_invoice_ids or cand_no in used_invoice_numbers:
+                continue
             if target_norm and cand_norm and (target_norm == cand_norm):
                 ratio = 1.0
             elif target_norm and cand_norm and (target_norm in cand_norm or cand_norm in target_norm):
@@ -534,19 +634,19 @@ def match_invoices_to_statement_items(
             print(
                 f"{kind} match: statement number '{key}' -> invoice '{inv_no_best}' (score {best_ratio:.3f})"
             )
+            # Mark this invoice as used to prevent reuse in subsequent fuzzy matches
+            inv_id = inv_obj.get("invoice_id") if isinstance(inv_obj, dict) else None
+            if inv_id:
+                used_invoice_ids.add(inv_id)
+            used_invoice_numbers.add(inv_no_best)
         else:
             print(f"No match for statement number '{key}'")
 
     return matched
 
 
-def build_right_rows(
-    rows_by_header: List[Dict[str, str]],
-    display_headers: List[str],
-    header_to_field: Dict[str, str],
-    matched_map: Dict[str, Dict],
-    item_number_header: Optional[str],
-) -> List[Dict[str, str]]:
+def build_right_rows(rows_by_header: List[Dict[str, str]], display_headers: List[str], header_to_field: Dict[str, str],
+    matched_map: Dict[str, Dict], item_number_header: Optional[str]) -> List[Dict[str, str]]:
     """
     Using the matched map, build the right-hand table rows with values from
     the invoice, aligned to the same display headers and row order as the left.
@@ -563,11 +663,7 @@ def build_right_rows(
     return right_rows
 
 
-def build_row_matches(
-    left_rows: List[Dict[str, str]],
-    right_rows: List[Dict[str, str]],
-    display_headers: List[str],
-) -> List[bool]:
+def build_row_matches(left_rows: List[Dict[str, str]], right_rows: List[Dict[str, str]], display_headers: List[str]) -> List[bool]:
     """
     Compare each left/right row cell-wise using numeric-aware equality and
     return a list of row match booleans for UI highlighting.
@@ -594,7 +690,7 @@ def guess_statement_item_type(contact_config: Dict[str, Any], raw_row: Dict[str,
 
     Returns the canonical type string. Also prints what it inferred for now.
     """
-    items_template = (contact_config.get("statement_items") or [{}])[0]
+    items_template = get_items_template_from_config(contact_config)
 
     # Determine headers for type and invoice number
     doc_type_header = items_template.get("document_type") if isinstance(items_template.get("document_type"), str) else None
@@ -621,7 +717,6 @@ def guess_statement_item_type(contact_config: Dict[str, Any], raw_row: Dict[str,
     label_norm = _norm(label)
 
     best_type = "invoice"  # default
-    best_syn = ""
     best_score = -1.0
 
     for t, syns in TYPE_SYNONYMS.items():
@@ -638,8 +733,6 @@ def guess_statement_item_type(contact_config: Dict[str, Any], raw_row: Dict[str,
             if score > best_score:
                 best_score = score
                 best_type = t
-                best_syn = syn
 
     # Temporary: print the guess for visibility
-    print(f"Guessed type: '{label}' -> {best_type} (score {best_score:.3f}, via '{best_syn}')")
     return best_type

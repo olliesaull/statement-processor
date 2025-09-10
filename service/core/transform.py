@@ -150,8 +150,8 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
     """Produce canonical dict (validated by Pydantic)."""
     map_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
 
-    meta_cfg = map_cfg.get("statement_meta", {}) or {}
-    items_template = deepcopy((map_cfg.get("statement_items") or [{}])[0])
+    # Config structure changed: statement_meta removed; statement_items is now a dict
+    items_template = deepcopy((map_cfg.get("statement_items") or {}))
 
     # build mapping config
     simple_map: Dict[str, str] = {}
@@ -220,7 +220,8 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
             items.append(StatementItem(**row_obj))
 
     # meta with filename
-    meta = StatementMeta(**{**meta_cfg, "source_filename": Path(key).name})
+    # Build minimal meta (config no longer supplies statement_meta)
+    meta = StatementMeta(**{"source_filename": Path(key).name})
     statement = SupplierStatement(statement_meta=meta, statement_items=items)
     return statement.model_dump()
 

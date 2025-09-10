@@ -23,6 +23,7 @@ from utils import (
     get_contacts,
     get_incomplete_statements,
     get_invoices_by_contact,
+    get_credit_notes_by_contact,
     get_or_create_json_statement,
     is_allowed_pdf,
     save_xero_oauth2_token,
@@ -60,7 +61,9 @@ def contacts():
         contact_name = request.form.get('contact_name')
         for contact in contacts:
             if contact["name"] == contact_name:
-                return redirect(url_for("invoices", contact_id=contact["contact_id"]))
+                print("*"*88)
+                print(f"{contact_name}: {contact['contact_id']}")
+                print("*"*88)
 
     return render_template("contacts.html", contacts=contacts)
 
@@ -133,13 +136,34 @@ def statement(statement_id):
     contact_config = get_contact_config(tenant_id, contact_id)
     display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, contact_config)
 
-    # 2) Fetch Xero invoices for the contact and compute matches (exact + fuzzy)
-    invoices = get_invoices_by_contact(contact_id)
+    # 2) For each row, guess type (invoice/credit note); fetch the needed doc sets
+    has_invoice, has_credit_note = False, False
+    for it in items:
+        raw = it.get("raw", {}) if isinstance(it, dict) else {}
+        t = guess_statement_item_type(contact_config, raw)
+        if t == "credit_note":
+            has_credit_note = True
+        else:
+            has_invoice = True
+
+    if has_invoice and has_credit_note:
+        invs = get_invoices_by_contact(contact_id) or []
+        cns = get_credit_notes_by_contact(contact_id) or []
+        docs = invs + cns
+        print(cns)
+        print("Selected document types: invoices + credit_notes (fetching both)")
+    elif has_credit_note:
+        docs = get_credit_notes_by_contact(contact_id) or []
+        print("Selected document type: credit_note (fetching credit notes)")
+    else:
+        docs = get_invoices_by_contact(contact_id) or []
+        print("Selected document type: invoice (fetching invoices)")
+
     matched_invoice_to_statement_item = match_invoices_to_statement_items(
         items=items,
         rows_by_header=rows_by_header,
         item_number_header=item_number_header,
-        invoices=invoices,
+        invoices=docs,
     )
 
     # 3) Build right-hand rows from the matched invoices
@@ -151,12 +175,7 @@ def statement(statement_id):
         item_number_header=item_number_header,
     )
 
-    # 4) Heuristically guess each row's document type for logging (temporary)
-    for it in items:
-        raw = it.get("raw", {}) if isinstance(it, dict) else {}
-        _ = guess_statement_item_type(contact_config, raw)
-
-    # 5) Compare LEFT (statement) vs RIGHT (Xero) for row highlighting
+    # 4) Compare LEFT (statement) vs RIGHT (Xero) for row highlighting
     row_matches = build_row_matches(
         left_rows=rows_by_header,
         right_rows=right_rows_by_header,
