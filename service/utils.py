@@ -173,7 +173,7 @@ def get_invoices_by_numbers(invoice_numbers):
     except Exception:
         return {}
 
-def get_invoices(contact_id):
+def get_invoices_by_contact(contact_id):
     tenant_id = session["xero_tenant_id"]
 
     try:

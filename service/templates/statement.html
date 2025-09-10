@@ -51,8 +51,8 @@
               </tr>
             </thead>
             <tbody>
-              {% if aligned_rows %}
-                {% for ar in aligned_rows %}
+              {% if raw_statement_rows %}
+                {% for row in raw_statement_rows %}
                   {% set idx = loop.index0 %}
                   <tr class="{{ 'table-success' if row_matches[idx] else 'table-danger' }}">
                     {% for h in raw_statement_headers %}
