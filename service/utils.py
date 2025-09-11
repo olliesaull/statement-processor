@@ -649,9 +649,7 @@ def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Di
                 "matched_invoice_number": inv_no_best,
             }
             kind = "Exact" if best_ratio == 1.0 else "Fuzzy"
-            print(
-                f"{kind} match: statement number '{key}' -> invoice '{inv_no_best}' (score {best_ratio:.3f})"
-            )
+            print(f"{kind} match: statement number '{key}' -> invoice '{inv_no_best}' (score {best_ratio:.3f})")
             # Mark this invoice as used to prevent reuse in subsequent fuzzy matches
             inv_id = inv_obj.get("invoice_id") if isinstance(inv_obj, dict) else None
             if inv_id:

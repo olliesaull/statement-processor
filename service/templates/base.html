@@ -32,6 +32,10 @@
                             href="{{ url_for('statements') }}">Statements</a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'configs' %}active{% endif %}"
+                            href="{{ url_for('configs') }}">Configuration</a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'logout' %}active{% endif %}"
                             href="{{ url_for('logout') }}">Logout</a>
                     </li>

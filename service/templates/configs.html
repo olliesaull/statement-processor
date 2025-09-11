@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Edit Contact Config{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <h1 class="mb-4">Edit Contact Config</h1>
+
+  {% if error %}
+  <div class="alert alert-danger" role="alert">{{ error }}</div>
+  {% endif %}
+  {% if message %}
+  <div class="alert alert-success" role="alert">{{ message }}</div>
+  {% endif %}
+
+  <!-- Contact selector -->
+  <form method="POST" action="{{ url_for('configs') }}" class="row gy-2 gx-3 align-items-center mb-4">
+    <input type="hidden" name="action" value="load">
+    <div class="col-auto">
+      <label class="visually-hidden" for="contactInput">Contact</label>
+      <input type="text" id="contactInput" name="contact_name" class="form-control"
+             placeholder="Select contact" list="contacts-list" autocomplete="off"
+             value="{{ selected_contact_name or '' }}" style="min-width: 320px;">
+      <datalist id="contacts-list">
+        {% for c in contacts %}
+        <option value="{{ c['name'] }}"></option>
+        {% endfor %}
+      </datalist>
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-primary">Load Config</button>
+    </div>
+  </form>
+
+  {% if selected_contact_id %}
+  <form method="POST" action="{{ url_for('configs') }}">
+    <input type="hidden" name="action" value="save_map">
+    <input type="hidden" name="contact_id" value="{{ selected_contact_id }}">
+    <input type="hidden" name="contact_name" value="{{ selected_contact_name }}">
+
+    <div class="table-responsive">
+      <table class="table table-bordered align-middle">
+        <thead class="table-light">
+          <tr>
+            <th style="width: 35%">Xero</th>
+            <th>Statement column</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in mapping_rows %}
+          <tr>
+            <td><strong>{{ row.field }}</strong></td>
+            <td>
+              <input type="hidden" name="fields[]" value="{{ row.field }}">
+              {% if row.is_multi %}
+                <div id="container-{{ row.field }}">
+                  {% for v in row['values'] %}
+                  <div class="input-group mb-2">
+                    <input type="text" class="form-control" name="map[{{ row.field }}][]" value="{{ v }}" placeholder="Enter column heading">
+                    <button type="button" class="btn btn-outline-danger" onclick="this.parentElement.remove()">Remove</button>
+                  </div>
+                  {% endfor %}
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addInput('{{ row.field }}')">Add another column</button>
+              {% else %}
+                <input type="text" class="form-control" name="map[{{ row.field }}]" value="{{ row['values'][0] }}" placeholder="Enter column heading">
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <button type="submit" class="btn btn-success">Save</button>
+  </form>
+  {% endif %}
+
+</div>
+
+<script>
+function addInput(field) {
+  const container = document.getElementById('container-' + field);
+  if (!container) return;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'input-group mb-2';
+  wrapper.innerHTML = `
+    <input type="text" class="form-control" name="map[${field}][]" placeholder="Enter column heading">
+    <button type="button" class="btn btn-outline-danger" onclick="this.parentElement.remove()">Remove</button>
+  `;
+  container.appendChild(wrapper);
+}
+</script>
+{% endblock %}

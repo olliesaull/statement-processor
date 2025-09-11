@@ -36,3 +36,18 @@ def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
         )
 
     return cfg
+
+
+def set_contact_config(tenant_id: str, contact_id: str, config: Dict[str, Any]) -> None:
+    """Update contact-specific statement mapping config in DynamoDB."""
+    if not isinstance(config, dict):
+        raise TypeError("config must be a dict")
+    try:
+        tenant_contacts_config_table.update_item(
+            Key={"TenantID": tenant_id, "ContactID": contact_id},
+            UpdateExpression="SET #cfg = :cfg",
+            ExpressionAttributeNames={"#cfg": "config"},
+            ExpressionAttributeValues={":cfg": config},
+        )
+    except ClientError as e:
+        raise RuntimeError(f"DynamoDB error updating config: {e}")

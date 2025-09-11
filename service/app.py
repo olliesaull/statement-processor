@@ -16,6 +16,7 @@ from flask import (
 
 from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
 from core.transform import get_contact_config
+from core.get_contact_config import set_contact_config
 from utils import (
     add_statement_to_table,
     api_client,
@@ -150,13 +151,10 @@ def statement(statement_id):
         invs = get_invoices_by_contact(contact_id) or []
         cns = get_credit_notes_by_contact(contact_id) or []
         docs = invs + cns
-        print("Selected document types: invoices + credit_notes (fetching both)")
     elif has_credit_note:
         docs = get_credit_notes_by_contact(contact_id) or []
-        print("Selected document type: credit_note (fetching credit notes)")
     else:
         docs = get_invoices_by_contact(contact_id) or []
-        print("Selected document type: invoice (fetching invoices)")
 
     matched_invoice_to_statement_item = match_invoices_to_statement_items(
         items=items,
@@ -195,6 +193,108 @@ def statement(statement_id):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+@app.route("/configs", methods=["GET", "POST"])
+@xero_token_required
+def configs():
+    # List contacts for dropdown
+    contacts = get_contacts()
+    contacts = sorted(contacts, key=lambda c: c["name"].casefold())
+    contact_lookup = {c["name"]: c["contact_id"] for c in contacts}
+
+    tenant_id = session.get("xero_tenant_id")
+
+    selected_contact_name = None
+    selected_contact_id = None
+    mapping_rows = []  # List of dicts: {field, values:list[str], is_multi:bool}
+    message = None
+    error = None
+
+    def _build_rows(cfg: dict):
+        # Build rows dynamically from the loaded config, excluding non-mapping keys
+        rows = []
+        for f, val in cfg.items():
+            if f in ("raw", "statement_date_format"):
+                continue
+            if f == "amount_due":
+                if isinstance(val, list):
+                    values = [str(v) for v in val]
+                else:
+                    values = [str(val)] if isinstance(val, str) else [""]
+                if not values:
+                    values = [""]
+                rows.append({"field": f, "values": values, "is_multi": True})
+            elif f == "transaction_date":
+                if isinstance(val, dict):
+                    values = [str(val.get("value", ""))]
+                else:
+                    values = [str(val) if isinstance(val, str) else ""]
+                rows.append({"field": f, "values": values, "is_multi": False})
+            else:
+                values = [str(val)] if isinstance(val, str) else [""]
+                rows.append({"field": f, "values": values, "is_multi": False})
+        return rows
+
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "load":
+            # Load existing config for the chosen contact name
+            selected_contact_name = (request.form.get("contact_name") or "").strip()
+            selected_contact_id = contact_lookup.get(selected_contact_name)
+            if not selected_contact_id:
+                error = "Please select a valid contact."
+            else:
+                try:
+                    cfg = get_contact_config(tenant_id, selected_contact_id)
+                    # Ignore 'raw'
+                    cfg = {k: v for k, v in cfg.items() if k != "raw"}
+                    mapping_rows = _build_rows(cfg)
+                except Exception as e:
+                    error = f"Failed to load config: {e}"
+
+        elif action == "save_map":
+            # Save edited mapping
+            selected_contact_id = request.form.get("contact_id")
+            selected_contact_name = request.form.get("contact_name")
+            try:
+                existing = get_contact_config(tenant_id, selected_contact_id)
+                # Determine which fields were displayed/edited
+                posted_fields = request.form.getlist("fields[]")
+                posted_fields = [f for f in posted_fields if f and f not in ("raw", "statement_date_format")]
+
+                # Preserve any keys not shown in the mapping editor
+                preserved = {k: v for k, v in existing.items() if k not in posted_fields}
+
+                # Rebuild mapping from form
+                new_map: dict = {}
+                for f in posted_fields:
+                    if f == "transaction_date":
+                        td_val = (request.form.get("map[transaction_date]") or "").strip()
+                        new_map["transaction_date"] = {"value": td_val}
+                    elif f == "amount_due":
+                        ad_vals = [v.strip() for v in request.form.getlist("map[amount_due][]") if v.strip()]
+                        new_map["amount_due"] = ad_vals
+                    else:
+                        val = request.form.get(f"map[{f}]")
+                        new_map[f] = (val or "").strip()
+
+                # Merge and save
+                to_save = {**preserved, **new_map}
+                set_contact_config(tenant_id, selected_contact_id, to_save)
+                message = "Config updated successfully."
+                mapping_rows = _build_rows(to_save)
+            except Exception as e:
+                error = f"Failed to save config: {e}"
+
+    return render_template(
+        "configs.html",
+        contacts=contacts,
+        selected_contact_name=selected_contact_name,
+        selected_contact_id=selected_contact_id,
+        mapping_rows=mapping_rows,
+        message=message,
+        error=error,
+    )
 
 @app.route("/login")
 def login():
