@@ -150,20 +150,35 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
     """Produce canonical dict (validated by Pydantic)."""
     map_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
 
-    # Config structure changed: statement_meta removed; statement_items is now a dict
-    items_template = deepcopy((map_cfg.get("statement_items") or {}))
+    # Support both nested (statement_items dict), legacy (list with one dict),
+    # and flattened (template keys at root) config shapes
+    if isinstance(map_cfg, dict):
+        si = map_cfg.get("statement_items")
+        if isinstance(si, dict):
+            items_template = deepcopy(si)
+        elif isinstance(si, list) and si:
+            items_template = deepcopy(si[0]) if isinstance(si[0], dict) else {}
+        else:
+            # Flattened/root form
+            items_template = deepcopy(map_cfg)
+    else:
+        items_template = {}
 
     # build mapping config
     simple_map: Dict[str, str] = {}
     raw_map: Dict[str, str] = {}
     date_value_header, date_format = None, None
+    # Use explicit statement_date_format from config (preferred)
+    date_format = map_cfg.get("statement_date_format") if isinstance(map_cfg, dict) else None
+    # Limit simple fields to those supported by StatementItem (exclude special handled keys)
+    allowed_fields = set(StatementItem.model_fields.keys()) - {"transaction_date", "raw"}
     for field, value in items_template.items():
         if field == "transaction_date" and isinstance(value, dict):
             date_value_header = value.get("value")
-            date_format = value.get("format")
+            # Do not override date_format here; rely on statement_date_format
         elif field == "raw" and isinstance(value, dict):
             raw_map = value
-        elif isinstance(value, str) and value.strip():
+        elif field in allowed_fields and isinstance(value, str) and value.strip():
             simple_map[field] = value
 
     candidates = list(simple_map.values())
@@ -189,12 +204,11 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
             # start from template dict (but we’ll build StatementItem)
             row_obj: Dict[str, Any] = deepcopy(items_template)
 
-            # transaction_date
+            # transaction_date — pass through raw value; annotate format from config
             td_val = get_by_header(r, col_index, date_value_header or "")
             row_obj["transaction_date"] = {
                 "value": td_val,
-                "format": date_format
-                or (row_obj.get("transaction_date") or {}).get("format", "DD/MM/YY"),
+                "format": date_format,
             }
 
             # simple fields

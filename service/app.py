@@ -150,7 +150,6 @@ def statement(statement_id):
         invs = get_invoices_by_contact(contact_id) or []
         cns = get_credit_notes_by_contact(contact_id) or []
         docs = invs + cns
-        print(cns)
         print("Selected document types: invoices + credit_notes (fetching both)")
     elif has_credit_note:
         docs = get_credit_notes_by_contact(contact_id) or []
@@ -173,6 +172,7 @@ def statement(statement_id):
         header_to_field=header_to_field,
         matched_map=matched_invoice_to_statement_item,
         item_number_header=item_number_header,
+        statement_date_format=contact_config.get("statement_date_format"),
     )
 
     # 4) Compare LEFT (statement) vs RIGHT (Xero) for row highlighting
@@ -193,7 +193,6 @@ def statement(statement_id):
     )
 
 @app.route("/")
-@xero_token_required
 def index():
     return render_template("index.html")
 

@@ -22,6 +22,7 @@ from xero_python.exceptions import AccountingBadRequestException
 
 from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
 from core.transform import equal
+from core.date_utils import format_iso_to_template
 from configuration.resources import (
     s3_client,
     tenant_statements_table,
@@ -478,17 +479,25 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
 
 def get_items_template_from_config(contact_config: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Return the items template mapping from a contact config, supporting both
-    the new structure (statement_items is a dict) and the legacy structure
-    (statement_items is a single-item list of dicts).
+    Return the items template mapping from a contact config.
+
+    Supports three shapes for backward/forward compatibility:
+      - Legacy:   contact_config["statement_items"] is a 1-item list of dict.
+      - Nested:   contact_config["statement_items"] is a dict.
+      - Flattened: the template keys live directly at the root of contact_config.
     """
-    cfg = contact_config.get("statement_items") if isinstance(contact_config, dict) else None
+    if not isinstance(contact_config, dict):
+        return {}
+
+    cfg = contact_config.get("statement_items")
     if isinstance(cfg, dict):
         return cfg
     if isinstance(cfg, list) and cfg:
         first = cfg[0]
         return first if isinstance(first, dict) else {}
-    return {}
+
+    # Flattened/root form: assume the root dict itself is the template mapping
+    return contact_config
 
 
 def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
@@ -504,18 +513,27 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     # Invert the mapping: statement header -> invoice field (e.g., "total" -> "total")
     items_template = get_items_template_from_config(contact_config)
     header_to_field: Dict[str, str] = {}
+    # Simple (string) mappings first
     for canonical_field, mapped in (items_template or {}).items():
         if isinstance(mapped, str) and mapped.strip():
             header_to_field[mapped.strip()] = canonical_field
+    # Special case: amount_due can be a list of possible headers; include all candidates.
+    # At render time we will populate only the header that has a left-side value for that row.
+    mapped_amount_due = (items_template or {}).get("amount_due")
+    if isinstance(mapped_amount_due, list) and mapped_amount_due:
+        for h in mapped_amount_due:
+            if isinstance(h, str) and h.strip():
+                header_to_field[h.strip()] = "amount_due"
 
     # Only display headers present in the mapping
     display_headers = [h for h in raw_headers if h in header_to_field]
 
-    # Convert raw rows into dicts filtered by display headers
+    # Convert raw rows into dicts filtered by display headers (no normalization)
     rows_by_header: List[Dict[str, str]] = []
     for it in items:
         raw = it.get("raw", {}) if isinstance(it, dict) else {}
-        rows_by_header.append({h: raw.get(h, "") for h in display_headers})
+        row = {h: raw.get(h, "") for h in display_headers}
+        rows_by_header.append(row)
 
     # Identify which header maps to the canonical "number" field
     item_number_header: Optional[str] = None
@@ -645,21 +663,91 @@ def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Di
     return matched
 
 
-def build_right_rows(rows_by_header: List[Dict[str, str]], display_headers: List[str], header_to_field: Dict[str, str],
-    matched_map: Dict[str, Dict], item_number_header: Optional[str]) -> List[Dict[str, str]]:
+def build_right_rows(
+    rows_by_header: List[Dict[str, str]],
+    display_headers: List[str],
+    header_to_field: Dict[str, str],
+    matched_map: Dict[str, Dict],
+    item_number_header: Optional[str],
+    statement_date_format: Optional[str] = None,
+) -> List[Dict[str, str]]:
     """
     Using the matched map, build the right-hand table rows with values from
     the invoice, aligned to the same display headers and row order as the left.
     """
     right_rows = []
+
+    # Discover which headers correspond to canonical debit/credit
+    debit_header = next((h for h, f in header_to_field.items() if f == "debit"), None)
+    credit_header = next((h for h, f in header_to_field.items() if f == "credit"), None)
+
     for r in rows_by_header:
         inv_no = (r.get(item_number_header) or "").strip() if item_number_header else ""
-        inv = (matched_map.get(inv_no, {}) or {}).get("invoice", {})
+        rec = (matched_map.get(inv_no, {}) or {})
+        inv = rec.get("invoice", {}) if isinstance(rec, dict) else {}
+
+        # Determine which column the statement used (left side) for this row
+        left_has_debit = bool(debit_header and str(r.get(debit_header) or "").strip())
+        left_has_credit = bool(credit_header and str(r.get(credit_header) or "").strip())
+
+        inv_type = str(inv.get("type") or "").upper()
+        is_credit_doc = "CREDIT" in inv_type  # e.g., ACCRECCREDIT / ACCPAYCREDIT
+
+        # Prefer amount sources by semantic: totals for debit/credit columns, amount_due for balances
+        inv_total = inv.get("total")
+        inv_due = inv.get("amount_due")
+
         row_right = {}
         for h in display_headers:
             invoice_field = header_to_field.get(h)
-            row_right[h] = inv.get(invoice_field, "") if invoice_field else ""
+            if not invoice_field:
+                row_right[h] = ""
+                continue
+
+            if invoice_field in {"debit", "credit"}:
+                # Decide which column to populate: follow left table if possible, else use doc type
+                populate_debit = left_has_debit if (left_has_debit or left_has_credit) else not is_credit_doc
+                populate_credit = left_has_credit if (left_has_debit or left_has_credit) else is_credit_doc
+
+                base_amount = inv_total if inv_total is not None else inv_due
+                if base_amount is None:
+                    value = ""
+                else:
+                    # Always show positive figures in the respective column
+                    try:
+                        value = abs(base_amount)
+                    except Exception:
+                        value = base_amount
+
+                if invoice_field == "debit":
+                    row_right[h] = value if populate_debit else ""
+                else:  # credit
+                    row_right[h] = value if populate_credit else ""
+            elif invoice_field in {"invoice_balance", "balance"}:
+                # Balances should align to amount_due/remaining_credit where available
+                row_right[h] = inv_due if inv_due is not None else ""
+            elif invoice_field == "amount_due":
+                # Per-row: only populate the header that has a value on the left side
+                left_val = r.get(h)
+                if left_val is not None and str(left_val).strip():
+                    hn = str(h or "").strip().lower()
+                    # If this header looks like 'Total', align to Xero total; otherwise align to amount_due
+                    if "total" in hn and "due" not in hn and "balance" not in hn:
+                        row_right[h] = inv_total if inv_total is not None else ""
+                    else:
+                        row_right[h] = inv_due if inv_due is not None else ""
+                else:
+                    row_right[h] = ""
+            elif invoice_field in {"transaction_date", "due_date", "date"}:
+                v = inv.get(invoice_field)
+                row_right[h] = (
+                    format_iso_to_template(v, statement_date_format) if v is not None else ""
+                )
+            else:
+                row_right[h] = inv.get(invoice_field, "")
+
         right_rows.append(row_right)
+
     return right_rows
 
 
