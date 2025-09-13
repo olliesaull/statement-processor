@@ -155,6 +155,9 @@ def statement(statement_id):
         docs = get_credit_notes_by_contact(contact_id) or []
     else:
         docs = get_invoices_by_contact(contact_id) or []
+        print("*"*88)
+        print(docs)
+        print("*"*88)
 
     matched_invoice_to_statement_item = match_invoices_to_statement_items(
         items=items,
@@ -214,7 +217,7 @@ def configs():
         # Build rows dynamically from the loaded config, excluding non-mapping keys
         rows = []
         for f, val in cfg.items():
-            if f in ("raw", "statement_date_format"):
+            if f in ("raw"):
                 continue
             if f == "amount_due":
                 if isinstance(val, list):
@@ -224,12 +227,6 @@ def configs():
                 if not values:
                     values = [""]
                 rows.append({"field": f, "values": values, "is_multi": True})
-            elif f == "transaction_date":
-                if isinstance(val, dict):
-                    values = [str(val.get("value", ""))]
-                else:
-                    values = [str(val) if isinstance(val, str) else ""]
-                rows.append({"field": f, "values": values, "is_multi": False})
             else:
                 values = [str(val)] if isinstance(val, str) else [""]
                 rows.append({"field": f, "values": values, "is_multi": False})
@@ -268,10 +265,7 @@ def configs():
                 # Rebuild mapping from form
                 new_map: dict = {}
                 for f in posted_fields:
-                    if f == "transaction_date":
-                        td_val = (request.form.get("map[transaction_date]") or "").strip()
-                        new_map["transaction_date"] = {"value": td_val}
-                    elif f == "amount_due":
+                    if f == "amount_due":
                         ad_vals = [v.strip() for v in request.form.getlist("map[amount_due][]") if v.strip()]
                         new_map["amount_due"] = ad_vals
                     else:

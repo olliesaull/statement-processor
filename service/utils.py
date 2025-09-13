@@ -150,6 +150,7 @@ def get_invoices_by_numbers(invoice_numbers):
             batch = normalized[i:i+BATCH]
             page = 1
             while True:
+                # Exclude deleted invoices explicitly via Status filter
                 result = api.get_invoices(
                     tenant_id,
                     invoice_numbers=batch,
@@ -160,6 +161,7 @@ def get_invoices_by_numbers(invoice_numbers):
                     unitdp=2,
                     summary_only=False,
                     page_size=50,
+                    statuses=["DRAFT", "SUBMITTED", "AUTHORISED", "PAID", "VOIDED"],
                 )
                 invs = result.invoices or []
                 for inv in invs:
@@ -187,9 +189,10 @@ def get_invoices_by_contact(contact_id):
     tenant_id = session["xero_tenant_id"]
 
     try:
+        # Restrict to the contact and exclude deleted invoices
         result = api.get_invoices(
             tenant_id,
-            where=f'Contact.ContactID==Guid("{contact_id}")',
+            where=f'Contact.ContactID==Guid("{contact_id}") AND Status!="DELETED"',
             order="InvoiceNumber ASC",
             page=1,
             include_archived=False,
@@ -324,9 +327,11 @@ def get_contacts():
     tenant_id = session["xero_tenant_id"]
 
     try:
+        # Explicitly exclude archived contacts (treat as deleted/hidden)
         result = api.get_contacts(
             xero_tenant_id=tenant_id,
             page=1,
+            include_archived=False,
             page_size=60,  # default is 100; keep smaller for testing
         )
 
@@ -450,6 +455,27 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
         obj = s3_client.get_object(Bucket=bucket, Key=json_key)
         json_bytes = obj["Body"].read()
         data = json.loads(json_bytes.decode("utf-8"))
+
+        # Backfill statement_date_format for existing JSON if missing
+        try:
+            from core.get_contact_config import get_contact_config  # local import to avoid cycles
+            cfg = get_contact_config(tenant_id, contact_id) if contact_id else {}
+            fmt = cfg.get("statement_date_format") if isinstance(cfg, dict) else None
+        except Exception:
+            fmt = None
+
+        mutated = False
+        if fmt:
+            items = data.get("statement_items") or []
+            for it in items:
+                if isinstance(it, dict) and not it.get("statement_date_format"):
+                    it["statement_date_format"] = fmt
+                    mutated = True
+        if mutated:
+            # Persist back to S3 and rebuild JSON bytes
+            json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+            upload_statement_to_s3(io.BytesIO(json_bytes), json_key)
+
         fs = FileStorage(stream=io.BytesIO(json_bytes), filename=json_key.rsplit("/", 1)[-1])
         return data, fs
     except ClientError as e:
@@ -515,6 +541,8 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     header_to_field: Dict[str, str] = {}
     # Simple (string) mappings first
     for canonical_field, mapped in (items_template or {}).items():
+        if canonical_field in {"raw", "statement_date_format"}:
+            continue
         if isinstance(mapped, str) and mapped.strip():
             header_to_field[mapped.strip()] = canonical_field
     # Special case: amount_due can be a list of possible headers; include all candidates.
@@ -675,21 +703,10 @@ def build_right_rows(
     """
     right_rows = []
 
-    # Discover which headers correspond to canonical debit/credit
-    debit_header = next((h for h, f in header_to_field.items() if f == "debit"), None)
-    credit_header = next((h for h, f in header_to_field.items() if f == "credit"), None)
-
     for r in rows_by_header:
         inv_no = (r.get(item_number_header) or "").strip() if item_number_header else ""
         rec = (matched_map.get(inv_no, {}) or {})
         inv = rec.get("invoice", {}) if isinstance(rec, dict) else {}
-
-        # Determine which column the statement used (left side) for this row
-        left_has_debit = bool(debit_header and str(r.get(debit_header) or "").strip())
-        left_has_credit = bool(credit_header and str(r.get(credit_header) or "").strip())
-
-        inv_type = str(inv.get("type") or "").upper()
-        is_credit_doc = "CREDIT" in inv_type  # e.g., ACCRECCREDIT / ACCPAYCREDIT
 
         # Prefer amount sources by semantic: totals for debit/credit columns, amount_due for balances
         inv_total = inv.get("total")
@@ -702,29 +719,7 @@ def build_right_rows(
                 row_right[h] = ""
                 continue
 
-            if invoice_field in {"debit", "credit"}:
-                # Decide which column to populate: follow left table if possible, else use doc type
-                populate_debit = left_has_debit if (left_has_debit or left_has_credit) else not is_credit_doc
-                populate_credit = left_has_credit if (left_has_debit or left_has_credit) else is_credit_doc
-
-                base_amount = inv_total if inv_total is not None else inv_due
-                if base_amount is None:
-                    value = ""
-                else:
-                    # Always show positive figures in the respective column
-                    try:
-                        value = abs(base_amount)
-                    except Exception:
-                        value = base_amount
-
-                if invoice_field == "debit":
-                    row_right[h] = value if populate_debit else ""
-                else:  # credit
-                    row_right[h] = value if populate_credit else ""
-            elif invoice_field in {"invoice_balance", "balance"}:
-                # Balances should align to amount_due/remaining_credit where available
-                row_right[h] = inv_due if inv_due is not None else ""
-            elif invoice_field == "amount_due":
+            if invoice_field == "amount_due":
                 # Per-row: only populate the header that has a value on the left side
                 left_val = r.get(h)
                 if left_val is not None and str(left_val).strip():
@@ -736,7 +731,7 @@ def build_right_rows(
                         row_right[h] = inv_due if inv_due is not None else ""
                 else:
                     row_right[h] = ""
-            elif invoice_field in {"transaction_date", "due_date", "date"}:
+            elif invoice_field in {"due_date", "date"}:
                 v = inv.get(invoice_field)
                 row_right[h] = (
                     format_iso_to_template(v, statement_date_format) if v is not None else ""
@@ -778,16 +773,8 @@ def guess_statement_item_type(contact_config: Dict[str, Any], raw_row: Dict[str,
     """
     items_template = get_items_template_from_config(contact_config)
 
-    # Determine headers for type and invoice number
-    doc_type_header = items_template.get("document_type") if isinstance(items_template.get("document_type"), str) else None
-    number_header = items_template.get("number") if isinstance(items_template.get("number"), str) else None
-
-    # Extract candidate label from the row
-    label = ""
-    if isinstance(raw_row, dict) and doc_type_header:
-        label = str(raw_row.get(doc_type_header, "") or "").strip()
-    if not label and isinstance(raw_row, dict) and number_header:
-        label = str(raw_row.get(number_header, "") or "").strip()
+    # Use the entire raw row text as the label context
+    label = " ".join(str(v) for v in (raw_row or {}).values() if v)
 
     # Canonical types and some common synonyms/aliases
     TYPE_SYNONYMS: Dict[str, List[str]] = {

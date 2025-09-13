@@ -41,14 +41,18 @@ def _day(s):
     except:
         return 0
 
-def _norm_doctype(s: str) -> str:
+def _norm_doctype_from_text(s: str) -> str:
     t = (s or "").lower()
-    if "inv" in t or "invoice" in t: return "invoice"
-    if any(k in t for k in ["pymt", "pmt", "pay", "receipt", "py"]): return "payment"
-    if ("credit" in t and "note" in t) or " cr" in t: return "credit_note"
-    if ("debit" in t and "note" in t) or " dn" in t: return "debit_note"
-    if "adj" in t: return "adjustment"
-    if "fee" in t or "charge" in t: return "charge"
+    if "inv" in t or "invoice" in t:
+        return "invoice"
+    if any(k in t for k in ["pymt", "pmt", "pay", "receipt", "py"]):
+        return "payment"
+    if ("credit" in t and "note" in t) or " cr" in t:
+        return "credit_note"
+    if "adj" in t:
+        return "adjustment"
+    if "fee" in t or "charge" in t:
+        return "charge"
     return t or "_global"
 
 def _flatten_union(ann):
@@ -67,9 +71,8 @@ def build_df_from_schema(
     items: List[Dict[str, Any]],
     *,
     model: Type[StatementItem] = StatementItem,
-    doc_type_field: str = "document_type",
-    date_path: Tuple[str, str] = ("transaction_date", "value"),
-    amount_pair: Tuple[str, str] = ("debit", "credit"),
+    doc_type_field: str = "reference",
+    date_field: str = "date",
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
     Build a feature DataFrame from StatementItem schema.
@@ -82,7 +85,7 @@ def build_df_from_schema(
         if name in {"raw"}:  # ignore raw dict
             continue
         ann = field.annotation
-        if name == date_path[0]:  # nested date model handled separately
+        if name == date_field:  # simple date string handled separately
             continue
         if _is_numeric_annotation(ann):
             numeric_fields.append(name)
@@ -93,10 +96,11 @@ def build_df_from_schema(
     # rows
     rows = []
     for i, it in enumerate(items):
-        row = {"idx": i, "doctype_group": _norm_doctype(it.get(doc_type_field, ""))}
+        raw_text = " ".join(str(v) for v in (it.get("raw") or {}).values())
+        row = {"idx": i, "doctype_group": _norm_doctype_from_text(raw_text or it.get(doc_type_field, ""))}
 
-        # date features
-        td = ((it.get(date_path[0]) or {}) or {}).get(date_path[1], "")
+        # date features (simple string)
+        td = it.get(date_field, "")
         row["date_present"] = 1.0 if _has(td) else 0.0
         row["day_of_month"] = float(_day(td))
 
@@ -114,14 +118,7 @@ def build_df_from_schema(
             row[f"log_abs_{f}"] = float(np.log1p(abs(val)))
             row[f"sign_{f}"] = 0.0 if val == 0 else (1.0 if val > 0 else -1.0)
 
-        # orientation features if amount pair exists
-        a1, a2 = amount_pair
-        has_a1 = _has(it.get(a1))
-        has_a2 = _has(it.get(a2))
-        row["debit_only"]  = 1.0 if has_a1 and not has_a2 else 0.0
-        row["credit_only"] = 1.0 if has_a2 and not has_a1 else 0.0
-        row["both_amounts"] = 1.0 if has_a1 and has_a2 else 0.0
-        row["no_amounts"]   = 1.0 if (not has_a1 and not has_a2) else 0.0
+        # No debit/credit legacy orientation in new schema
 
         rows.append(row)
 
@@ -135,8 +132,7 @@ def build_df_from_schema(
     # numeric-derived
     for f in numeric_fields:
         feature_cols += [f"{f}_present", f"log_abs_{f}", f"sign_{f}"]
-    # orientation
-    feature_cols += ["debit_only", "credit_only", "both_amounts", "no_amounts"]
+    # orientation: removed for new schema
 
     return df, feature_cols
 

@@ -1,11 +1,10 @@
 import re
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from core.get_contact_config import get_contact_config
-from core.models import StatementItem, StatementMeta, SupplierStatement
+from core.models import StatementItem, SupplierStatement
 
 
 def norm(s: str) -> str:
@@ -90,24 +89,19 @@ def _is_forward_label(text: str) -> bool:
 
 
 def row_is_opening_or_carried_forward(raw_row: List[str], mapped_item: Dict[str, Any]) -> bool:
-    if _is_forward_label(mapped_item.get("document_type", "")) or _is_forward_label(
-        mapped_item.get("description_details", "")
-    ):
-        return True
+    """Detect opening/brought-forward rows using raw text only.
+
+    We consider a row as a carried-forward/opening row if any cell contains
+    typical forward labels (e.g., "brought forward", "balance b/f").
+    Additionally, treat very sparse rows with little or no currency-like values
+    as non-transactional headers.
+    """
     raw = mapped_item.get("raw") or {}
     if isinstance(raw, dict) and any(_is_forward_label(v) for v in raw.values() if v):
         return True
     non_empty = sum(1 for c in raw_row if (c or "").strip())
     money_count = sum(1 for c in raw_row if _looks_money(c))
-    ids_empty = all(
-        not (mapped_item.get(k) or "").strip()
-        for k in ("supplier_reference", "customer_reference")
-    )
-    doc_like_empty = all(
-        not (mapped_item.get(k) or "").strip()
-        for k in ("document_type", "description_details")
-    )
-    return non_empty <= 3 and money_count <= 1 and ids_empty and doc_like_empty
+    return non_empty <= 3 and money_count <= 1
 
 
 def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], candidates: List[str], small_table_penalty: float = 2.5) -> List[Dict[str, Any]]:
@@ -171,12 +165,10 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
     # Use explicit statement_date_format from config (preferred)
     date_format = map_cfg.get("statement_date_format") if isinstance(map_cfg, dict) else None
     # Limit simple fields to those supported by StatementItem (exclude special handled keys)
-    allowed_fields = set(StatementItem.model_fields.keys()) - {"transaction_date", "raw"}
+    # Exclude 'statement_date_format' so it is never treated as a header mapping.
+    allowed_fields = set(StatementItem.model_fields.keys()) - {"raw", "statement_date_format"}
     for field, value in items_template.items():
-        if field == "transaction_date" and isinstance(value, dict):
-            date_value_header = value.get("value")
-            # Do not override date_format here; rely on statement_date_format
-        elif field == "raw" and isinstance(value, dict):
+        if field == "raw" and isinstance(value, dict):
             raw_map = value
         elif field in allowed_fields and isinstance(value, str) and value.strip():
             simple_map[field] = value
@@ -204,20 +196,13 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
             # start from template dict (but we’ll build StatementItem)
             row_obj: Dict[str, Any] = deepcopy(items_template)
 
-            # transaction_date — pass through raw value; annotate format from config
-            td_val = get_by_header(r, col_index, date_value_header or "")
-            row_obj["transaction_date"] = {
-                "value": td_val,
-                "format": date_format,
-            }
+            # Surface the statement date format explicitly for downstream consumers
+            row_obj["statement_date_format"] = date_format
 
             # simple fields
             for field, header_name in simple_map.items():
                 cell = get_by_header(r, col_index, header_name)
-                if field in {"debit", "credit", "invoice_balance", "balance"}:
-                    row_obj[field] = to_number_if_possible(cell)
-                else:
-                    row_obj[field] = cell
+                row_obj[field] = cell
 
             # raw fields with auto-fill
             raw_obj = {}
@@ -234,9 +219,7 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
             items.append(StatementItem(**row_obj))
 
     # meta with filename
-    # Build minimal meta (config no longer supplies statement_meta)
-    meta = StatementMeta(**{"source_filename": Path(key).name})
-    statement = SupplierStatement(statement_meta=meta, statement_items=items)
+    statement = SupplierStatement(statement_items=items)
     return statement.model_dump()
 
 def _norm_number(x):
