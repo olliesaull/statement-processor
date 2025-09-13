@@ -1,0 +1,21 @@
+# AWS
+boto3
+boto3-stubs[essential]
+boto3-stubs[textract]
+
+# Item count validation
+pdfplumber
+
+# Outlier detection
+scikit-learn
+numpy
+
+# Web app
+flask
+requests
+xero-python
+
+# Other
+pandas
+pydantic
+dotenv

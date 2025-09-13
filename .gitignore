@@ -12,4 +12,3 @@
 **/*.sh
 .env
 *.json
-*.txt
