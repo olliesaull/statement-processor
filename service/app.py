@@ -141,7 +141,7 @@ def statement(statement_id):
     has_invoice, has_credit_note = False, False
     for it in items:
         raw = it.get("raw", {}) if isinstance(it, dict) else {}
-        t = guess_statement_item_type(contact_config, raw)
+        t = guess_statement_item_type(raw)
         if t == "credit_note":
             has_credit_note = True
         else:
@@ -151,13 +151,13 @@ def statement(statement_id):
         invs = get_invoices_by_contact(contact_id) or []
         cns = get_credit_notes_by_contact(contact_id) or []
         docs = invs + cns
+        print("*"*88)
+        print(docs)
+        print("*"*88)
     elif has_credit_note:
         docs = get_credit_notes_by_contact(contact_id) or []
     else:
         docs = get_invoices_by_contact(contact_id) or []
-        print("*"*88)
-        print(docs)
-        print("*"*88)
 
     matched_invoice_to_statement_item = match_invoices_to_statement_items(
         items=items,

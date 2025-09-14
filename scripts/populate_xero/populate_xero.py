@@ -76,9 +76,15 @@ from xero_python.exceptions import AccountingBadRequestException  # type: ignore
 # Global settings
 # ---------------------
 
+# ButtaNut
+# TENANT_ID = os.getenv("TENANT_ID", "234a8cb8-33d4-45d9-a1cc-d6075fb65533")
+# STATEMENT_ID = os.getenv("STATEMENT_ID", "f943c82d-d3ee-4c5b-bd16-9641b9244567")
+# CONTACT_ID = os.getenv("CONTACT_ID", "cc1e8ee2-30e2-400d-ac10-404b3c01784c")
+
+# Geotina
 TENANT_ID = os.getenv("TENANT_ID", "234a8cb8-33d4-45d9-a1cc-d6075fb65533")
-STATEMENT_ID = os.getenv("STATEMENT_ID", "f943c82d-d3ee-4c5b-bd16-9641b9244567")
-CONTACT_ID = os.getenv("CONTACT_ID", "cc1e8ee2-30e2-400d-ac10-404b3c01784c")
+STATEMENT_ID = os.getenv("STATEMENT_ID", "7fa655ea-9371-4c9e-99ef-8aaeedff2cb1")
+CONTACT_ID = os.getenv("CONTACT_ID", "b6663af0-9454-4356-a41e-c5e6093ef222")
 
 XERO_CLIENT_ID = os.getenv("XERO_CLIENT_ID")
 XERO_CLIENT_SECRET = os.getenv("XERO_CLIENT_SECRET")
@@ -413,21 +419,40 @@ def pick_amount(it: Dict[str, Any], doc_type: str) -> Optional[Decimal]:
     """Pick a sensible amount for the document from canonical fields.
 
     Priority:
-      - total
-      - first non-empty amount_due entry (list or scalar compatible)
-    Always returns a positive Decimal when possible.
+      - total (numeric)
+      - amount_due:
+          * if numeric, use it
+          * if string/list of strings, treat each as a raw header name
+            (e.g. "debit", "credit") and use the first numeric value
+            found in the item's raw payload under that header.
+    Returns a positive Decimal when possible.
     """
     total = to_number(it.get("total"))
+
+    def _resolve_token(tok: Any) -> Optional[Decimal]:
+        # direct numeric
+        n = to_number(tok)
+        if n is not None:
+            return n
+        # treat as header in raw
+        if isinstance(tok, str) and tok.strip():
+            try:
+                val = _get_from_raw(it, tok)
+            except Exception:
+                val = None
+            if val is not None:
+                return to_number(val)
+        return None
 
     def _first_due() -> Optional[Decimal]:
         ad = it.get("amount_due")
         if isinstance(ad, list):
-            for v in ad:
-                num = to_number(v)
-                if num is not None:
+            for tok in ad:
+                num = _resolve_token(tok)
+                if num is not None and num != 0:
                     return num
             return None
-        return to_number(ad)
+        return _resolve_token(ad)
 
     amt = total if total is not None else _first_due()
     if amt is None:
@@ -629,7 +654,8 @@ def ensure_not_exists(
     """Return True if safe to create a new doc.
 
     Prefer number uniqueness (scoped to contact); else fall back to Reference.
-    Ignores DELETED/VOIDED hits. Bypass with FORCE_CREATE.
+    If active duplicates exist, delete/void them and allow recreate.
+    Ignores already DELETED/VOIDED hits. Bypass with FORCE_CREATE.
     """
     try:
         if FORCE_CREATE:
@@ -669,8 +695,61 @@ def ensure_not_exists(
                 return ""
 
         active = [x for x in items if _status(x) not in {"DELETED", "VOIDED"}]
-        return not bool(active)
-    except Exception:
+        if not active:
+            return True
+
+        # If we matched existing docs, delete/void them so we can recreate
+        print(f"Found {len(active)} existing Xero {kind}(s) matching number/reference; deleting/voiding…")
+
+        def _delete_or_void_invoice(inv) -> bool:
+            st = _status(inv)
+            inv_id = getattr(inv, "invoice_id", None)
+            if not inv_id:
+                return False
+            # DRAFT/SUBMITTED -> DELETED, AUTHORISED/PAID -> VOIDED
+            # Xero won't delete paid/authorised with allocations; catch errors.
+            try:
+                from xero_python.accounting import Invoice as _Inv, Invoices as _Invs
+                target_status = "DELETED" if st in {"DRAFT", "SUBMITTED"} else "VOIDED"
+                payload = _Invs(invoices=[_Inv(status=target_status)])
+                api.update_invoice(tenant_id, inv_id, payload)
+                print(f"  - Invoice {inv_id} -> {target_status}")
+                return True
+            except Exception as e:
+                print(f"  ! Failed to update invoice {inv_id} ({st}): {e}")
+                return False
+
+        def _delete_or_void_credit(cn) -> bool:
+            st = _status(cn)
+            cn_id = getattr(cn, "credit_note_id", None)
+            if not cn_id:
+                return False
+            try:
+                from xero_python.accounting import CreditNote as _Cn, CreditNotes as _Cns
+                target_status = "DELETED" if st in {"DRAFT", "SUBMITTED"} else "VOIDED"
+                payload = _Cns(credit_notes=[_Cn(status=target_status)])
+                api.update_credit_note(tenant_id, cn_id, payload)
+                print(f"  - CreditNote {cn_id} -> {target_status}")
+                return True
+            except Exception as e:
+                print(f"  ! Failed to update credit note {cn_id} ({st}): {e}")
+                return False
+
+        ok_all = True
+        if kind == "credit_note":
+            for cn in active:
+                ok_all = _delete_or_void_credit(cn) and ok_all
+        else:
+            for inv in active:
+                ok_all = _delete_or_void_invoice(inv) and ok_all
+
+        if not ok_all:
+            print("One or more existing documents could not be removed; skipping recreate for safety.")
+            return False
+
+        return True
+    except Exception as e:
+        print(f"Failed to check/delete existing docs: {e}")
         return True
 
 
@@ -784,7 +863,7 @@ def main():
             print(str(it))
 
         raw = it.get("raw", {}) if isinstance(it.get("raw"), dict) else {}
-        doc_type = guess_statement_item_type(contact_cfg, raw)
+        doc_type = guess_statement_item_type(raw)
         amt = pick_amount(it, doc_type)
         if amt is None or amt <= 0:
             skipped += 1
@@ -824,7 +903,7 @@ def main():
                 reference=ref_value,
             ):
                 skipped += 1
-                print(f"- Row {idx}: already exists (by number/reference)")
+                print(f"- Row {idx}: existing could not be removed; skipped")
                 continue
 
             if doc_type == "credit_note":

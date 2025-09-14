@@ -5,6 +5,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 import difflib
+from decimal import Decimal, InvalidOperation
+import re
 
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
@@ -22,7 +24,11 @@ from xero_python.exceptions import AccountingBadRequestException
 
 from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
 from core.transform import equal
-from core.date_utils import format_iso_to_template
+from core.date_utils import (
+    format_iso_to_template,
+    parse_date_with_template,
+    ensure_abbrev_month,
+)
 from configuration.resources import (
     s3_client,
     tenant_statements_table,
@@ -503,6 +509,35 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
 # Helpers for statement view
 # -----------------------------
 
+def _to_decimal(x: Any) -> Optional[Decimal]:
+    if x is None or x == "":
+        return None
+    if isinstance(x, (int, float, Decimal)):
+        try:
+            return Decimal(str(x))
+        except InvalidOperation:
+            return None
+    s = str(x).strip()
+    if not s:
+        return None
+    # strip currency symbols/letters; keep digits . , -
+    s = re.compile(r"[^\d\-\.,]").sub("", s).replace(",", "")
+    try:
+        return Decimal(s)
+    except InvalidOperation:
+        return None
+
+
+def format_money(x: Any) -> str:
+    """Format a number with thousands separators and 2 decimals.
+
+    Returns empty string for empty input; returns original string if not numeric.
+    """
+    d = _to_decimal(x)
+    if d is None:
+        return "" if x in (None, "") else str(x)
+    return f"{d:,.2f}"
+
 def get_items_template_from_config(contact_config: Dict[str, Any]) -> Dict[str, Any]:
     """
     Return the items template mapping from a contact config.
@@ -556,11 +591,29 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     # Only display headers present in the mapping
     display_headers = [h for h in raw_headers if h in header_to_field]
 
-    # Convert raw rows into dicts filtered by display headers (no normalization)
+    # Convert raw rows into dicts filtered by display headers, normalizing date fields for display
     rows_by_header: List[Dict[str, str]] = []
+    stmt_date_fmt: Optional[str] = None
+    if isinstance(contact_config, dict):
+        # Prefer explicit statement_date_format stored at root
+        stmt_date_fmt = contact_config.get("statement_date_format")
+    # Prefer abbreviated month form for display to save space
+    display_date_fmt = ensure_abbrev_month(stmt_date_fmt)
+    numeric_fields = {"total", "amount_paid", "amount_due"}
     for it in items:
         raw = it.get("raw", {}) if isinstance(it, dict) else {}
-        row = {h: raw.get(h, "") for h in display_headers}
+        row: Dict[str, str] = {}
+        for h in display_headers:
+            v = raw.get(h, "")
+            # If this header maps to a canonical date field, normalize to the configured format
+            canon = header_to_field.get(h)
+            if canon in {"date", "due_date"} and display_date_fmt:
+                dt = parse_date_with_template(v, display_date_fmt)
+                if dt is not None:
+                    v = format_iso_to_template(dt, display_date_fmt)
+            elif canon in numeric_fields:
+                v = format_money(v)
+            row[h] = v
         rows_by_header.append(row)
 
     # Identify which header maps to the canonical "number" field
@@ -702,6 +755,9 @@ def build_right_rows(
     the invoice, aligned to the same display headers and row order as the left.
     """
     right_rows = []
+    # Prefer abbreviated month for display
+    display_date_fmt = ensure_abbrev_month(statement_date_format)
+    numeric_fields = {"total", "amount_paid", "amount_due"}
 
     for r in rows_by_header:
         inv_no = (r.get(item_number_header) or "").strip() if item_number_header else ""
@@ -726,18 +782,22 @@ def build_right_rows(
                     hn = str(h or "").strip().lower()
                     # If this header looks like 'Total', align to Xero total; otherwise align to amount_due
                     if "total" in hn and "due" not in hn and "balance" not in hn:
-                        row_right[h] = inv_total if inv_total is not None else ""
+                        row_right[h] = format_money(inv_total) if inv_total is not None else ""
                     else:
-                        row_right[h] = inv_due if inv_due is not None else ""
+                        row_right[h] = format_money(inv_due) if inv_due is not None else ""
                 else:
                     row_right[h] = ""
             elif invoice_field in {"due_date", "date"}:
                 v = inv.get(invoice_field)
                 row_right[h] = (
-                    format_iso_to_template(v, statement_date_format) if v is not None else ""
+                    format_iso_to_template(v, display_date_fmt) if v is not None else ""
                 )
             else:
-                row_right[h] = inv.get(invoice_field, "")
+                val = inv.get(invoice_field, "")
+                if invoice_field in numeric_fields:
+                    row_right[h] = format_money(val)
+                else:
+                    row_right[h] = val
 
         right_rows.append(row_right)
 
@@ -764,15 +824,13 @@ def build_row_matches(left_rows: List[Dict[str, str]], right_rows: List[Dict[str
 # Type inference
 # ---------------------------------
 
-def guess_statement_item_type(contact_config: Dict[str, Any], raw_row: Dict[str, Any]) -> str:
+def guess_statement_item_type(raw_row: Dict[str, Any]) -> str:
     """
     Guess the document type for a statement row. Do a fuzzy match against a finite set of allowed types (invoice, credit_note, sales_order),
     using the contact's mapping config to find which header contains the document-type label. If that label is empty, fall back to the invoice number header.
 
     Returns the canonical type string. Also prints what it inferred for now.
     """
-    items_template = get_items_template_from_config(contact_config)
-
     # Use the entire raw row text as the label context
     label = " ".join(str(v) for v in (raw_row or {}).values() if v)
 
