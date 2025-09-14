@@ -4,29 +4,14 @@ from typing import Any, Dict, List, TypedDict
 import boto3
 from botocore.exceptions import ClientError
 
-s3 = boto3.client("s3")
+# Reuse clients across calls
 textract = boto3.client("textract")
 
-DOC_EXTS = (".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg")
 
 class TableOnPage(TypedDict):
+    """Simple table representation extracted from Textract for a given page."""
     page: int
     grid: List[List[str]]
-
-def list_s3_objects(bucket: str, prefix: str) -> List[str]:
-    keys: List[str] = []
-    kwargs = {"Bucket": bucket, "Prefix": prefix}
-    while True:
-        resp = s3.list_objects_v2(**kwargs)
-        for obj in resp.get("Contents", []):
-            k = obj["Key"]
-            if not k.endswith("/"):
-                keys.append(k)
-        if resp.get("IsTruncated"):
-            kwargs["ContinuationToken"] = resp.get("NextContinuationToken")
-        else:
-            break
-    return keys
 
 def _block_text(block: Dict[str, Any], by_id: Dict[str, Dict[str, Any]]) -> str:
     out: List[str] = []
@@ -73,8 +58,9 @@ def _collect_table_grids_with_pages(blocks: List[Dict[str, Any]]) -> List[TableO
     return out
 
 def analyze_tables_s3(bucket: str, key: str) -> List[TableOnPage]:
+    """Run Textract TABLES on an S3 object and return tables per page."""
     k = key.lower()
-    is_pdf_tiff = k.endswith(".pdf") or k.endswith(".tif") or k.endswith(".tiff")
+    is_pdf_tiff = k.endswith((".pdf", ".tif", ".tiff"))
     if is_pdf_tiff:
         start = textract.start_document_analysis(
             DocumentLocation={"S3Object": {"Bucket": bucket, "Name": key}},
@@ -108,7 +94,8 @@ def analyze_tables_s3(bucket: str, key: str) -> List[TableOnPage]:
         blocks = resp.get("Blocks", [])
     return _collect_table_grids_with_pages(blocks)
 
-def get_tables(bucket: str, key) -> Dict[str, List[TableOnPage]]:
+def get_tables(bucket: str, key: str) -> Dict[str, List[TableOnPage]]:
+    """Convenience wrapper returning a mapping of key -> extracted tables."""
     result: Dict[str, List[TableOnPage]] = {}
     try:
         result[key] = analyze_tables_s3(bucket, key)

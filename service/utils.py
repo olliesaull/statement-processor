@@ -1,12 +1,12 @@
+import difflib
 import io
 import json
+import re
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
-import difflib
-from decimal import Decimal, InvalidOperation
-import re
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
@@ -23,33 +23,35 @@ from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 from xero_python.exceptions import AccountingBadRequestException
 
 from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
-from core.transform import equal
-from core.date_utils import (
-    format_iso_to_template,
-    parse_date_with_template,
-    ensure_abbrev_month,
-)
 from configuration.resources import (
     s3_client,
     tenant_statements_table,
 )
+from core.date_utils import (
+    ensure_abbrev_month,
+    format_iso_to_template,
+    parse_date_with_template,
+)
 from core.textract_statement import run_textraction
+from core.transform import equal
 
-ALLOWED_EXTENSIONS = {'.pdf', '.PDF'}
+# MIME/extension guards for uploads
+ALLOWED_EXTENSIONS = {".pdf"}
 SCOPES = [
     "offline_access", "openid", "profile", "email", "accounting.transactions", "accounting.reports.read", "accounting.journals.read",
     "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
 ]
 
-def scope_str():
+def scope_str() -> str:
+    """Return Xero OAuth scopes as a space-separated string."""
     return " ".join(SCOPES)
 
-def get_xero_oauth2_token():
-    # Return the dict the SDK expects, or None if not set
+def get_xero_oauth2_token() -> Optional[dict]:
+    """Return the token dict the SDK expects, or None if not set."""
     return session.get("xero_oauth2_token")
 
-def save_xero_oauth2_token(token: dict):
-    # Persist the whole token dict in the session (or your DB)
+def save_xero_oauth2_token(token: dict) -> None:
+    """Persist the whole token dict in the session (or your DB)."""
     session["xero_oauth2_token"] = token
 
 api_client = ApiClient(
@@ -66,9 +68,10 @@ api_client = ApiClient(
 api = AccountingApi(api_client)
 
 
-def xero_token_required(f):
+def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
+    """Flask route decorator ensuring the user has an access token + tenant."""
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated_function(*args: Any, **kwargs: Any):
         if "access_token" not in session or "xero_tenant_id" not in session:
             return redirect(url_for("login"))
         return f(*args, **kwargs)
@@ -76,20 +79,24 @@ def xero_token_required(f):
 
 
 def is_allowed_pdf(filename: str, mimetype: str) -> bool:
+    """Basic check for PDF uploads by extension and MIME type.
+
+    Note: We intentionally only accept 'application/pdf' to avoid false positives
+    like 'application/octet-stream'. If broader support is desired, revisit this.
+    """
     ext_ok = Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
-    # Some browsers may send 'application/pdf' or 'application/octet-stream' for PDFs.
-    mime_ok = (mimetype == 'application/pdf')
+    mime_ok = mimetype == "application/pdf"
     return ext_ok and mime_ok
 
 
-def _fmt_date(d):
-    # Xero SDK returns datetime/date or None
+def _fmt_date(d: Any) -> Optional[str]:
+    """Format datetime/date to ISO date string, else None."""
     if isinstance(d, (datetime, date)):
         return d.strftime("%Y-%m-%d")
     return None
 
 
-def get_invoices_by_numbers(invoice_numbers):
+def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
     """
     Fetch invoices for a list of invoice numbers.
     Returns a dict keyed by invoice number: { "INV-001": {...}, ... }
@@ -184,14 +191,14 @@ def get_invoices_by_numbers(invoice_numbers):
         return by_number
 
     except AccountingBadRequestException as e:
-        print(f"Exception occured: {e}")
+        print(f"Exception occurred: {e}")
         return {}
     except Exception as e:
-        print(f"Exception occured: {e}")
+        print(f"Exception occurred: {e}")
         return {}
 
 
-def get_invoices_by_contact(contact_id):
+def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
     tenant_id = session["xero_tenant_id"]
 
     try:
@@ -258,14 +265,14 @@ def get_invoices_by_contact(contact_id):
         return invoices
 
     except AccountingBadRequestException as e:
-        print(f"Exception occured: {e}")
+        print(f"Exception occurred: {e}")
         return []
     except Exception as e:
-        print(f"Exception occured: {e}")
+        print(f"Exception occurred: {e}")
         return []
 
 
-def get_credit_notes_by_contact(contact_id):
+def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
     tenant_id = session["xero_tenant_id"]
 
     try:
@@ -322,14 +329,14 @@ def get_credit_notes_by_contact(contact_id):
         return credit_notes
 
     except AccountingBadRequestException as e:
-        print(f"Exception occured: {e}")
+        print(f"Exception occurred: {e}")
         return []
     except Exception as e:
-        print(f"Exception occured: {e}")
+        print(f"Exception occurred: {e}")
         return []
 
 
-def get_contacts():
+def get_contacts() -> List[Dict[str, Any]]:
     tenant_id = session["xero_tenant_id"]
 
     try:
@@ -365,8 +372,8 @@ def get_contacts():
         return []
 
 
-def get_contact_for_statement(tenant_id: str, statement_id: str):
-    """Get the contact ID for a given statement ID"""
+def get_contact_for_statement(tenant_id: str, statement_id: str) -> Optional[str]:
+    """Get the contact ID for a given statement ID."""
     response = tenant_statements_table.get_item(
         Key={
             "TenantID": tenant_id,
@@ -381,13 +388,13 @@ def get_contact_for_statement(tenant_id: str, statement_id: str):
     return None
 
 
-def get_incomplete_statements() -> list[dict]:
+def get_incomplete_statements() -> List[Dict[str, Any]]:
     """
     Return all statements for the given tenant where `complete` is not True
     (i.e., either False or attribute missing).
     """
     tenant_id = session.get("xero_tenant_id")
-    items: list[dict] = []
+    items: List[Dict[str, Any]] = []
     kwargs = {
         "KeyConditionExpression": Key("TenantID").eq(tenant_id),
         "FilterExpression": Attr("complete").not_exists() | Attr("complete").eq(False),
@@ -404,7 +411,7 @@ def get_incomplete_statements() -> list[dict]:
     return items
 
 
-def add_statement_to_table(tenant_id: str, entry: Dict[str, str]):
+def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
     item = {
         "TenantID": tenant_id,
         "StatementID": entry["statement_id"],
@@ -413,19 +420,25 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]):
         "ContactName": entry["contact_name"],
     }
     try:
+        # Ensure we don't overwrite an existing statement for this tenant.
+        # NOTE: Table key schema is (TenantID, StatementID). Using StatementID here is intentional.
         tenant_statements_table.put_item(
             Item=item,
-            ConditionExpression=Attr("TenantID").not_exists() & Attr("ContactID").not_exists(),
+            ConditionExpression=Attr("StatementID").not_exists(),
         )
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            raise ValueError(f"Statement {entry["statement_name"]} already exists") from e
+            # Using single-quotes to simplify nested quotes in f-string
+            raise ValueError(f"Statement {entry['statement_name']} already exists") from e
         raise
 
 
-def upload_statement_to_s3(fs_like, key: str) -> bool:
-    """
-    Uploads a file-like object (PDF or JSON stream) to S3.
+def upload_statement_to_s3(fs_like: Any, key: str) -> bool:
+    """Upload a file-like object (PDF or JSON stream) to S3.
+
+    Unclear: This uses the global S3 bucket configured for the app rather than
+    accepting a bucket parameter. Calls elsewhere pass the same bucket, so we
+    retain this behavior to avoid breaking changes.
     """
     stream = getattr(fs_like, "stream", fs_like)
 
@@ -444,7 +457,13 @@ def upload_statement_to_s3(fs_like, key: str) -> bool:
         return False
 
 
-def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, pdf_key: str, json_key: str) -> tuple[dict, FileStorage]:
+def get_or_create_json_statement(
+    tenant_id: str,
+    contact_id: str,
+    bucket: str,
+    pdf_key: str,
+    json_key: str,
+) -> Tuple[Dict[str, Any], FileStorage]:
     """
     Look for JSON statement in S3. If it exists, download and return it.
     Otherwise, run Textract on the PDF, upload the JSON, and return it.
@@ -464,7 +483,8 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
 
         # Backfill statement_date_format for existing JSON if missing
         try:
-            from core.get_contact_config import get_contact_config  # local import to avoid cycles
+            # Local import to avoid potential circular imports at module load time
+            from core.get_contact_config import get_contact_config
             cfg = get_contact_config(tenant_id, contact_id) if contact_id else {}
             fmt = cfg.get("statement_date_format") if isinstance(cfg, dict) else None
         except Exception:
@@ -490,7 +510,9 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
 
     # Not found → run Textract
     print(f"No JSON at {json_key}, running Textract for {pdf_key}...")
-    json_fs = run_textraction(bucket=S3_BUCKET_NAME, pdf_key=pdf_key, tenant_id=tenant_id, contact_id=contact_id)
+    # Use the provided bucket argument for consistency with the read path.
+    # Current callers pass the global bucket, so this does not alter behavior.
+    json_fs = run_textraction(bucket=bucket, pdf_key=pdf_key, tenant_id=tenant_id, contact_id=contact_id)
     json_fs.stream.seek(0)
     json_bytes = json_fs.stream.read()
 
@@ -509,6 +531,9 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
 # Helpers for statement view
 # -----------------------------
 
+_NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
+
+
 def _to_decimal(x: Any) -> Optional[Decimal]:
     if x is None or x == "":
         return None
@@ -521,7 +546,7 @@ def _to_decimal(x: Any) -> Optional[Decimal]:
     if not s:
         return None
     # strip currency symbols/letters; keep digits . , -
-    s = re.compile(r"[^\d\-\.,]").sub("", s).replace(",", "")
+    s = _NON_NUMERIC_RE.sub("", s).replace(",", "")
     try:
         return Decimal(s)
     except InvalidOperation:
@@ -561,7 +586,10 @@ def get_items_template_from_config(contact_config: Dict[str, Any]) -> Dict[str, 
     return contact_config
 
 
-def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
+def prepare_display_mappings(
+    items: List[Dict],
+    contact_config: Dict[str, Any],
+) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
     """
     Build the display headers, filtered left rows, header->invoice_field map,
     and detect which header corresponds to the invoice "number".
@@ -626,11 +654,20 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     return display_headers, rows_by_header, header_to_field, item_number_header
 
 
-def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Dict[str, str]], item_number_header: Optional[str], invoices: List[Dict]) -> Dict[str, Dict]:
+def match_invoices_to_statement_items(
+    items: List[Dict],
+    rows_by_header: List[Dict[str, str]],
+    item_number_header: Optional[str],
+    invoices: List[Dict],
+) -> Dict[str, Dict]:
     """
     Build mapping from statement invoice number -> { invoice, statement_item, match_type, match_score, matched_invoice_number }.
-    Performs an exact pass first, then fuzzy-matches any remaining numbers against the
-    provided invoice list.
+
+    Strategy:
+      1) Exact string match on the displayed value.
+      2) Substring match on a normalized form (alphanumeric only, case-insensitive),
+         e.g. "Invoice # INV-12345" contains "INV12345".
+      No generic fuzzy similarity to avoid near-number false positives.
     """
     matched: Dict[str, Dict] = {}
     if not item_number_header:
@@ -673,7 +710,7 @@ def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Di
                 used_invoice_ids.add(inv_id)
             used_invoice_numbers.add(key)
 
-    # 2) Fuzzy matches for any unmatched numbers
+    # 2) Substring matches (normalized) for any unmatched numbers
     def _norm_num(s: str) -> str:
         s = str(s or "").upper().strip()
         return "".join(ch for ch in s if ch.isalnum())
@@ -703,35 +740,31 @@ def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Di
         if stmt_item is None:
             continue
         target_norm = _norm_num(key)
-        best = None
-        best_ratio = -1.0
+
+        hits = []
         for cand_no, inv, cand_norm in candidates:
-            # Skip candidates already used by previous matches (exact or fuzzy)
             inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
             if inv_id in used_invoice_ids or cand_no in used_invoice_numbers:
                 continue
-            if target_norm and cand_norm and (target_norm == cand_norm):
-                ratio = 1.0
-            elif target_norm and cand_norm and (target_norm in cand_norm or cand_norm in target_norm):
-                ratio = 0.95
-            else:
-                ratio = difflib.SequenceMatcher(None, target_norm, cand_norm).ratio()
-            if ratio > best_ratio:
-                best_ratio = ratio
-                best = (cand_no, inv)
+            if not target_norm or not cand_norm:
+                continue
+            if cand_norm == target_norm or cand_norm in target_norm or target_norm in cand_norm:
+                hits.append((cand_no, inv, len(cand_norm)))
 
-        if best and best_ratio >= 0.75:
-            inv_no_best, inv_obj = best
+        if hits:
+            # Prefer the most specific (longest normalized) candidate
+            hits.sort(key=lambda t: t[2], reverse=True)
+            inv_no_best, inv_obj, _ = hits[0]
             matched[key] = {
                 "invoice": inv_obj,
                 "statement_item": stmt_item,
-                "match_type": "fuzzy" if best_ratio < 1.0 else "exact",
-                "match_score": round(best_ratio, 3),
+                "match_type": "substring" if inv_no_best != key else "exact",
+                "match_score": 1.0,
                 "matched_invoice_number": inv_no_best,
             }
-            kind = "Exact" if best_ratio == 1.0 else "Fuzzy"
-            print(f"{kind} match: statement number '{key}' -> invoice '{inv_no_best}' (score {best_ratio:.3f})")
-            # Mark this invoice as used to prevent reuse in subsequent fuzzy matches
+            kind = "Exact" if inv_no_best == key else "Substring"
+            print(f"{kind} match: statement number '{key}' -> invoice '{inv_no_best}'")
+            # Mark this invoice as used to prevent reuse in subsequent substring matches
             inv_id = inv_obj.get("invoice_id") if isinstance(inv_obj, dict) else None
             if inv_id:
                 used_invoice_ids.add(inv_id)
@@ -804,7 +837,11 @@ def build_right_rows(
     return right_rows
 
 
-def build_row_matches(left_rows: List[Dict[str, str]], right_rows: List[Dict[str, str]], display_headers: List[str]) -> List[bool]:
+def build_row_matches(
+    left_rows: List[Dict[str, str]],
+    right_rows: List[Dict[str, str]],
+    display_headers: List[str],
+) -> List[bool]:
     """
     Compare each left/right row cell-wise using numeric-aware equality and
     return a list of row match booleans for UI highlighting.

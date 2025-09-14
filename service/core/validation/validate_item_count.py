@@ -125,7 +125,7 @@ def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, 
 PdfInput = Union[str, bytes, bytearray, io.BytesIO, Any]
 
 
-def _to_pdf_open_arg(pdf_input: PdfInput):
+def _to_pdf_open_arg(pdf_input: PdfInput) -> Union[str, io.BytesIO, Any]:
     """Return a pdfplumber.open-compatible arg (path or file-like stream).
 
     Supports:

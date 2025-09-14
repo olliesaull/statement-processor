@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -6,6 +6,7 @@ Number = Union[int, float, str]
 
 
 class StatementItem(BaseModel):
+    """Canonical line item extracted from a supplier statement."""
     amount_due: List[Number] = Field(default_factory=list)
     amount_paid: Optional[Number] = ""
     date: Optional[str] = ""
@@ -18,7 +19,7 @@ class StatementItem(BaseModel):
 
     # Optional: coerce numeric-like strings for known numeric fields
     @field_validator("total", "amount_paid", mode="before")
-    def _coerce_numbers(cls, v):
+    def _coerce_numbers(cls, v: Any) -> Any:
         if v is None:
             return ""
         if isinstance(v, (int, float)):
@@ -33,4 +34,5 @@ class StatementItem(BaseModel):
 
 
 class SupplierStatement(BaseModel):
+    """Top-level container for extracted statement rows."""
     statement_items: List[StatementItem] = Field(default_factory=list)

@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Tuple, Type, get_args, get_origin, Union
+from typing import Any, Dict, List, Tuple, Type, Union, get_args, get_origin
+
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
@@ -6,21 +7,28 @@ from sklearn.preprocessing import RobustScaler
 
 from core.models import StatementItem
 
+
 # ---------------- helpers ----------------
-def _has(x): return not (x is None or (isinstance(x, str) and x.strip() == ""))
-def _num(x):
-    if isinstance(x, (int, float)): return float(x)
+def _has(x: Any) -> bool:
+    """Return True if value is non-empty/meaningful."""
+    return not (x is None or (isinstance(x, str) and x.strip() == ""))
+
+
+def _num(x: Any) -> float:
+    """Parse numeric-like values to float; fall back to 0.0 on failure."""
+    if isinstance(x, (int, float)):
+        return float(x)
     if isinstance(x, str):
         t = x.replace(",", "").replace(" ", "").strip()
-        try: return float(t) if t else 0.0
-        except: return 0.0
+        try:
+            return float(t) if t else 0.0
+        except Exception:
+            return 0.0
     return 0.0
 
-def _num_with_flag(x) -> Tuple[float, float]:
-    """
-    Returns (value, parse_error_flag).
-    parse_error_flag is 1.0 if a numeric string failed to parse, else 0.0.
-    """
+
+def _num_with_flag(x: Any) -> Tuple[float, float]:
+    """Return (value, parse_error_flag). Flag is 1.0 if parsing failed."""
     if isinstance(x, (int, float)):
         return float(x), 0.0
     if isinstance(x, str):
@@ -33,13 +41,17 @@ def _num_with_flag(x) -> Tuple[float, float]:
             return 0.0, 1.0
     return 0.0, 0.0
 
-def _day(s):
-    if not isinstance(s, str): return 0
+
+def _day(s: Any) -> int:
+    """Extract day-of-month from a simple DD/... string; else 0."""
+    if not isinstance(s, str):
+        return 0
     try:
         d = int(s.split("/")[0])
         return d if 1 <= d <= 31 else 0
-    except:
+    except Exception:
         return 0
+
 
 def _norm_doctype_from_text(s: str) -> str:
     t = (s or "").lower()
@@ -55,7 +67,8 @@ def _norm_doctype_from_text(s: str) -> str:
         return "charge"
     return t or "_global"
 
-def _flatten_union(ann):
+
+def _flatten_union(ann: Any):
     """Yield atomic types inside nested Unions/Optionals."""
     if get_origin(ann) is Union:
         for a in get_args(ann):
@@ -63,7 +76,8 @@ def _flatten_union(ann):
     else:
         yield ann
 
-def _is_numeric_annotation(ann) -> bool:
+
+def _is_numeric_annotation(ann: Any) -> bool:
     return any(a in (int, float) for a in _flatten_union(ann))
 
 # ---------------- schema-driven feature builder ----------------
@@ -79,8 +93,8 @@ def build_df_from_schema(
     Returns (df, feature_columns).
     """
     # infer fields from Pydantic model
-    numeric_fields = []
-    string_fields = []
+    numeric_fields: List[str] = []
+    string_fields: List[str] = []
     for name, field in model.model_fields.items():  # Pydantic v2
         if name in {"raw"}:  # ignore raw dict
             continue
@@ -94,7 +108,7 @@ def build_df_from_schema(
         # else: skip nested models (only date is expected)
 
     # rows
-    rows = []
+    rows: List[Dict[str, Any]] = []
     for i, it in enumerate(items):
         raw_text = " ".join(str(v) for v in (it.get("raw") or {}).values())
         row = {"idx": i, "doctype_group": _norm_doctype_from_text(raw_text or it.get(doc_type_field, ""))}

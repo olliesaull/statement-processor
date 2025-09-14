@@ -2,6 +2,7 @@ import os
 import secrets
 import urllib.parse
 import uuid
+from typing import Any, Dict, List, Optional
 
 import requests
 from flask import (
@@ -15,32 +16,32 @@ from flask import (
 )
 
 from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
-from core.transform import get_contact_config
-from core.get_contact_config import set_contact_config
+from core.get_contact_config import get_contact_config, set_contact_config
 from utils import (
     add_statement_to_table,
     api_client,
+    build_right_rows,
+    build_row_matches,
     get_contact_for_statement,
     get_contacts,
+    get_credit_notes_by_contact,
     get_incomplete_statements,
     get_invoices_by_contact,
-    get_credit_notes_by_contact,
     get_or_create_json_statement,
+    guess_statement_item_type,
     is_allowed_pdf,
+    match_invoices_to_statement_items,
+    prepare_display_mappings,
     save_xero_oauth2_token,
     scope_str,
     upload_statement_to_s3,
     xero_token_required,
-    prepare_display_mappings,
-    match_invoices_to_statement_items,
-    build_right_rows,
-    build_row_matches,
-    guess_statement_item_type,
 )
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
 
+# Mirror selected config values in Flask app config for convenience
 app.config["CLIENT_ID"] = CLIENT_ID
 app.config["CLIENT_SECRET"] = CLIENT_SECRET
 
@@ -48,36 +49,37 @@ AUTH_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
 REDIRECT_URI = "http://localhost:8080/callback"
 
-@app.route('/favicon.ico')
+@app.route("/favicon.ico")
 def ignore_favicon():
-    return ('', 204)  # Empty response, no content
+    """Return empty 204 for favicon requests."""
+    return "", 204
 
-@app.route('/contacts', methods=['GET', 'POST'])
+@app.route("/contacts", methods=["GET", "POST"])
 @xero_token_required
 def contacts():
-    contacts = get_contacts()
-    contacts = sorted(contacts, key=lambda c: c["name"].casefold())
+    """List tenant contacts; on POST, echo the selected contact ID to logs."""
+    contacts_list = sorted(get_contacts(), key=lambda c: c["name"].casefold())
 
-    if request.method == 'POST':
-        contact_name = request.form.get('contact_name')
-        for contact in contacts:
-            if contact["name"] == contact_name:
-                print("*"*88)
-                print(f"{contact_name}: {contact['contact_id']}")
-                print("*"*88)
+    if request.method == "POST":
+        contact_name = request.form.get("contact_name")
+        for c in contacts_list:
+            if c["name"] == contact_name:
+                print("*" * 88)
+                print(f"{contact_name}: {c['contact_id']}")
+                print("*" * 88)
 
-    return render_template("contacts.html", contacts=contacts)
+    return render_template("contacts.html", contacts=contacts_list)
 
-@app.route("/upload-statements", methods=['GET', 'POST'])
+@app.route("/upload-statements", methods=["GET", "POST"])
 @xero_token_required
 def upload_statements():
-    contacts = get_contacts()
-    contacts = sorted(contacts, key=lambda c: c["name"].casefold())
-    contact_lookup = {c["name"]: c["contact_id"] for c in contacts}
+    """Upload one or more PDF statements and register them for processing."""
+    contacts_list = sorted(get_contacts(), key=lambda c: c["name"].casefold())
+    contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
 
-    if request.method == 'POST':
-        files = [f for f in request.files.getlist('statements') if f and f.filename]
-        names = [n for n in request.form.getlist('contact_names')]
+    if request.method == "POST":
+        files = [f for f in request.files.getlist("statements") if f and f.filename]
+        names = request.form.getlist("contact_names")
 
         if not files:
             print("Please add at least one statement (PDF).")
@@ -95,7 +97,7 @@ def upload_statements():
                     print(f"Rejected '{f.filename}': only PDFs are allowed.")
                     continue
 
-                contact_id: str = contact_lookup.get(contact.strip())
+                contact_id: Optional[str] = contact_lookup.get(contact.strip())
                 statement_id = str(uuid.uuid4())
 
                 entry = {
@@ -112,20 +114,20 @@ def upload_statements():
                 # Upload statement to ddb
                 add_statement_to_table(tenant_id, entry)
 
-    return render_template("upload_statements.html", contacts=contacts)
+    return render_template("upload_statements.html", contacts=contacts_list)
 
 @app.route("/statements")
 @xero_token_required
 def statements():
     return render_template("statements.html", incomplete_statements=get_incomplete_statements())
 
-@app.route("/statement/<statement_id>", methods=['GET', 'POST'])
+@app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @xero_token_required
-def statement(statement_id):
+def statement(statement_id: str):
     tenant_id = session.get("xero_tenant_id")
 
     route_key = f"{tenant_id}/{statement_id}"
-    pdf_statement_key  = f"{route_key}.pdf"
+    pdf_statement_key = f"{route_key}.pdf"
     json_statement_key = f"{route_key}.json"
 
     # Get existing JSON or build/upload via Textract
@@ -197,33 +199,32 @@ def index():
 @app.route("/configs", methods=["GET", "POST"])
 @xero_token_required
 def configs():
+    """View and edit contact-specific mapping configuration."""
     # List contacts for dropdown
-    contacts = get_contacts()
-    contacts = sorted(contacts, key=lambda c: c["name"].casefold())
-    contact_lookup = {c["name"]: c["contact_id"] for c in contacts}
+    contacts_list = sorted(get_contacts(), key=lambda c: c["name"].casefold())
+    contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
 
     tenant_id = session.get("xero_tenant_id")
 
-    selected_contact_name = None
-    selected_contact_id = None
-    mapping_rows = []  # List of dicts: {field, values:list[str], is_multi:bool}
-    message = None
-    error = None
+    selected_contact_name: Optional[str] = None
+    selected_contact_id: Optional[str] = None
+    mapping_rows: List[Dict[str, Any]] = []  # {field, values:list[str], is_multi:bool}
+    message: Optional[str] = None
+    error: Optional[str] = None
 
-    def _build_rows(cfg: dict):
-        # Build rows dynamically from the loaded config, excluding non-mapping keys
-        rows = []
+    def _build_rows(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Build table rows from config, excluding non-mapping keys.
+
+        Unclear: Whether 'statement_date_format' should be user-editable here.
+        Current UI includes it; saving code ignores it, preserving existing value.
+        """
+        rows: List[Dict[str, Any]] = []
         for f, val in cfg.items():
-            if f in ("raw"):
+            if f == "raw":  # skip raw
                 continue
             if f == "amount_due":
-                if isinstance(val, list):
-                    values = [str(v) for v in val]
-                else:
-                    values = [str(val)] if isinstance(val, str) else [""]
-                if not values:
-                    values = [""]
-                rows.append({"field": f, "values": values, "is_multi": True})
+                values = [str(v) for v in val] if isinstance(val, list) else ([str(val)] if isinstance(val, str) else [""])
+                rows.append({"field": f, "values": values or [""], "is_multi": True})
             else:
                 values = [str(val)] if isinstance(val, str) else [""]
                 rows.append({"field": f, "values": values, "is_multi": False})
@@ -260,7 +261,7 @@ def configs():
                 preserved = {k: v for k, v in existing.items() if k not in posted_fields}
 
                 # Rebuild mapping from form
-                new_map: dict = {}
+                new_map: Dict[str, Any] = {}
                 for f in posted_fields:
                     if f == "amount_due":
                         ad_vals = [v.strip() for v in request.form.getlist("map[amount_due][]") if v.strip()]
@@ -279,7 +280,7 @@ def configs():
 
     return render_template(
         "configs.html",
-        contacts=contacts,
+        contacts=contacts_list,
         selected_contact_name=selected_contact_name,
         selected_contact_id=selected_contact_id,
         mapping_rows=mapping_rows,

@@ -1,10 +1,12 @@
 import re
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.get_contact_config import get_contact_config
 from core.models import StatementItem, SupplierStatement
+
+_NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
 
 
 def norm(s: str) -> str:
@@ -161,7 +163,7 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
     # build mapping config
     simple_map: Dict[str, str] = {}
     raw_map: Dict[str, str] = {}
-    date_value_header, date_format = None, None
+    date_format = None
     # Use explicit statement_date_format from config (preferred)
     date_format = map_cfg.get("statement_date_format") if isinstance(map_cfg, dict) else None
     # Limit simple fields to those supported by StatementItem (exclude special handled keys)
@@ -174,8 +176,6 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
             simple_map[field] = value
 
     candidates = list(simple_map.values())
-    if date_value_header:
-        candidates.append(date_value_header)
     candidates.extend(list(raw_map.keys()))
     candidates.extend([v for v in raw_map.values() if v])
 
@@ -222,7 +222,7 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
     statement = SupplierStatement(statement_items=items)
     return statement.model_dump()
 
-def _norm_number(x):
+def _norm_number(x: Any) -> Optional[Decimal]:
     """Return Decimal if x looks numeric (incl. currency/commas); else None."""
     if x is None:
         return None
@@ -235,13 +235,14 @@ def _norm_number(x):
     if not s:
         return None
     # strip currency symbols/letters, keep digits . , -
-    s = re.compile(r"[^\d\-\.,]").sub("", s).replace(",", "")
+    s = _NON_NUMERIC_RE.sub("", s).replace(",", "")
     try:
         return Decimal(s)
     except InvalidOperation:
         return None
 
-def equal(a, b):
+
+def equal(a: Any, b: Any) -> bool:
     """Numeric-aware equality; otherwise trimmed string equality."""
     da, db = _norm_number(a), _norm_number(b)
     if da is not None or db is not None:
