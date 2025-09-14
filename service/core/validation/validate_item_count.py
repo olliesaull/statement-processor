@@ -1,8 +1,13 @@
+import io
 import json
 import re
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple, Union
 
 import pdfplumber
+try:
+    from werkzeug.datastructures import FileStorage  # type: ignore
+except Exception:  # pragma: no cover - optional import for typing
+    FileStorage = None  # type: ignore
 
 
 # -----------------------------
@@ -115,26 +120,67 @@ def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, 
 
 
 # -----------------------------
-# PDF helpers
+# PDF helpers (accept FileStorage/bytes/stream/path)
 # -----------------------------
-def extract_normalized_pdf_text(pdf_path: str) -> str:
+PdfInput = Union[str, bytes, bytearray, io.BytesIO, Any]
+
+
+def _to_pdf_open_arg(pdf_input: PdfInput):
+    """Return a pdfplumber.open-compatible arg (path or file-like stream).
+
+    Supports:
+      - str path
+      - bytes/bytearray
+      - io.BytesIO or any file-like with .read/.seek
+      - werkzeug.FileStorage (uses .stream)
+    """
+    # File path string
+    if isinstance(pdf_input, str):
+        return pdf_input
+
+    # FileStorage
+    if FileStorage is not None and isinstance(pdf_input, FileStorage):  # type: ignore[arg-type]
+        stream = pdf_input.stream
+        try:
+            stream.seek(0)
+        except Exception:
+            pass
+        return stream
+
+    # Raw bytes
+    if isinstance(pdf_input, (bytes, bytearray)):
+        return io.BytesIO(pdf_input)
+
+    # File-like
+    if hasattr(pdf_input, "read"):
+        try:
+            pdf_input.seek(0)
+        except Exception:
+            pass
+        return pdf_input
+
+    raise TypeError("Unsupported pdf_input type for pdfplumber.open")
+
+
+def extract_normalized_pdf_text(pdf_input: PdfInput) -> str:
     """Concatenate all page text and normalize once for fast substring lookups."""
     chunks: List[str] = []
-    with pdfplumber.open(pdf_path) as pdf:
+    with pdfplumber.open(_to_pdf_open_arg(pdf_input)) as pdf:
         for page in pdf.pages:
             t = page.extract_text()
             if t:
                 chunks.append(t)
     return normalise("\n".join(chunks))
 
-def extract_pdf_candidates_with_pattern(pdf_path: str, pattern: re.Pattern, ngram_max: int = 5, hard_seps: str = ":.") -> Set[str]:
+
+def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern, ngram_max: int = 5, hard_seps: str = ":.") -> Set[str]:
     """
     Slide windows over alnum tokens, but DON'T join across hard separators like ':'.
     We rebuild the original substring from the first token start to last token end
     to inspect separators, then normalize only joinable seps before matching.
     """
     cands: Set[str] = set()
-    with pdfplumber.open(pdf_path) as pdf:
+    with pdfplumber.open(_to_pdf_open_arg(pdf_input)) as pdf:
         for page in pdf.pages:
             text = (page.extract_text() or "")
             upper = text.upper()
@@ -166,7 +212,7 @@ def extract_pdf_candidates_with_pattern(pdf_path: str, pattern: re.Pattern, ngra
 # -----------------------------
 # Main validation (both directions)
 # -----------------------------
-def validate_references_roundtrip(pdf_path: str, statement_items: List[Dict], ref_field: str = "reference") -> Dict:
+def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dict], ref_field: str = "reference") -> Dict:
     """
     1) JSON -> PDF: every JSON ref should be present in PDF (after normalization).
     2) PDF -> JSON: learn pattern from JSON refs, find all matches in PDF, and ensure every PDF match exists in JSON.
@@ -174,14 +220,14 @@ def validate_references_roundtrip(pdf_path: str, statement_items: List[Dict], re
     """
     # Quick text layer check
     has_text = False
-    with pdfplumber.open(pdf_path) as pdf:
+    with pdfplumber.open(_to_pdf_open_arg(pdf_input)) as pdf:
         for page in pdf.pages:
             if page.extract_text():
                 has_text = True
                 break
 
     if not has_text:
-        print(f"[WARNING] {pdf_path} appears to be image-only (scanned). Skipping validation.")
+        print("[WARNING] PDF appears to be image-only (scanned). Skipping validation.")
 
     # Collect JSON refs
     raw_refs = [(i, (it.get(ref_field) or "").strip()) for i, it in enumerate(statement_items)]
@@ -189,7 +235,7 @@ def validate_references_roundtrip(pdf_path: str, statement_items: List[Dict], re
     json_norm_set = {normalise(r) for _, r in raw_refs}
 
     # ---- Pass 1: JSON -> PDF
-    norm_pdf_text = extract_normalized_pdf_text(pdf_path)
+    norm_pdf_text = extract_normalized_pdf_text(pdf_input)
     found, not_found = [], []
     for i, raw in raw_refs:
         norm_ref = normalise(raw)
@@ -197,7 +243,7 @@ def validate_references_roundtrip(pdf_path: str, statement_items: List[Dict], re
 
     # ---- Pass 2: PDF -> JSON
     learned_rx = make_family_regex_from_examples([r for _, r in raw_refs])
-    pdf_candidates_norm = extract_pdf_candidates_with_pattern(pdf_path, learned_rx)
+    pdf_candidates_norm = extract_pdf_candidates_with_pattern(pdf_input, learned_rx)
     pdf_only_norm = sorted(pdf_candidates_norm - json_norm_set)  # present in PDF but missing in JSON
 
     # Print summary

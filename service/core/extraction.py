@@ -108,13 +108,12 @@ def analyze_tables_s3(bucket: str, key: str) -> List[TableOnPage]:
         blocks = resp.get("Blocks", [])
     return _collect_table_grids_with_pages(blocks)
 
-def get_tables(bucket: str, keys) -> Dict[str, List[TableOnPage]]:
+def get_tables(bucket: str, key) -> Dict[str, List[TableOnPage]]:
     result: Dict[str, List[TableOnPage]] = {}
-    for key in keys:
-        try:
-            result[key] = analyze_tables_s3(bucket, key)
-        except ClientError as ce:
-            print(f"AWS error for {key}: {ce}")
-        except Exception as e:
-            print(f"Error processing {key}: {e}")
+    try:
+        result[key] = analyze_tables_s3(bucket, key)
+    except ClientError as ce:
+        print(f"AWS error for {key}: {ce}")
+    except Exception as e:
+        print(f"Error processing {key}: {e}")
     return result

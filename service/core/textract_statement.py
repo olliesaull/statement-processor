@@ -1,4 +1,3 @@
-# from core.validation.validate_item_count import validate_references_roundtrip
 # from core.validation.anomaly_detection import apply_outlier_flags
 import io
 import json
@@ -8,16 +7,24 @@ from werkzeug.datastructures import FileStorage
 
 from core.extraction import get_tables
 from core.transform import table_to_json
+from core.validation.validate_item_count import validate_references_roundtrip
+from configuration.resources import s3_client
 
 
-def run_textraction(bucket, keys, tenant_id, contact_id) -> FileStorage:
-    tables_by_key = get_tables(bucket, keys)
+def run_textraction(bucket, pdf_key, tenant_id, contact_id) -> FileStorage:
+    tables_by_key = get_tables(bucket, pdf_key)
     for key, tables_wp in tables_by_key.items():
         print(f"\n=== {key} ===")
         statement = table_to_json(key, tables_wp, tenant_id, contact_id)
 
-        # statement_items = [item for item in statement["statement_items"]]
-        # validate_references_roundtrip(key, statement_items)
+        # Fetch PDF bytes from S3 and validate against extracted JSON
+        try:
+            obj = s3_client.get_object(Bucket=bucket, Key=key)
+            pdf_bytes = obj["Body"].read()
+            statement_items = statement.get("statement_items", []) or []
+            validate_references_roundtrip(pdf_bytes, statement_items)
+        except Exception as e:
+            print(f"[WARNING] Reference validation skipped: {e}")
 
         # optional: ML outlier pass
         # statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True, threshold_method="iqr")

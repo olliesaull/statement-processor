@@ -151,9 +151,6 @@ def statement(statement_id):
         invs = get_invoices_by_contact(contact_id) or []
         cns = get_credit_notes_by_contact(contact_id) or []
         docs = invs + cns
-        print("*"*88)
-        print(docs)
-        print("*"*88)
     elif has_credit_note:
         docs = get_credit_notes_by_contact(contact_id) or []
     else:

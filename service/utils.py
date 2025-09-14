@@ -490,7 +490,7 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
 
     # Not found → run Textract
     print(f"No JSON at {json_key}, running Textract for {pdf_key}...")
-    json_fs = run_textraction(bucket=S3_BUCKET_NAME, keys=[pdf_key], tenant_id=tenant_id, contact_id=contact_id)
+    json_fs = run_textraction(bucket=S3_BUCKET_NAME, pdf_key=pdf_key, tenant_id=tenant_id, contact_id=contact_id)
     json_fs.stream.seek(0)
     json_bytes = json_fs.stream.read()
 
