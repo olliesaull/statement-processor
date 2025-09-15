@@ -2,6 +2,7 @@ import difflib
 import io
 import json
 import re
+import traceback
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -527,6 +528,31 @@ def get_or_create_json_statement(
     return data, fs
 
 
+def textract_in_background(
+    *,
+    tenant_id: str,
+    contact_id: Optional[str],
+    pdf_key: str,
+    json_key: str,
+) -> None:
+    """Run get_or_create_json_statement to generate and upload JSON.
+
+    Designed to be run off the request thread. Swallows exceptions after logging.
+    """
+    try:
+        # This will no-op if JSON already exists; otherwise runs Textract and uploads JSON
+        get_or_create_json_statement(
+            tenant_id=tenant_id,
+            contact_id=contact_id or "",
+            bucket=S3_BUCKET_NAME,
+            pdf_key=pdf_key,
+            json_key=json_key,
+        )
+        print(f"[bg] Textraction complete for {pdf_key} -> {json_key}")
+    except Exception:
+        print(f"[bg] Textraction failed for {pdf_key}")
+        traceback.print_exc()
+
 # -----------------------------
 # Helpers for statement view
 # -----------------------------
@@ -599,25 +625,39 @@ def prepare_display_mappings(
     # Derive raw headers from the JSON statement (order preserved)
     raw_headers = list(items[0].get("raw", {}).keys()) if items else []
 
-    # Invert the mapping: statement header -> invoice field (e.g., "total" -> "total")
+    # Invert the mapping with normalization: statement header -> canonical field
+    def _n(s: Any) -> str:
+        return " ".join(str(s or "").split()).strip().lower()
+
     items_template = get_items_template_from_config(contact_config)
-    header_to_field: Dict[str, str] = {}
+    header_to_field_norm: Dict[str, str] = {}
     # Simple (string) mappings first
     for canonical_field, mapped in (items_template or {}).items():
         if canonical_field in {"raw", "statement_date_format"}:
             continue
         if isinstance(mapped, str) and mapped.strip():
-            header_to_field[mapped.strip()] = canonical_field
+            header_to_field_norm[_n(mapped)] = canonical_field
     # Special case: amount_due can be a list of possible headers; include all candidates.
-    # At render time we will populate only the header that has a left-side value for that row.
     mapped_amount_due = (items_template or {}).get("amount_due")
     if isinstance(mapped_amount_due, list) and mapped_amount_due:
         for h in mapped_amount_due:
             if isinstance(h, str) and h.strip():
-                header_to_field[h.strip()] = "amount_due"
+                header_to_field_norm[_n(h)] = "amount_due"
 
-    # Only display headers present in the mapping
-    display_headers = [h for h in raw_headers if h in header_to_field]
+    # Only display headers present in the mapping (case-insensitive match),
+    # and ensure at most one header per canonical field (e.g., only one amount column).
+    header_to_field: Dict[str, str] = {}
+    display_headers: List[str] = []
+    used_canon: set = set()
+    for h in raw_headers:
+        canon = header_to_field_norm.get(_n(h))
+        if not canon:
+            continue
+        if canon in used_canon:
+            continue  # skip duplicates for the same canonical field
+        header_to_field[h] = canon
+        display_headers.append(h)
+        used_canon.add(canon)
 
     # Convert raw rows into dicts filtered by display headers, normalizing date fields for display
     rows_by_header: List[Dict[str, str]] = []
@@ -646,9 +686,9 @@ def prepare_display_mappings(
 
     # Identify which header maps to the canonical "number" field
     item_number_header: Optional[str] = None
-    for canonical_field, mapped in (items_template or {}).items():
-        if canonical_field == "number" and isinstance(mapped, str) and mapped in display_headers:
-            item_number_header = mapped
+    for h in display_headers:
+        if header_to_field.get(h) == "number":
+            item_number_header = h
             break
 
     return display_headers, rows_by_header, header_to_field, item_number_header
@@ -864,7 +904,7 @@ def build_row_matches(
 def guess_statement_item_type(raw_row: Dict[str, Any]) -> str:
     """
     Guess the document type for a statement row. Do a fuzzy match against a finite set of allowed types (invoice, credit_note, sales_order),
-    using the contact's mapping config to find which header contains the document-type label. If that label is empty, fall back to the invoice number header.
+    using the contact's mapping config to find which header contains the document-type label. If that label is empty, fall back to the number header.
 
     Returns the canonical type string. Also prints what it inferred for now.
     """

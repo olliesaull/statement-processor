@@ -82,9 +82,14 @@ from xero_python.exceptions import AccountingBadRequestException  # type: ignore
 # CONTACT_ID = os.getenv("CONTACT_ID", "cc1e8ee2-30e2-400d-ac10-404b3c01784c")
 
 # Geotina
+# TENANT_ID = os.getenv("TENANT_ID", "234a8cb8-33d4-45d9-a1cc-d6075fb65533")
+# STATEMENT_ID = os.getenv("STATEMENT_ID", "7fa655ea-9371-4c9e-99ef-8aaeedff2cb1")
+# CONTACT_ID = os.getenv("CONTACT_ID", "b6663af0-9454-4356-a41e-c5e6093ef222")
+
+# Sapuma
 TENANT_ID = os.getenv("TENANT_ID", "234a8cb8-33d4-45d9-a1cc-d6075fb65533")
-STATEMENT_ID = os.getenv("STATEMENT_ID", "7fa655ea-9371-4c9e-99ef-8aaeedff2cb1")
-CONTACT_ID = os.getenv("CONTACT_ID", "b6663af0-9454-4356-a41e-c5e6093ef222")
+STATEMENT_ID = os.getenv("STATEMENT_ID", "2ef8cc97-ece3-41a6-a0d9-21cde15234b7")
+CONTACT_ID = os.getenv("CONTACT_ID", "7cc055e1-c14e-4ae6-a483-0ec5f8e92fcc")
 
 XERO_CLIENT_ID = os.getenv("XERO_CLIENT_ID")
 XERO_CLIENT_SECRET = os.getenv("XERO_CLIENT_SECRET")
@@ -425,7 +430,7 @@ def pick_amount(it: Dict[str, Any], doc_type: str) -> Optional[Decimal]:
           * if string/list of strings, treat each as a raw header name
             (e.g. "debit", "credit") and use the first numeric value
             found in the item's raw payload under that header.
-    Returns a positive Decimal when possible.
+    Returns the Decimal found, preserving its sign.
     """
     total = to_number(it.get("total"))
 
@@ -457,10 +462,8 @@ def pick_amount(it: Dict[str, Any], doc_type: str) -> Optional[Decimal]:
     amt = total if total is not None else _first_due()
     if amt is None:
         return None
-    try:
-        return abs(amt)
-    except Exception:
-        return amt
+    # Preserve original sign; do not force absolute/negative values.
+    return amt
 
 
 # reference and numbers are derived from config; pick_identifiers removed
@@ -865,9 +868,10 @@ def main():
         raw = it.get("raw", {}) if isinstance(it.get("raw"), dict) else {}
         doc_type = guess_statement_item_type(raw)
         amt = pick_amount(it, doc_type)
-        if amt is None or amt <= 0:
+        # Skip only if amount is missing or exactly zero; allow negatives.
+        if amt is None or amt == 0:
             skipped += 1
-            print(f"- Row {idx}: skip (no positive amount)")
+            print(f"- Row {idx}: skip (no amount or zero)")
             continue
 
         # Dates from canonical item fields using statement_date_format, with config fallback
@@ -912,7 +916,7 @@ def main():
                     tenant_id=tenant_id,
                     contact_id=CONTACT_ID,
                     it=it,
-                    amt=amt.copy_abs(),
+                    amt=amt,
                     dt=dt,
                     due_dt=due_dt,
                     credit_note_number=inv_no,
@@ -928,7 +932,7 @@ def main():
                     tenant_id=tenant_id,
                     contact_id=CONTACT_ID,
                     it=it,
-                    amt=amt.copy_abs(),
+                    amt=amt,
                     dt=dt,
                     due_dt=due_dt,
                     invoice_number=inv_no,

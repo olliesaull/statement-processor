@@ -3,7 +3,7 @@ from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.get_contact_config import get_contact_config
+from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem, SupplierStatement
 
 _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
@@ -66,8 +66,31 @@ def get_by_header(row: List[str], col_index: Dict[str, int], header_label: str) 
 
 
 def _looks_money(s: str) -> bool:
-    t = clean_number_str(s)
-    return bool(re.fullmatch(r"-?\d+(?:\.\d+)?", t)) if t else False
+    """Heuristic: does the string look like a money amount?
+
+    Supports:
+    - Optional currency symbols (e.g., $, £, €)
+    - Optional thousand separators (commas/spaces)
+    - Negative with '-' or parentheses (e.g., (123.45))
+    - Optional trailing CR/DR
+    """
+    if s is None:
+        return False
+    t = str(s).strip()
+    if not t:
+        return False
+    # Normalize common variations
+    t = t.replace("−", "-")  # unicode minus to ascii
+    t = t.replace(",", "")
+    t = t.replace(" ", "")
+    # Strip leading currency symbols
+    t = re.sub(r"^[\$£€]\s*", "", t)
+    # Strip trailing CR/DR
+    t = re.sub(r"(?i)(cr|dr)$", "", t)
+    # Parentheses indicate negative
+    if t.startswith("(") and t.endswith(")"):
+        t = "-" + t[1:-1]
+    return bool(re.fullmatch(r"-?\d+(?:\.\d+)?", t))
 
 
 def _is_forward_label(text: str) -> bool:
@@ -103,7 +126,8 @@ def row_is_opening_or_carried_forward(raw_row: List[str], mapped_item: Dict[str,
         return True
     non_empty = sum(1 for c in raw_row if (c or "").strip())
     money_count = sum(1 for c in raw_row if _looks_money(c))
-    return non_empty <= 3 and money_count <= 1
+    # Heuristic: only skip very sparse, non-numeric rows (likely headers/separators)
+    return money_count == 0 and non_empty <= 2
 
 
 def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], candidates: List[str], small_table_penalty: float = 2.5) -> List[Dict[str, Any]]:
@@ -175,6 +199,14 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
         elif field in allowed_fields and isinstance(value, str) and value.strip():
             simple_map[field] = value
 
+    # Special support: amount_due can be a list of candidate headers
+    amount_due_candidates: List[str] = []
+    amt_cfg = items_template.get("amount_due")
+    if isinstance(amt_cfg, list):
+        amount_due_candidates = [str(x).strip() for x in amt_cfg if isinstance(x, str) and x.strip()]
+    elif isinstance(amt_cfg, str) and amt_cfg.strip():
+        amount_due_candidates = [amt_cfg.strip()]
+
     candidates = list(simple_map.values())
     candidates.extend(list(raw_map.keys()))
     candidates.extend([v for v in raw_map.values() if v])
@@ -189,7 +221,50 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
         data_rows = grid[hdr_idx + 1 :]
         col_index = build_col_index(header_row)
 
-        for r in data_rows:
+        # Ensure the contact's config table has a 'raw' mapping for discovered headers.
+        # We add missing raw keys as identity mappings (lower-cased): {"header": "header"}.
+        try:
+            cfg_existing: Dict[str, Any] = {}
+            try:
+                cfg_existing = get_contact_config(tenant_id, contact_id)
+            except Exception:
+                cfg_existing = {}
+
+            updated = False
+            # Root-level raw only
+            root_raw = cfg_existing.get("raw") if isinstance(cfg_existing.get("raw"), dict) else {}
+            root_raw = dict(root_raw)
+            for h in header_row:
+                hh = str(h or "").strip()
+                if not hh:
+                    continue
+                kl = hh.lower()
+                if kl not in root_raw:
+                    root_raw[kl] = kl
+                    updated = True
+            if updated:
+                new_cfg = dict(cfg_existing)
+                new_cfg["raw"] = root_raw
+                set_contact_config(tenant_id, contact_id, new_cfg)
+        except Exception as e:
+            print(f"[table_to_json] failed to persist raw headers: {e}")
+
+        # Resolve candidate column indices for amount_due (handle duplicate headers like 'AMOUNT')
+        amount_cols: List[int] = []
+        if amount_due_candidates:
+            cand_norm = {norm(h) for h in amount_due_candidates if h}
+            for i, h in enumerate(header_row):
+                if norm(h) in cand_norm:
+                    amount_cols.append(i)
+        # Fallback: try common synonyms if none configured or none matched
+        if not amount_cols:
+            common_amt = {"amount", "debit", "credit", "debitamount", "creditamount", "value", "total"}
+            for i, h in enumerate(header_row):
+                hn = norm(h).replace(" ", "")
+                if hn in common_amt:
+                    amount_cols.append(i)
+
+        for i_row, r in enumerate(data_rows, start=1):
             if not any((c or "").strip() for c in r):
                 continue
 
@@ -200,23 +275,79 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
             row_obj["statement_date_format"] = date_format
 
             # simple fields
+            extracted_simple: Dict[str, Any] = {}
             for field, header_name in simple_map.items():
                 cell = get_by_header(r, col_index, header_name)
                 row_obj[field] = cell
+                extracted_simple[field] = {"header": header_name, "value": cell}
 
-            # raw fields with auto-fill
-            raw_obj = {}
+            # raw fields with auto-fill using the header label (preserve original case in extracted JSON)
+            raw_obj: Dict[str, Any] = {}
+            extracted_raw: Dict[str, Any] = {}
             for raw_key, raw_src_header in (raw_map or {}).items():
                 chosen_header = raw_src_header or raw_key
-                raw_obj[raw_key] = get_by_header(r, col_index, chosen_header)
+                val = get_by_header(r, col_index, chosen_header)
+                raw_obj[str(chosen_header)] = val
+                extracted_raw[str(chosen_header)] = {"header": str(chosen_header), "value": val}
             row_obj["raw"] = raw_obj
+
+            # Map amount_due when configured as multiple candidate headers or if we found amount columns
+            picked_amount: Optional[str] = None
+            if amount_cols:
+                # Prefer the rightmost numeric-looking value among candidate columns
+                vals = [(i, (r[i] if i < len(r) else "")) for i in amount_cols]
+                # First pass: numeric-looking values
+                numeric_vals = [(i, v) for i, v in vals if _looks_money(v)]
+                if numeric_vals:
+                    picked_amount = numeric_vals[-1][1]
+                else:
+                    # Fallback: last non-empty among candidates
+                    non_empty = [(i, v) for i, v in vals if str(v or "").strip()]
+                    if non_empty:
+                        picked_amount = non_empty[-1][1]
+            # If we picked an amount, record it in amount_due as a single-entry list
+            if picked_amount is not None and str(picked_amount).strip():
+                row_obj["amount_due"] = [picked_amount]
+                extracted_simple["amount_due"] = {"header": "|".join(str(i) for i in amount_cols) or "", "value": picked_amount}
+                # Also surface into raw if not present and we can name the column
+                try:
+                    if "raw" in row_obj and isinstance(row_obj["raw"], dict):
+                        # Pick the header label for the picked column
+                        if amount_cols:
+                            # Map to the header text of the picked column
+                            idx = amount_cols[-1] if _looks_money(picked_amount) else amount_cols[-1]
+                            hdr_label = header_row[idx] if idx < len(header_row) else "amount"
+                            row_obj["raw"].setdefault(str(hdr_label), picked_amount)
+                except Exception:
+                    pass
+
+            # Ensure raw contains the simple-mapped headers/values (preserve original case)
+            try:
+                for _fld, meta in extracted_simple.items():
+                    hdr = meta.get("header") if isinstance(meta, dict) else None
+                    val = meta.get("value") if isinstance(meta, dict) else None
+                    if isinstance(hdr, str) and hdr.strip():
+                        row_obj["raw"].setdefault(hdr, val)
+            except Exception:
+                pass
+
+            # Keep raw key insertion order (do not reorder to PDF header order)
 
             # carried-forward skipper
             if row_is_opening_or_carried_forward(r, row_obj):
                 continue
 
             # validate to canonical StatementItem
-            items.append(StatementItem(**row_obj))
+            try:
+                si = StatementItem(**row_obj)
+                items.append(si)
+                fields_logged = {k: getattr(si, k) for k in simple_map.keys()}
+                if getattr(si, "amount_due", None):
+                    fields_logged["amount_due"] = getattr(si, "amount_due")
+            except Exception as e:
+                print(f"[table_to_json] validation error on row #{i_row}: {e}")
+                print("[table_to_json] row_obj=", row_obj)
+                raise
 
     # meta with filename
     statement = SupplierStatement(statement_items=items)

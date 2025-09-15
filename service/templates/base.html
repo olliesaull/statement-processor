@@ -23,6 +23,7 @@
 
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
+                    {% if session.get('access_token') and session.get('xero_tenant_id') %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'upload_statements' %}active{% endif %}"
                             href="{{ url_for('upload_statements') }}">Upload Statements</a>
@@ -35,7 +36,6 @@
                         <a class="nav-link {% if request.endpoint == 'configs' %}active{% endif %}"
                             href="{{ url_for('configs') }}">Configuration</a>
                     </li>
-                    {% if session.get('access_token') and session.get('xero_tenant_id') %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'logout' %}active{% endif %}"
                             href="{{ url_for('logout') }}">Logout</a>

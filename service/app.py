@@ -2,6 +2,7 @@ import os
 import secrets
 import urllib.parse
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -17,6 +18,7 @@ from flask import (
 
 from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
 from core.get_contact_config import get_contact_config, set_contact_config
+from core.models import StatementItem
 from utils import (
     add_statement_to_table,
     api_client,
@@ -34,6 +36,7 @@ from utils import (
     prepare_display_mappings,
     save_xero_oauth2_token,
     scope_str,
+    textract_in_background,
     upload_statement_to_s3,
     xero_token_required,
 )
@@ -48,6 +51,10 @@ app.config["CLIENT_SECRET"] = CLIENT_SECRET
 AUTH_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
 REDIRECT_URI = "http://localhost:8080/callback"
+
+# Lightweight background executor for non-blocking textraction after upload
+# Keep the pool small to avoid overwhelming Textract and our app.
+_executor = ThreadPoolExecutor(max_workers=2)
 
 @app.route("/favicon.ico")
 def ignore_favicon():
@@ -113,6 +120,16 @@ def upload_statements():
 
                 # Upload statement to ddb
                 add_statement_to_table(tenant_id, entry)
+
+                # Kick off background textraction so it's ready by the time the user views it
+                json_statement_key = f"{tenant_id}/{statement_id}.json"
+                _executor.submit(
+                    textract_in_background,
+                    tenant_id=tenant_id,
+                    contact_id=contact_id,
+                    pdf_key=pdf_statement_key,
+                    json_key=json_statement_key,
+                )
 
     return render_template("upload_statements.html", contacts=contacts_list)
 
@@ -213,21 +230,48 @@ def configs():
     error: Optional[str] = None
 
     def _build_rows(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Build table rows from config, excluding non-mapping keys.
+        """Build table rows for canonical fields, using existing config values if present.
 
-        Unclear: Whether 'statement_date_format' should be user-editable here.
-        Current UI includes it; saving code ignores it, preserving existing value.
+        - Always include the canonical StatementItem fields (excluding 'raw').
+        - Prefer root-level mappings; fall back to nested 'statement_items' if present.
+        - 'amount_due' supports multiple possible headers (list).
+        - 'statement_date_format' is shown and persisted at the root level.
         """
+        # Flatten mapping sources: nested 'statement_items' + root-level keys
+        nested = cfg.get("statement_items") if isinstance(cfg, dict) else None
+        nested = nested if isinstance(nested, dict) else {}
+        flat: Dict[str, Any] = {}
+        flat.update(nested)
+        if isinstance(cfg, dict):
+            for k, v in cfg.items():
+                if k in StatementItem.model_fields and k != "raw":
+                    flat[k] = v
+
+        # Merge raw maps from nested/root (root wins)
+        nested_raw = nested.get("raw") if isinstance(nested, dict) else None
+        nested_raw = nested_raw if isinstance(nested_raw, dict) else {}
+        root_raw = cfg.get("raw") if isinstance(cfg, dict) else None
+        root_raw = root_raw if isinstance(root_raw, dict) else {}
+        raw_map: Dict[str, Any] = {**nested_raw, **root_raw}
+
+        # Canonical field order from the Pydantic model
+        canonical_order = [f for f in StatementItem.model_fields.keys() if f != "raw"]
+
         rows: List[Dict[str, Any]] = []
-        for f, val in cfg.items():
-            if f == "raw":  # skip raw
-                continue
+        for f in canonical_order:
+            val = flat.get(f)
             if f == "amount_due":
                 values = [str(v) for v in val] if isinstance(val, list) else ([str(val)] if isinstance(val, str) else [""])
                 rows.append({"field": f, "values": values or [""], "is_multi": True})
             else:
                 values = [str(val)] if isinstance(val, str) else [""]
                 rows.append({"field": f, "values": values, "is_multi": False})
+        # Add RAW as a collapsible group row with nested items
+        raw_items = []
+        for rk in sorted(raw_map.keys()):
+            rv = raw_map.get(rk)
+            raw_items.append({"key": rk, "value": (rv if isinstance(rv, str) else "")})
+        rows.append({"field": "raw", "values": [""], "is_multi": False, "raw_items": raw_items})
         return rows
 
     if request.method == "POST":
@@ -241,9 +285,12 @@ def configs():
             else:
                 try:
                     cfg = get_contact_config(tenant_id, selected_contact_id)
-                    # Ignore 'raw'
-                    cfg = {k: v for k, v in cfg.items() if k != "raw"}
+                    # Build rows including canonical fields; do not error if keys are missing
                     mapping_rows = _build_rows(cfg)
+                except KeyError:
+                    # No existing config: show canonical fields with empty mapping values
+                    mapping_rows = _build_rows({})
+                    message = "No existing config found. You can create one below."
                 except Exception as e:
                     error = f"Failed to load config: {e}"
 
@@ -252,17 +299,24 @@ def configs():
             selected_contact_id = request.form.get("contact_id")
             selected_contact_name = request.form.get("contact_name")
             try:
-                existing = get_contact_config(tenant_id, selected_contact_id)
+                try:
+                    existing = get_contact_config(tenant_id, selected_contact_id)
+                except KeyError:
+                    existing = {}
                 # Determine which fields were displayed/edited
                 posted_fields = request.form.getlist("fields[]")
-                posted_fields = [f for f in posted_fields if f and f not in ("raw", "statement_date_format")]
+                posted_fields = [f for f in posted_fields if f]
 
-                # Preserve any keys not shown in the mapping editor
-                preserved = {k: v for k, v in existing.items() if k not in posted_fields}
+                # Separate 'raw' group from canonical ones
+                simple_fields = [f for f in posted_fields if f != "raw"]
+
+                # Preserve any root keys not shown in the mapping editor.
+                # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
+                preserved = {k: v for k, v in existing.items() if k not in simple_fields + ["raw", "statement_items"]}
 
                 # Rebuild mapping from form
                 new_map: Dict[str, Any] = {}
-                for f in posted_fields:
+                for f in simple_fields:
                     if f == "amount_due":
                         ad_vals = [v.strip() for v in request.form.getlist("map[amount_due][]") if v.strip()]
                         new_map["amount_due"] = ad_vals
@@ -270,8 +324,18 @@ def configs():
                         val = request.form.get(f"map[{f}]")
                         new_map[f] = (val or "").strip()
 
-                # Merge and save
+                # Build the RAW mapping (merge existing + posted raw keys)
+                existing_raw = existing.get("raw") if isinstance(existing.get("raw"), dict) else {}
+                new_raw = dict(existing_raw)
+                for rk in request.form.getlist("raw_keys[]"):
+                    val = request.form.get(f"map[raw][{rk}]")
+                    rk_lc = (rk or "").strip().lower()
+                    val_lc = (val or "").strip().lower()
+                    new_raw[rk_lc] = val_lc
+
+                # Merge and save (root-level only; no nested 'statement_items')
                 to_save = {**preserved, **new_map}
+                to_save["raw"] = new_raw
                 set_contact_config(tenant_id, selected_contact_id, to_save)
                 message = "Config updated successfully."
                 mapping_rows = _build_rows(to_save)
