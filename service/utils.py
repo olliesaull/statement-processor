@@ -924,44 +924,68 @@ def build_row_matches(
 # ---------------------------------
 
 def guess_statement_item_type(raw_row: Dict[str, Any]) -> str:
-    """
-    Guess the document type for a statement row. Do a fuzzy match against a finite set of allowed types (invoice, credit_note, sales_order),
-    using the contact's mapping config to find which header contains the document-type label. If that label is empty, fall back to the number header.
+    """Heuristically classify a row as ``invoice`` or ``credit_note``.
 
-    Returns the canonical type string. Also prints what it inferred for now.
+    We gather alphanumeric tokens from the raw row and fuzzy-match them against
+    common aliases (INV, INVOICE, CRN, CREDIT NOTE, etc.). The algorithm
+    prioritises detecting credit notes but falls back to ``invoice`` when the
+    signal is weak or ambiguous.
     """
-    # Use the entire raw row text as the label context
-    label = " ".join(str(v) for v in (raw_row or {}).values() if v)
 
-    # Canonical types and some common synonyms/aliases
+    values = (raw_row or {}).values()
+    joined_text = " ".join(str(v) for v in values if v)
+    if not joined_text.strip():
+        return "invoice"
+
+    def _compact(s: str) -> str:
+        return "".join(ch for ch in str(s or "").upper() if ch.isalnum())
+
+    tokens = [_compact(tok) for tok in re.findall(r"[A-Za-z0-9]+", joined_text.upper())]
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        return "invoice"
+
     TYPE_SYNONYMS: Dict[str, List[str]] = {
-        "invoice": ["invoice", "inv", "tax invoice", "taxinvoice"],
-        "credit_note": ["credit note", "creditnote", "credit", "crn", "cn"],
-        "sales_order": ["sales order", "salesorder", "order", "so", "s/o"],
+        "invoice": ["invoice", "inv", "taxinvoice"],
+        "credit_note": ["creditnote", "credit", "creditmemo", "crn", "cr", "cn"],
     }
 
-    def _norm(s: str) -> str:
-        s = str(s or "").upper().strip()
-        return "".join(ch for ch in s if ch.isalnum())
+    joined_compact = _compact(joined_text)
 
-    label_norm = _norm(label)
+    best_type = "invoice"
+    best_score = 0.0
 
-    best_type = "invoice"  # default
-    best_score = -1.0
+    for doc_type, synonyms in TYPE_SYNONYMS.items():
+        type_best = 0.0
+        for syn in synonyms:
+            syn_norm = _compact(syn)
+            if not syn_norm:
+                continue
 
-    for t, syns in TYPE_SYNONYMS.items():
-        for syn in syns:
-            syn_norm = _norm(syn)
-            if not label_norm and syn_norm:
-                score = 0.0
-            elif label_norm == syn_norm:
-                score = 1.0
-            elif label_norm and syn_norm and (label_norm in syn_norm or syn_norm in label_norm):
-                score = 0.95
-            else:
-                score = difflib.SequenceMatcher(None, label_norm, syn_norm).ratio()
-            if score > best_score:
-                best_score = score
-                best_type = t
+            if syn_norm in joined_compact:
+                type_best = max(type_best, 1.0)
+                continue
+
+            for token in tokens:
+                score: float
+                if token == syn_norm:
+                    score = 1.0
+                elif token.startswith(syn_norm) or syn_norm.startswith(token):
+                    score = 0.9
+                else:
+                    score = difflib.SequenceMatcher(None, token, syn_norm).ratio()
+
+                if len(syn_norm) <= 2 and score > 0.8:
+                    score = 0.8  # keep short aliases from overwhelming the score
+
+                if score > type_best:
+                    type_best = score
+
+        if type_best > best_score:
+            best_score = type_best
+            best_type = doc_type
+
+    if best_type == "credit_note" and best_score < 0.65:
+        return "invoice"
 
     return best_type
