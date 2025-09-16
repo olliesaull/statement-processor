@@ -6,6 +6,7 @@ from aws_cdk import aws_apprunner_alpha as apprunner_alpha
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_s3 as s3
+from aws_cdk.aws_ecr_assets import DockerImageAsset
 from constructs import Construct
 
 
@@ -26,6 +27,22 @@ class StatementProcessorStack(Stack):
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
         STATEMENTS_S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
+
+        #region ---------- ParameterStore ----------
+
+        # SSM Parameter Store Parameter ARNs, using wildcards to satisfy ssm:GetParametersByPath 
+        parameter_arns = ["arn:aws:ssm:eu-west-1:747310139457:parameter/StatementProcessor/*"]
+
+        # Create a policy statement to grant SSM Parameter Store access
+        parameter_policy = iam.PolicyStatement(
+            actions=["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
+            resources=parameter_arns
+        )
+
+        # Grant SecureString decryption permission
+        parameter_policy.add_actions("kms:Decrypt")
+
+        #endregion ---------- ParameterStore ----------
 
         #region ---------- DynamoDB ----------
 
@@ -77,6 +94,7 @@ class StatementProcessorStack(Stack):
             )
         )
 
+        apprunner_asset = DockerImageAsset(self, "AppRunnerImage", directory="../service/")
         web = apprunner_alpha.Service(
             self,
             "Statement Processor Website",
@@ -92,12 +110,17 @@ class StatementProcessorStack(Stack):
                         "DOMAIN_NAME": domain_name,
                         "POWERTOOLS_SERVICE_NAME": "StatementProcessor",
                         "LOG_LEVEL": "DEBUG",
-                        "OPENAI_KEY_PATH": "",
-                        "XERO_CLIENT_ID_PATH": "",
-                        "XERO_CLIENT_SECRET_PATH": "",
+                        "OPENAI_API_KEY_PATH": "/StatementProcessor/OPENAI_API_KEY",
+                        "XERO_CLIENT_ID_PATH": "/StatementProcessor/XERO_CLIENT_ID",
+                        "XERO_CLIENT_SECRET_PATH": "/StatementProcessor/XERO_CLIENT_SECRET",
+                        "S3_BUCKET_NAME": f"dexero-statement-processor-{stage}",
+                        "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
+                        "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
                     },
                 )
             ),
         )
+
+        web.add_to_role_policy(parameter_policy)
 
         #endregion ---------- AppRunner ----------
