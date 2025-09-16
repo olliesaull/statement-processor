@@ -458,6 +458,58 @@ def upload_statement_to_s3(fs_like: Any, key: str) -> bool:
         return False
 
 
+class StatementJSONNotFoundError(Exception):
+    """Raised when the structured JSON for a statement is not yet available."""
+
+
+def fetch_json_statement(
+    tenant_id: str,
+    contact_id: str,
+    bucket: str,
+    json_key: str,
+) -> Tuple[Dict[str, Any], FileStorage]:
+    """Download and return the JSON statement from S3.
+
+    Raises:
+        StatementJSONNotFoundError: if the object does not exist yet.
+    """
+    try:
+        s3_client.head_object(Bucket=bucket, Key=json_key)
+    except ClientError as e:
+        if e.response["Error"].get("Code") == "404":
+            raise StatementJSONNotFoundError(json_key) from e
+        raise
+
+    obj = s3_client.get_object(Bucket=bucket, Key=json_key)
+    json_bytes = obj["Body"].read()
+    data = json.loads(json_bytes.decode("utf-8"))
+
+    # Backfill statement_date_format for existing JSON if missing
+    try:
+        # Local import to avoid potential circular imports at module load time
+        from core.get_contact_config import get_contact_config
+
+        cfg = get_contact_config(tenant_id, contact_id) if contact_id else {}
+        fmt = cfg.get("statement_date_format") if isinstance(cfg, dict) else None
+    except Exception:
+        fmt = None
+
+    mutated = False
+    if fmt:
+        items = data.get("statement_items") or []
+        for it in items:
+            if isinstance(it, dict) and not it.get("statement_date_format"):
+                it["statement_date_format"] = fmt
+                mutated = True
+    if mutated:
+        json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        upload_statement_to_s3(io.BytesIO(json_bytes), json_key)
+
+    filename = json_key.rsplit("/", 1)[-1]
+    fs = FileStorage(stream=io.BytesIO(json_bytes), filename=filename)
+    return data, fs
+
+
 def get_or_create_json_statement(
     tenant_id: str,
     contact_id: str,
@@ -475,39 +527,11 @@ def get_or_create_json_statement(
           - FileStorage is a file-like wrapper around the JSON (for reuse)
     """
     try:
-        # Check if JSON already exists
-        s3_client.head_object(Bucket=bucket, Key=json_key)
+        data, fs = fetch_json_statement(tenant_id, contact_id, bucket, json_key)
         print(f"Found existing JSON at {json_key}, downloading...")
-        obj = s3_client.get_object(Bucket=bucket, Key=json_key)
-        json_bytes = obj["Body"].read()
-        data = json.loads(json_bytes.decode("utf-8"))
-
-        # Backfill statement_date_format for existing JSON if missing
-        try:
-            # Local import to avoid potential circular imports at module load time
-            from core.get_contact_config import get_contact_config
-            cfg = get_contact_config(tenant_id, contact_id) if contact_id else {}
-            fmt = cfg.get("statement_date_format") if isinstance(cfg, dict) else None
-        except Exception:
-            fmt = None
-
-        mutated = False
-        if fmt:
-            items = data.get("statement_items") or []
-            for it in items:
-                if isinstance(it, dict) and not it.get("statement_date_format"):
-                    it["statement_date_format"] = fmt
-                    mutated = True
-        if mutated:
-            # Persist back to S3 and rebuild JSON bytes
-            json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-            upload_statement_to_s3(io.BytesIO(json_bytes), json_key)
-
-        fs = FileStorage(stream=io.BytesIO(json_bytes), filename=json_key.rsplit("/", 1)[-1])
         return data, fs
-    except ClientError as e:
-        if e.response["Error"]["Code"] != "404":
-            raise  # some other error, not "Not Found"
+    except StatementJSONNotFoundError:
+        pass
 
     # Not found → run Textract
     print(f"No JSON at {json_key}, running Textract for {pdf_key}...")
@@ -942,5 +966,4 @@ def guess_statement_item_type(raw_row: Dict[str, Any]) -> str:
                 best_score = score
                 best_type = t
 
-    # Temporary: print the guess for visibility
     return best_type

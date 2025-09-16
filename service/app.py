@@ -20,16 +20,17 @@ from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem
 from utils import (
+    StatementJSONNotFoundError,
     add_statement_to_table,
     api_client,
     build_right_rows,
     build_row_matches,
+    fetch_json_statement,
     get_contact_for_statement,
     get_contacts,
     get_credit_notes_by_contact,
     get_incomplete_statements,
     get_invoices_by_contact,
-    get_or_create_json_statement,
     guess_statement_item_type,
     is_allowed_pdf,
     match_invoices_to_statement_items,
@@ -144,12 +145,22 @@ def statement(statement_id: str):
     tenant_id = session.get("xero_tenant_id")
 
     route_key = f"{tenant_id}/{statement_id}"
-    pdf_statement_key = f"{route_key}.pdf"
     json_statement_key = f"{route_key}.json"
 
-    # Get existing JSON or build/upload via Textract
     contact_id = get_contact_for_statement(tenant_id, statement_id)
-    data, _ = get_or_create_json_statement(tenant_id, contact_id, S3_BUCKET_NAME, pdf_statement_key, json_statement_key)
+    try:
+        data, _ = fetch_json_statement(
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            bucket=S3_BUCKET_NAME,
+            json_key=json_statement_key,
+        )
+    except StatementJSONNotFoundError:
+        return render_template(
+            "statement.html",
+            statement_id=statement_id,
+            is_processing=True,
+        )
 
     # 1) Parse display configuration and left-side rows
     items = data.get("statement_items", []) or []
@@ -202,6 +213,7 @@ def statement(statement_id: str):
     return render_template(
         "statement.html",
         statement_id=statement_id,
+        is_processing=False,
         raw_statement_headers=display_headers,
         raw_statement_rows=[[r[h] for h in display_headers] for r in rows_by_header],
         item_number_header=item_number_header,
