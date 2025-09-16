@@ -6,9 +6,10 @@ from stacks.statement_processor import StatementProcessorStack
 
 app = cdk.App()
 
-review_replier_stack = StatementProcessorStack(
+statement_processor_stack = StatementProcessorStack(
     app, "StatementProcessorStack",
     stage="prod",
     env=cdk.Environment(account="747310139457", region="eu-west-1"),
+    domain_name=""
     )
 app.synth()

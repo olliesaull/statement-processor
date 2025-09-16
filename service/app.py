@@ -43,7 +43,7 @@ from utils import (
 )
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY")
+app.secret_key = os.urandom(16)
 
 # Mirror selected config values in Flask app config for convenience
 app.config["CLIENT_ID"] = CLIENT_ID
