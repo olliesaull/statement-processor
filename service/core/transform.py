@@ -3,6 +3,7 @@ from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.date_utils import parse_with_format
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem, SupplierStatement
 
@@ -262,6 +263,8 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
     date_format = None
     # Use explicit statement_date_format from config (preferred)
     date_format = map_cfg.get("statement_date_format") if isinstance(map_cfg, dict) else None
+    if not date_format:
+        raise ValueError("statement_date_format must be configured for this contact")
     # Limit simple fields to those supported by StatementItem (exclude special handled keys)
     # Exclude 'statement_date_format' so it is never treated as a header mapping.
     allowed_fields = set(StatementItem.model_fields.keys()) - {"raw", "statement_date_format"}
@@ -350,8 +353,18 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
             extracted_simple: Dict[str, Any] = {}
             for field, header_name in simple_map.items():
                 cell = get_by_header(r, col_index, header_name)
-                row_obj[field] = cell
-                extracted_simple[field] = {"header": header_name, "value": cell}
+                value: Any = cell
+                if field in {"date", "due_date"}:
+                    try:
+                        parsed = parse_with_format(cell, date_format)
+                    except ValueError as err:
+                        raise ValueError(
+                            f"Failed to parse '{cell}' using format '{date_format}'"
+                        ) from err
+                    if parsed is not None:
+                        value = parsed.strftime("%Y-%m-%d")
+                row_obj[field] = value
+                extracted_simple[field] = {"header": header_name, "value": value}
 
             # raw fields with auto-fill using the header label (preserve original case in extracted JSON)
             raw_obj: Dict[str, Any] = {}

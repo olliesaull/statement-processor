@@ -57,6 +57,34 @@ REDIRECT_URI = "http://localhost:8080/callback"
 # Keep the pool small to avoid overwhelming Textract and our app.
 _executor = ThreadPoolExecutor(max_workers=2)
 
+FIELD_DESCRIPTIONS: Dict[str, str] = {
+    "amount_due": (
+        "One or more statement columns that represent the running balance for a line. "
+        "If there are separate debit and credit columns, add both so we can pick the right amount."
+    ),
+    "amount_paid": (
+        "Column showing payments or credits applied against the invoice. This is used to display Xero's amount paid."
+    ),
+    "date": (
+        "Invoice or transaction date as it appears on the statement. This helps with formatting and matching."
+    ),
+    "due_date": (
+        "Payment due date from the statement line. Leave blank if the supplier does not show a due date."
+    ),
+    "number": (
+        "Document number on the statement (e.g. invoice number). This is the primary key we use when matching to Xero."
+    ),
+    "reference": (
+        "Any descriptive text that helps identify the transaction (project, PO number, memo, etc.)."
+    ),
+    "statement_date_format": (
+        "Date pattern using SDF tokens (e.g., 'D MMMM YYYY', 'MM/DD/YY'). See the guide below for full token descriptions and examples."
+    ),
+    "total": (
+        "The gross invoice amount on the statement. We use this for comparisons when lining up the Xero totals."
+    ),
+}
+
 @app.route("/favicon.ico")
 def ignore_favicon():
     """Return empty 204 for favicon requests."""
@@ -328,6 +356,7 @@ def configs():
         mapping_rows=mapping_rows,
         message=message,
         error=error,
+        field_descriptions=FIELD_DESCRIPTIONS,
     )
 
 @app.route("/login")

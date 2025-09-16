@@ -30,8 +30,8 @@ from configuration.resources import (
 )
 from core.date_utils import (
     ensure_abbrev_month,
-    format_iso_to_template,
-    parse_date_with_template,
+    format_iso_with,
+    parse_with_format,
 )
 from core.get_contact_config import get_contact_config
 from core.textract_statement import run_textraction
@@ -697,10 +697,14 @@ def prepare_display_mappings(
             v = raw.get(h, "")
             # If this header maps to a canonical date field, normalize to the configured format
             canon = header_to_field.get(h)
-            if canon in {"date", "due_date"} and display_date_fmt:
-                dt = parse_date_with_template(v, display_date_fmt)
+            if canon in {"date", "due_date"} and stmt_date_fmt:
+                try:
+                    dt = parse_with_format(v, stmt_date_fmt)
+                except ValueError:
+                    dt = None
                 if dt is not None:
-                    v = format_iso_to_template(dt, display_date_fmt)
+                    fmt_for_display = display_date_fmt or stmt_date_fmt
+                    v = format_iso_with(dt, fmt_for_display) if fmt_for_display else dt.strftime("%Y-%m-%d")
             elif canon in numeric_fields:
                 v = format_money(v)
             row[h] = v
@@ -884,9 +888,11 @@ def build_right_rows(
                     row_right[h] = ""
             elif invoice_field in {"due_date", "date"}:
                 v = inv.get(invoice_field)
-                row_right[h] = (
-                    format_iso_to_template(v, display_date_fmt) if v is not None else ""
-                )
+                if v is None:
+                    row_right[h] = ""
+                else:
+                    fmt = display_date_fmt or statement_date_format or "YYYY-MM-DD"
+                    row_right[h] = format_iso_with(v, fmt)
             else:
                 val = inv.get(invoice_field, "")
                 if invoice_field in numeric_fields:

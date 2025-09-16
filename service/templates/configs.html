@@ -37,6 +37,8 @@
     <input type="hidden" name="contact_id" value="{{ selected_contact_id }}">
     <input type="hidden" name="contact_name" value="{{ selected_contact_name }}">
 
+    <p class="fw-bold mt-4">Enter statement column headers in all lower case even if that is not how they appear on the PDF.</p>
+
     <div class="table-responsive">
       <table class="table table-bordered align-middle">
         <thead class="table-light">
@@ -48,7 +50,13 @@
         <tbody>
           {% for row in mapping_rows %}
           <tr>
-            <td><strong>{{ row.field }}</strong></td>
+            <td>
+              <div class="fw-semibold text-capitalize">{{ row.field.replace('_', ' ') }}</div>
+              {% set desc = field_descriptions.get(row.field) if field_descriptions else None %}
+              {% if desc %}
+              <div class="text-muted small mt-1">{{ desc }}</div>
+              {% endif %}
+            </td>
             <td>
               <input type="hidden" name="fields[]" value="{{ row.field }}">
               {% if row.is_multi %}
@@ -71,7 +79,32 @@
       </table>
     </div>
 
-    <button type="submit" class="btn btn-success">Save</button>
+    <div class="mt-4">
+      <h2 class="h5">Supplier Date Format (SDF) reference</h2>
+      <p>Use the following tokens when describing how your supplier prints dates:</p>
+      <ul class="mb-3">
+        <li><code>YYYY</code> / <code>YY</code> – four-digit year / two-digit year (assumed 2000–2099)</li>
+        <li><code>M</code>, <code>MM</code> – month number (1–12 / zero-padded)</li>
+        <li><code>MMM</code>, <code>MMMM</code> – abbreviated / full month name</li>
+        <li><code>D</code>, <code>DD</code> – day of month (1–31 / zero-padded)</li>
+        <li><code>Do</code> – day with ordinal suffix (1st, 2nd, …)</li>
+      </ul>
+      <p class="mb-3">Wrap optional literals in square brackets to ignore them if present (for example, <code>[dddd, ]D MMMM YYYY</code> matches both <code>Wednesday, 14 May 2025</code> and <code>14 May 2025</code>). Separators such as spaces, slashes, dashes, dots, and commas can be written directly.</p>
+      <p class="mb-1 fw-semibold">Examples</p>
+      <ul class="mb-3">
+        <li><code>14 May 2025</code> → <code>D MMMM YYYY or DD MMMM YYYY</code></li>
+        <li><code>05/14/25</code> → <code>MM/DD/YY</code></li>
+        <li><code>2025-05-14</code> → <code>YYYY-MM-DD</code></li>
+        <li><code>14th May, 2025</code> → <code>Do MMMM, YYYY</code></li>
+        <li><code>Wed, 14 May 2025</code> → <code>[dddd, ]D MMMM YYYY</code></li>
+        <li><code>14.05.2025</code> → <code>DD.MM.YYYY</code></li>
+      </ul>
+      <div class="alert alert-warning" role="alert">
+        Numeric-only formats can be ambiguous (e.g., <code>1/2/2025</code>). Make sure you choose the correct ordering, such as <code>DD/MM/YYYY</code> or <code>MM/DD/YYYY</code>.
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-success mb-5">Save</button>
   </form>
   {% endif %}
 
