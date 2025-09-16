@@ -33,6 +33,7 @@ from core.date_utils import (
     format_iso_to_template,
     parse_date_with_template,
 )
+from core.get_contact_config import get_contact_config
 from core.textract_statement import run_textraction
 from core.transform import equal
 
@@ -486,9 +487,6 @@ def fetch_json_statement(
 
     # Backfill statement_date_format for existing JSON if missing
     try:
-        # Local import to avoid potential circular imports at module load time
-        from core.get_contact_config import get_contact_config
-
         cfg = get_contact_config(tenant_id, contact_id) if contact_id else {}
         fmt = cfg.get("statement_date_format") if isinstance(cfg, dict) else None
     except Exception:

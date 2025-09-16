@@ -7,6 +7,16 @@ from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem, SupplierStatement
 
 _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
+_SUMMARY_KEYWORDS = (
+    "balance",
+    "closing",
+    "outstanding",
+    "subtotal",
+    "total",
+    "amount due",
+    "due",
+    "statement total",
+)
 
 
 def norm(s: str) -> str:
@@ -128,6 +138,68 @@ def row_is_opening_or_carried_forward(raw_row: List[str], mapped_item: Dict[str,
     money_count = sum(1 for c in raw_row if _looks_money(c))
     # Heuristic: only skip very sparse, non-numeric rows (likely headers/separators)
     return money_count == 0 and non_empty <= 2
+
+
+def _has_summary_keyword(text: str) -> bool:
+    if not text:
+        return False
+    t = norm(text)
+    if not t:
+        return False
+    for kw in _SUMMARY_KEYWORDS:
+        if " " in kw:
+            if kw in t:
+                return True
+        else:
+            if re.search(rf"\b{re.escape(kw)}\b", t):
+                return True
+    return False
+
+
+def row_is_summary_like(raw_row: List[str], mapped_item: Dict[str, Any]) -> bool:
+    """Detect balance/summary rows that should be excluded from transactions.
+
+    We look for rows dominated by balance/total keywords where core identifying
+    fields (date/number/reference) are empty and the amount columns are textual
+    instead of numeric. Negative amounts are treated as normal monetary values.
+    """
+    raw_cells = [str(c or "").strip() for c in raw_row]
+    text_cells = [c for c in raw_cells if c]
+    if not text_cells:
+        return False
+
+    keyword_hits = sum(1 for c in text_cells if _has_summary_keyword(c))
+    if keyword_hits < 2:
+        return False
+
+    has_number = bool(str((mapped_item or {}).get("number") or "").strip())
+    has_date = bool(str((mapped_item or {}).get("date") or "").strip())
+    has_reference = bool(str((mapped_item or {}).get("reference") or "").strip())
+    missing_identifiers = sum(1 for flag in (has_number, has_date, has_reference) if not flag)
+
+    money_count = sum(1 for cell in raw_cells if _looks_money(cell))
+
+    def _iter_amount_like_values(values: Any) -> List[str]:
+        if isinstance(values, (list, tuple)):
+            return [str(v) for v in values if str(v or "").strip()]
+        if str(values or "").strip():
+            return [str(values)]
+        return []
+
+    amount_like_values: List[str] = []
+    for field_name in ("amount_due", "total", "amount_paid", "amount_credited"):
+        amount_like_values.extend(_iter_amount_like_values((mapped_item or {}).get(field_name)))
+
+    numeric_amounts = sum(1 for v in amount_like_values if _looks_money(v))
+    textual_amounts = len(amount_like_values) - numeric_amounts
+
+    if missing_identifiers >= 2 and (money_count <= 1 or (numeric_amounts == 0 and textual_amounts > 0)):
+        return True
+
+    if missing_identifiers == 3 and numeric_amounts <= 1:
+        return True
+
+    return False
 
 
 def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], candidates: List[str], small_table_penalty: float = 2.5) -> List[Dict[str, Any]]:
@@ -335,6 +407,9 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
 
             # carried-forward skipper
             if row_is_opening_or_carried_forward(r, row_obj):
+                continue
+
+            if row_is_summary_like(r, row_obj):
                 continue
 
             # validate to canonical StatementItem
