@@ -47,33 +47,6 @@
         </thead>
         <tbody>
           {% for row in mapping_rows %}
-          {% if row.field == 'raw' %}
-          <tr>
-            <td>
-              <strong>
-                <button class="btn btn-link p-0" type="button" data-bs-toggle="collapse" data-bs-target="#raw-collapse" aria-expanded="false" aria-controls="raw-collapse">raw</button>
-              </strong>
-            </td>
-            <td>
-              <input type="hidden" name="fields[]" value="raw">
-              <div id="raw-collapse" class="collapse">
-                {% if row.raw_items and row.raw_items|length > 0 %}
-                  {% for item in row.raw_items %}
-                  <div class="row align-items-center mb-2">
-                    <div class="col-md-4 col-12 mb-1 mb-md-0"><code>{{ item.key }}</code></div>
-                    <div class="col-md-8 col-12">
-                      <input type="hidden" name="raw_keys[]" value="{{ item.key }}">
-                      <input type="text" class="form-control" name="map[raw][{{ item.key }}]" value="{{ item.value }}" placeholder="Enter column heading">
-                    </div>
-                  </div>
-                  {% endfor %}
-                {% else %}
-                  <div class="text-muted">No raw mappings configured for this contact.</div>
-                {% endif %}
-              </div>
-            </td>
-          </tr>
-          {% else %}
           <tr>
             <td><strong>{{ row.field }}</strong></td>
             <td>
@@ -93,7 +66,6 @@
               {% endif %}
             </td>
           </tr>
-          {% endif %}
           {% endfor %}
         </tbody>
       </table>

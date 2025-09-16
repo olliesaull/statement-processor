@@ -242,13 +242,7 @@ def configs():
     error: Optional[str] = None
 
     def _build_rows(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Build table rows for canonical fields, using existing config values if present.
-
-        - Always include the canonical StatementItem fields (excluding 'raw').
-        - Prefer root-level mappings; fall back to nested 'statement_items' if present.
-        - 'amount_due' supports multiple possible headers (list).
-        - 'statement_date_format' is shown and persisted at the root level.
-        """
+        """Build table rows for canonical fields using existing config values."""
         # Flatten mapping sources: nested 'statement_items' + root-level keys
         nested = cfg.get("statement_items") if isinstance(cfg, dict) else None
         nested = nested if isinstance(nested, dict) else {}
@@ -258,13 +252,6 @@ def configs():
             for k, v in cfg.items():
                 if k in StatementItem.model_fields and k != "raw":
                     flat[k] = v
-
-        # Merge raw maps from nested/root (root wins)
-        nested_raw = nested.get("raw") if isinstance(nested, dict) else None
-        nested_raw = nested_raw if isinstance(nested_raw, dict) else {}
-        root_raw = cfg.get("raw") if isinstance(cfg, dict) else None
-        root_raw = root_raw if isinstance(root_raw, dict) else {}
-        raw_map: Dict[str, Any] = {**nested_raw, **root_raw}
 
         # Canonical field order from the Pydantic model
         canonical_order = [f for f in StatementItem.model_fields.keys() if f != "raw"]
@@ -278,12 +265,6 @@ def configs():
             else:
                 values = [str(val)] if isinstance(val, str) else [""]
                 rows.append({"field": f, "values": values, "is_multi": False})
-        # Add RAW as a collapsible group row with nested items
-        raw_items = []
-        for rk in sorted(raw_map.keys()):
-            rv = raw_map.get(rk)
-            raw_items.append({"key": rk, "value": (rv if isinstance(rv, str) else "")})
-        rows.append({"field": "raw", "values": [""], "is_multi": False, "raw_items": raw_items})
         return rows
 
     if request.method == "POST":
@@ -316,38 +297,23 @@ def configs():
                 except KeyError:
                     existing = {}
                 # Determine which fields were displayed/edited
-                posted_fields = request.form.getlist("fields[]")
-                posted_fields = [f for f in posted_fields if f]
-
-                # Separate 'raw' group from canonical ones
-                simple_fields = [f for f in posted_fields if f != "raw"]
+                posted_fields = [f for f in request.form.getlist("fields[]") if f]
 
                 # Preserve any root keys not shown in the mapping editor.
                 # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
-                preserved = {k: v for k, v in existing.items() if k not in simple_fields + ["raw", "statement_items"]}
+                preserved = {k: v for k, v in existing.items() if k not in posted_fields + ["statement_items"]}
 
                 # Rebuild mapping from form
                 new_map: Dict[str, Any] = {}
-                for f in simple_fields:
+                for f in posted_fields:
                     if f == "amount_due":
                         ad_vals = [v.strip() for v in request.form.getlist("map[amount_due][]") if v.strip()]
                         new_map["amount_due"] = ad_vals
                     else:
                         val = request.form.get(f"map[{f}]")
                         new_map[f] = (val or "").strip()
-
-                # Build the RAW mapping (merge existing + posted raw keys)
-                existing_raw = existing.get("raw") if isinstance(existing.get("raw"), dict) else {}
-                new_raw = dict(existing_raw)
-                for rk in request.form.getlist("raw_keys[]"):
-                    val = request.form.get(f"map[raw][{rk}]")
-                    rk_lc = (rk or "").strip().lower()
-                    val_lc = (val or "").strip().lower()
-                    new_raw[rk_lc] = val_lc
-
                 # Merge and save (root-level only; no nested 'statement_items')
                 to_save = {**preserved, **new_map}
-                to_save["raw"] = new_raw
                 set_contact_config(tenant_id, selected_contact_id, to_save)
                 message = "Config updated successfully."
                 mapping_rows = _build_rows(to_save)
