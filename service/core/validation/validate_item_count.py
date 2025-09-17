@@ -4,6 +4,7 @@ import re
 from typing import Any, Dict, List, Set, Tuple, Union
 
 import pdfplumber
+from config import logger
 try:
     from werkzeug.datastructures import FileStorage  # type: ignore
 except Exception:  # pragma: no cover - optional import for typing
@@ -227,7 +228,7 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
                 break
 
     if not has_text:
-        print("[WARNING] PDF appears to be image-only (scanned). Skipping validation.")
+        logger.info("[WARNING] PDF appears to be image-only (scanned). Skipping validation.")
 
     # Collect JSON refs
     raw_refs = [(i, (it.get(ref_field) or "").strip()) for i, it in enumerate(statement_items)]
@@ -248,8 +249,17 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
 
     # Print summary
     total_checked = len(found) + len(not_found)
-    print(f"JSON -> PDF | Total checked: {total_checked} | Found: {len(found)} | Not found: {len(not_found)}")
-    print(f"PDF -> JSON | PDF candidates: {len(pdf_candidates_norm)} | PDF-only (missing in JSON): {len(pdf_only_norm)}")
+    logger.info(
+        "JSON -> PDF summary",
+        total_checked=total_checked,
+        found=len(found),
+        not_found=len(not_found),
+    )
+    logger.info(
+        "PDF -> JSON summary",
+        pdf_candidates=len(pdf_candidates_norm),
+        pdf_only=len(pdf_only_norm),
+    )
 
     summary = {
         "summary": {
@@ -270,6 +280,6 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
     }
 
     if len(not_found) > 0 or len(pdf_only_norm) > 0:
-        print(json.dumps(summary, indent=2))
+        logger.info("Validation discrepancies", details=json.dumps(summary, indent=2))
 
     return summary

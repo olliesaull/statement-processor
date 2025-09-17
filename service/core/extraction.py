@@ -5,7 +5,7 @@ from textractor import Textractor
 from textractor.data.constants import TextractFeatures
 from textractor.entities.table import Table
 
-from config import AWS_PROFILE, AWS_REGION
+from config import AWS_PROFILE, AWS_REGION, logger
 
 class TableOnPage(TypedDict):
     """Simple table representation extracted from Textract for a given page."""
@@ -82,7 +82,7 @@ def get_tables(bucket: str, key: str) -> Dict[str, List[TableOnPage]]:
     try:
         result[key] = analyze_tables_s3(bucket, key)
     except ClientError as ce:
-        print(f"AWS error for {key}: {ce}")
+        logger.info("AWS error", key=key, error=ce)
     except Exception as e:
-        print(f"Error processing {key}: {e}")
+        logger.info("Error processing file", key=key, error=e)
     return result

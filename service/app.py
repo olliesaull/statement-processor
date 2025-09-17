@@ -16,7 +16,7 @@ from flask import (
     url_for,
 )
 
-from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
+from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, logger
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem
 from utils import (
@@ -100,9 +100,13 @@ def contacts():
         contact_name = request.form.get("contact_name")
         for c in contacts_list:
             if c["name"] == contact_name:
-                print("*" * 88)
-                print(f"{contact_name}: {c['contact_id']}")
-                print("*" * 88)
+                logger.info("contact_lookup_separator", separator="*" * 88)
+                logger.info(
+                    "contact_lookup_selection",
+                    contact_name=contact_name,
+                    contact_id=c["contact_id"],
+                )
+                logger.info("contact_lookup_separator", separator="*" * 88)
 
     return render_template("contacts.html", contacts=contacts_list)
 
@@ -118,19 +122,19 @@ def upload_statements():
         names = request.form.getlist("contact_names")
 
         if not files:
-            print("Please add at least one statement (PDF).")
+            logger.info("Please add at least one statement (PDF).")
         elif len(files) != len(names):
-            print("Each statement must have a contact selected.")
+            logger.info("Each statement must have a contact selected.")
         else:
             # Create statement identifier etc
             tenant_id = session.get("xero_tenant_id")
 
             for f, contact in zip(files, names):
                 if not contact.strip():
-                    print(f"Missing contact for '{f.filename}'.")
+                    logger.info("Missing contact", filename=f.filename)
                     continue
                 if not is_allowed_pdf(f.filename, f.mimetype):
-                    print(f"Rejected '{f.filename}': only PDFs are allowed.")
+                    logger.info("Rejected non-PDF upload", filename=f.filename)
                     continue
 
                 contact_id: Optional[str] = contact_lookup.get(contact.strip())

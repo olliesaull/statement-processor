@@ -27,6 +27,7 @@ from config import (
     CLIENT_ID,
     CLIENT_SECRET,
     S3_BUCKET_NAME,
+    logger,
     s3_client,
     tenant_statements_table,
 )
@@ -40,7 +41,7 @@ from core.textract_statement import run_textraction
 from core.transform import equal
 
 # MIME/extension guards for uploads
-ALLOWED_EXTENSIONS = {".pdf"}
+ALLOWED_EXTENSIONS = {".pdf", ".PDF"}
 SCOPES = [
     "offline_access", "openid", "profile", "email", "accounting.transactions", "accounting.reports.read", "accounting.journals.read",
     "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
@@ -195,10 +196,10 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
         return by_number
 
     except AccountingBadRequestException as e:
-        print(f"Exception occurred: {e}")
+        logger.info("Exception occurred", error=e)
         return {}
     except Exception as e:
-        print(f"Exception occurred: {e}")
+        logger.info("Exception occurred", error=e)
         return {}
 
 
@@ -269,10 +270,10 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
         return invoices
 
     except AccountingBadRequestException as e:
-        print(f"Exception occurred: {e}")
+        logger.info("Exception occurred", error=e)
         return []
     except Exception as e:
-        print(f"Exception occurred: {e}")
+        logger.info("Exception occurred", error=e)
         return []
 
 
@@ -333,10 +334,10 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
         return credit_notes
 
     except AccountingBadRequestException as e:
-        print(f"Exception occurred: {e}")
+        logger.info("Exception occurred", error=e)
         return []
     except Exception as e:
-        print(f"Exception occurred: {e}")
+        logger.info("Exception occurred", error=e)
         return []
 
 
@@ -368,11 +369,11 @@ def get_contacts() -> List[Dict[str, Any]]:
 
     except AccountingBadRequestException as e:
         # Xero returned a 400
-        print(f"AccountingBadRequestException: {e}")
+        logger.info("AccountingBadRequestException", error=e)
         return []
     except Exception as e:
         # Catch-all for other errors (network, token, etc.)
-        print(f"Error: {e}")
+        logger.info("Error", error=e)
         return []
 
 
@@ -457,7 +458,7 @@ def upload_statement_to_s3(fs_like: Any, key: str) -> bool:
         )
         return True
     except (BotoCoreError, ClientError) as e:
-        print(f"Failed to upload '{key}' to S3: {e}")
+        logger.info("Failed to upload to S3", key=key, error=e)
         return False
 
 
@@ -528,13 +529,17 @@ def get_or_create_json_statement(
     """
     try:
         data, fs = fetch_json_statement(tenant_id, contact_id, bucket, json_key)
-        print(f"Found existing JSON at {json_key}, downloading...")
+        logger.info("Found existing JSON, downloading", json_key=json_key)
         return data, fs
     except StatementJSONNotFoundError:
         pass
 
     # Not found → run Textract
-    print(f"No JSON at {json_key}, running Textract for {pdf_key}...")
+    logger.info(
+        "Running Textract for missing JSON",
+        json_key=json_key,
+        pdf_key=pdf_key,
+    )
     # Use the provided bucket argument for consistency with the read path.
     # Current callers pass the global bucket, so this does not alter behavior.
     json_fs = run_textraction(bucket=bucket, pdf_key=pdf_key, tenant_id=tenant_id, contact_id=contact_id)
@@ -572,9 +577,9 @@ def textract_in_background(
             pdf_key=pdf_key,
             json_key=json_key,
         )
-        print(f"[bg] Textraction complete for {pdf_key} -> {json_key}")
+        logger.info("[bg] Textraction complete", pdf_key=pdf_key, json_key=json_key)
     except Exception:
-        print(f"[bg] Textraction failed for {pdf_key}")
+        logger.info("[bg] Textraction failed", pdf_key=pdf_key)
         traceback.print_exc()
 
 # -----------------------------
@@ -771,7 +776,11 @@ def match_invoices_to_statement_items(
                 "match_score": 1.0,
                 "matched_invoice_number": key,
             }
-            print(f"Exact match: statement number '{key}' -> invoice '{key}'")
+            logger.info(
+                "Exact match",
+                statement_number=key,
+                invoice_number=key,
+            )
             # Track used invoice to exclude from fuzzy matching pool
             inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
             if inv_id:
@@ -831,14 +840,19 @@ def match_invoices_to_statement_items(
                 "matched_invoice_number": inv_no_best,
             }
             kind = "Exact" if inv_no_best == key else "Substring"
-            print(f"{kind} match: statement number '{key}' -> invoice '{inv_no_best}'")
+            logger.info(
+                "Statement match",
+                match_type=kind,
+                statement_number=key,
+                invoice_number=inv_no_best,
+            )
             # Mark this invoice as used to prevent reuse in subsequent substring matches
             inv_id = inv_obj.get("invoice_id") if isinstance(inv_obj, dict) else None
             if inv_id:
                 used_invoice_ids.add(inv_id)
             used_invoice_numbers.add(inv_no_best)
         else:
-            print(f"No match for statement number '{key}'")
+            logger.info("No match for statement number", statement_number=key)
 
     return matched
 

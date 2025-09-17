@@ -5,7 +5,7 @@ from typing import Dict, List
 
 from werkzeug.datastructures import FileStorage
 
-from config import s3_client
+from config import logger, s3_client
 from core.extraction import TableOnPage, get_tables
 from core.transform import table_to_json
 from core.validation.validate_item_count import validate_references_roundtrip
@@ -23,7 +23,7 @@ def run_textraction(bucket: str, pdf_key: str, tenant_id: str, contact_id: str) 
         key = pdf_key
         tables_wp = []
 
-    print(f"\n=== {key} ===")
+    logger.info("Textract statement processing", key=key)
     statement = table_to_json(key, tables_wp, tenant_id, contact_id)
 
     # Fetch PDF bytes from S3 and validate against extracted JSON
@@ -33,7 +33,11 @@ def run_textraction(bucket: str, pdf_key: str, tenant_id: str, contact_id: str) 
         statement_items = statement.get("statement_items", []) or []
         validate_references_roundtrip(pdf_bytes, statement_items)
     except Exception as e:
-        print(f"[WARNING] Reference validation skipped: {e}")
+        logger.info(
+            "[WARNING] Reference validation skipped",
+            key=key,
+            error=e,
+        )
 
     # optional: ML outlier pass (kept commented; requires sklearn and data volume)
     # from core.validation.anomaly_detection import apply_outlier_flags

@@ -3,6 +3,7 @@ from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
+from config import logger
 from core.date_utils import parse_with_format
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem, SupplierStatement
@@ -322,7 +323,10 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
                 new_cfg["raw"] = root_raw
                 set_contact_config(tenant_id, contact_id, new_cfg)
         except Exception as e:
-            print(f"[table_to_json] failed to persist raw headers: {e}")
+            logger.info(
+                "[table_to_json] failed to persist raw headers",
+                error=e,
+            )
 
         # Resolve candidate column indices for amount_due (handle duplicate headers like 'AMOUNT')
         amount_cols: List[int] = []
@@ -433,8 +437,12 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
                 if getattr(si, "amount_due", None):
                     fields_logged["amount_due"] = getattr(si, "amount_due")
             except Exception as e:
-                print(f"[table_to_json] validation error on row #{i_row}: {e}")
-                print("[table_to_json] row_obj=", row_obj)
+                logger.info(
+                    "[table_to_json] validation error",
+                    row_number=i_row,
+                    error=e,
+                )
+                logger.info("[table_to_json] row_obj", row_obj=row_obj)
                 raise
 
     # meta with filename
