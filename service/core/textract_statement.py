@@ -5,10 +5,10 @@ from typing import Dict, List
 
 from werkzeug.datastructures import FileStorage
 
+from config import s3_client
 from core.extraction import TableOnPage, get_tables
 from core.transform import table_to_json
 from core.validation.validate_item_count import validate_references_roundtrip
-from configuration.resources import s3_client
 
 
 def run_textraction(bucket: str, pdf_key: str, tenant_id: str, contact_id: str) -> FileStorage:

@@ -2,7 +2,7 @@ from typing import Any, Dict
 
 from botocore.exceptions import ClientError
 
-from configuration.resources import tenant_contacts_config_table
+from config import tenant_contacts_config_table
 
 
 def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:

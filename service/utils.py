@@ -23,8 +23,10 @@ from xero_python.api_client.configuration import Configuration  # type: ignore
 from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 from xero_python.exceptions import AccountingBadRequestException
 
-from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
-from configuration.resources import (
+from config import (
+    CLIENT_ID,
+    CLIENT_SECRET,
+    S3_BUCKET_NAME,
     s3_client,
     tenant_statements_table,
 )

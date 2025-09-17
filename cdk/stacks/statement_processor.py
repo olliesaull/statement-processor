@@ -110,7 +110,6 @@ class StatementProcessorStack(Stack):
                         "DOMAIN_NAME": domain_name,
                         "POWERTOOLS_SERVICE_NAME": "StatementProcessor",
                         "LOG_LEVEL": "DEBUG",
-                        "OPENAI_API_KEY_PATH": "/StatementProcessor/OPENAI_API_KEY",
                         "XERO_CLIENT_ID_PATH": "/StatementProcessor/XERO_CLIENT_ID",
                         "XERO_CLIENT_SECRET_PATH": "/StatementProcessor/XERO_CLIENT_SECRET",
                         "S3_BUCKET_NAME": f"dexero-statement-processor-{stage}",

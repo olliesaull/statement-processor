@@ -16,7 +16,7 @@ from flask import (
     url_for,
 )
 
-from configuration.config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
+from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem
 from utils import (
