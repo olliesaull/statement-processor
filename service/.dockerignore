@@ -1,0 +1,21 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+
+# Environments
+venv/
+.venv/
+*.env
+
+# Git
+.git/
+.gitignore
+
+# Logs and local files
+*.log
+.DS_Store
+
+# Docker
+Dockerfile

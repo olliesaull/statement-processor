@@ -40,14 +40,6 @@ def run_textraction(bucket: str, pdf_key: str, tenant_id: str, contact_id: str) 
     # statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True, threshold_method="iqr")
     # print(json.dumps(summary, indent=2))
 
-    # TODO: This is just here for testing, remove for production:
-
-    out_dir = Path("./statements/structured_statements")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / (Path(key).stem + ".json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(statement, f, ensure_ascii=False, indent=2)
-
     # Serialize to bytes in memory for upload/response
     buf = io.BytesIO(json.dumps(statement, ensure_ascii=False, indent=2).encode("utf-8"))
     buf.seek(0)

@@ -1,98 +1,80 @@
-import time
-from typing import Any, Dict, List, TypedDict
+from typing import Dict, List, TypedDict
 
-import boto3
 from botocore.exceptions import ClientError
+from textractor import Textractor
+from textractor.data.constants import TextractFeatures
+from textractor.entities.table import Table
 
-# Reuse clients across calls
-textract = boto3.client("textract")
-
+from config import AWS_PROFILE, AWS_REGION
 
 class TableOnPage(TypedDict):
     """Simple table representation extracted from Textract for a given page."""
     page: int
     grid: List[List[str]]
 
-def _block_text(block: Dict[str, Any], by_id: Dict[str, Dict[str, Any]]) -> str:
-    out: List[str] = []
-    for rel in block.get("Relationships", []):
-        if rel["Type"] == "CHILD":
-            for cid in rel["Ids"]:
-                ch = by_id.get(cid)
-                if not ch:
-                    continue
-                bt = ch.get("BlockType")
-                if bt in ("WORD", "LINE"):
-                    out.append(ch.get("Text", ""))
-                elif bt == "SELECTION_ELEMENT":
-                    out.append("[x]" if ch.get("SelectionStatus") == "SELECTED" else "[ ]")
-    return " ".join(t for t in out if t).strip()
 
-def _collect_table_grids_with_pages(blocks: List[Dict[str, Any]]) -> List[TableOnPage]:
-    by_id = {b["Id"]: b for b in blocks}
-    out: List[TableOnPage] = []
-    for tbl in [b for b in blocks if b.get("BlockType") == "TABLE"]:
-        cells = []
-        for rel in tbl.get("Relationships", []):
-            if rel["Type"] == "CHILD":
-                for cid in rel["Ids"]:
-                    cb = by_id.get(cid)
-                    if cb and cb.get("BlockType") == "CELL":
-                        cells.append(cb)
-        if not cells:
+def _sanitize_grid(grid: List[List[str]]) -> List[List[str]]:
+    """Remove empty rows/columns so downstream logic matches legacy output."""
+
+    meaningful_rows = [row for row in grid if any(cell.strip() for cell in row)]
+    if not meaningful_rows:
+        return []
+
+    keep_cols = [
+        idx
+        for idx in range(len(meaningful_rows[0]))
+        if any(row[idx].strip() for row in meaningful_rows)
+    ]
+    if not keep_cols:
+        return []
+
+    return [[row[idx] for idx in keep_cols] for row in meaningful_rows]
+
+
+def _table_to_grid(table: Table) -> List[List[str]]:
+    row_count = table.row_count or 0
+    col_count = table.column_count or 0
+
+    if not row_count or not col_count:
+        return []
+
+    grid = [["" for _ in range(col_count)] for _ in range(row_count)]
+
+    for cell in table.table_cells:
+        row_idx = max(int(cell.row_index or 1) - 1, 0)
+        col_idx = max(int(cell.col_index or 1) - 1, 0)
+        if row_idx >= row_count or col_idx >= col_count:
             continue
-        max_r = max(c.get("RowIndex", 1) + c.get("RowSpan", 1) - 1 for c in cells)
-        max_c = max(c.get("ColumnIndex", 1) + c.get("ColumnSpan", 1) - 1 for c in cells)
-        grid = [["" for _ in range(max_c)] for _ in range(max_r)]
-        for c in cells:
-            r = c.get("RowIndex", 1) - 1
-            col = c.get("ColumnIndex", 1) - 1
-            grid[r][col] = _block_text(c, by_id).strip()
-        grid = [row for row in grid if any(x.strip() for x in row)]
-        if grid:
-            keep_cols = [i for i in range(len(grid[0])) if any(row[i].strip() for row in grid)]
-            grid = [[row[i] for i in keep_cols] for row in grid]
-        if grid:
-            out.append({"page": int(tbl.get("Page", 1)), "grid": grid})
-    out.sort(key=lambda t: t["page"])
-    return out
+        cell_text = (cell.text or "").strip()
+        if cell_text:
+            grid[row_idx][col_idx] = cell_text
+        elif not grid[row_idx][col_idx]:
+            grid[row_idx][col_idx] = ""
+
+    return _sanitize_grid(grid)
+
 
 def analyze_tables_s3(bucket: str, key: str) -> List[TableOnPage]:
     """Run Textract TABLES on an S3 object and return tables per page."""
-    k = key.lower()
-    is_pdf_tiff = k.endswith((".pdf", ".tif", ".tiff"))
-    if is_pdf_tiff:
-        start = textract.start_document_analysis(
-            DocumentLocation={"S3Object": {"Bucket": bucket, "Name": key}},
-            FeatureTypes=["TABLES"],
-        )
-        job_id = start["JobId"]
-        delay, waited = 1.0, 0.0
-        while True:
-            status = textract.get_document_analysis(JobId=job_id, MaxResults=1000)
-            js = status.get("JobStatus")
-            if js in ("SUCCEEDED", "FAILED", "PARTIAL_SUCCESS"):
-                break
-            time.sleep(delay)
-            waited += delay
-            delay = min(delay * 1.7, 5.0)
-            if waited > 180:
-                raise TimeoutError(f"Textract timed out for {key}")
-        if status.get("JobStatus") != "SUCCEEDED":
-            raise RuntimeError(f"Textract failed for {key}: {status.get('JobStatus')}")
-        blocks = list(status.get("Blocks", []))
-        nt = status.get("NextToken")
-        while nt:
-            page = textract.get_document_analysis(JobId=job_id, NextToken=nt, MaxResults=1000)
-            blocks.extend(page.get("Blocks", []))
-            nt = page.get("NextToken")
+    textractor = Textractor(profile_name=AWS_PROFILE, region_name=AWS_REGION)
+    s3_path = f"s3://{bucket}/{key}"
+
+    if key.lower().endswith((".pdf", ".tif", ".tiff")):
+        document = textractor.start_document_analysis(s3_path, features=[TextractFeatures.TABLES])
     else:
-        resp = textract.analyze_document(
-            Document={"S3Object": {"Bucket": bucket, "Name": key}},
-            FeatureTypes=["TABLES"],
-        )
-        blocks = resp.get("Blocks", [])
-    return _collect_table_grids_with_pages(blocks)
+        document = textractor.analyze_document(s3_path, features=[TextractFeatures.TABLES])
+
+    tables: List[TableOnPage] = []
+    for index, page in enumerate(document.pages, start=1):
+        page_number = page.page_num if isinstance(page.page_num, int) and page.page_num > 0 else index
+        for table in page.tables:
+            grid = _table_to_grid(table)
+            if grid:
+                tables.append({"page": int(page_number), "grid": grid})
+
+    tables.sort(key=lambda t: t["page"])
+    return tables
+
 
 def get_tables(bucket: str, key: str) -> Dict[str, List[TableOnPage]]:
     """Convenience wrapper returning a mapping of key -> extracted tables."""

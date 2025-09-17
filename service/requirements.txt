@@ -17,6 +17,9 @@ flask
 requests
 xero-python
 
+# Textraction
+amazon-textract-textractor
+
 # Other
 pandas
 pydantic
