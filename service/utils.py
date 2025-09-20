@@ -13,6 +13,7 @@ from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
 from flask import (
     redirect,
+    request,
     session,
     url_for,
 )
@@ -82,6 +83,26 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
         return f(*args, **kwargs)
     return decorated_function
 
+def route_handler_logging(function):
+    @wraps(function)
+    def decorator(*args, **kwargs):
+        logger.info("Entering route",
+                    route=request.path,
+                    event_type="USER_TRAIL",
+                    event_action="START",
+                    path=request.path,
+        )
+
+        logger.info("Exiting route",
+                    route=request.path,
+                    event_type="USER_TRAIL",
+                    event_action="END",
+                    path=request.path,
+        )
+
+        return function(*args, **kwargs)
+
+    return decorator
 
 def is_allowed_pdf(filename: str, mimetype: str) -> bool:
     """Basic check for PDF uploads by extension and MIME type.

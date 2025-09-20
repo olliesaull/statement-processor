@@ -104,7 +104,7 @@ class StatementProcessorStack(Stack):
             source=apprunner_alpha.Source.from_asset(
                 asset=apprunner_asset,
                 image_configuration=apprunner_alpha.ImageConfiguration(
-                    port=5000,
+                    port=8080,
                     environment_variables={
                         "STAGE": "prod" if is_production else "dev",
                         "DOMAIN_NAME": domain_name,

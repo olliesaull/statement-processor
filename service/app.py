@@ -35,6 +35,7 @@ from utils import (
     is_allowed_pdf,
     match_invoices_to_statement_items,
     prepare_display_mappings,
+    route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
     textract_in_background,
@@ -92,6 +93,7 @@ def ignore_favicon():
 
 @app.route("/contacts", methods=["GET", "POST"])
 @xero_token_required
+@route_handler_logging
 def contacts():
     """List tenant contacts; on POST, echo the selected contact ID to logs."""
     contacts_list = sorted(get_contacts(), key=lambda c: c["name"].casefold())
@@ -100,18 +102,15 @@ def contacts():
         contact_name = request.form.get("contact_name")
         for c in contacts_list:
             if c["name"] == contact_name:
-                logger.info("contact_lookup_separator", separator="*" * 88)
-                logger.info(
-                    "contact_lookup_selection",
-                    contact_name=contact_name,
-                    contact_id=c["contact_id"],
-                )
-                logger.info("contact_lookup_separator", separator="*" * 88)
+                print("*"*88)
+                print(f"{contact_name}, {c["contact_id"]}")
+                print("*"*88)
 
     return render_template("contacts.html", contacts=contacts_list)
 
 @app.route("/upload-statements", methods=["GET", "POST"])
 @xero_token_required
+@route_handler_logging
 def upload_statements():
     """Upload one or more PDF statements and register them for processing."""
     contacts_list = sorted(get_contacts(), key=lambda c: c["name"].casefold())
@@ -168,11 +167,13 @@ def upload_statements():
 
 @app.route("/statements")
 @xero_token_required
+@route_handler_logging
 def statements():
     return render_template("statements.html", incomplete_statements=get_incomplete_statements())
 
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @xero_token_required
+@route_handler_logging
 def statement(statement_id: str):
     tenant_id = session.get("xero_tenant_id")
 
@@ -254,11 +255,13 @@ def statement(statement_id: str):
     )
 
 @app.route("/")
+@route_handler_logging
 def index():
     return render_template("index.html")
 
 @app.route("/configs", methods=["GET", "POST"])
 @xero_token_required
+@route_handler_logging
 def configs():
     """View and edit contact-specific mapping configuration."""
     # List contacts for dropdown
@@ -364,6 +367,7 @@ def configs():
     )
 
 @app.route("/login")
+@route_handler_logging
 def login():
     if not CLIENT_ID or not CLIENT_SECRET:
         return "Missing XERO_CLIENT_ID or XERO_CLIENT_SECRET env vars", 500
@@ -386,6 +390,7 @@ def login():
     return redirect(f"{AUTH_URL}?{urllib.parse.urlencode(params)}")
 
 @app.route("/callback")
+@route_handler_logging
 def callback():
     # Handle user-denied or error cases
     if "error" in request.args:
@@ -440,6 +445,7 @@ def callback():
     return redirect(url_for("index"))
 
 @app.route("/logout")
+@route_handler_logging
 def logout():
     session.clear()
     return redirect(url_for("index"))
