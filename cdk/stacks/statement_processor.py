@@ -46,7 +46,7 @@ class StatementProcessorStack(Stack):
 
         #region ---------- DynamoDB ----------
 
-        dynamodb.Table(
+        tenant_statements_table = dynamodb.Table(
             self, TENANT_STATEMENTS_TABLE_NAME,
             table_name=TENANT_STATEMENTS_TABLE_NAME,
             partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
@@ -55,7 +55,7 @@ class StatementProcessorStack(Stack):
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
 
-        dynamodb.Table(
+        tenant_contacts_config_table = dynamodb.Table(
             self, TENANT_CONTACTS_CONFIG_TABLE_NAME,
             table_name=TENANT_CONTACTS_CONFIG_TABLE_NAME,
             partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
@@ -68,7 +68,7 @@ class StatementProcessorStack(Stack):
 
         #region ---------- S3 ----------
 
-        s3.Bucket(
+        statements_bucket = s3.Bucket(
             self, STATEMENTS_S3_BUCKET_NAME,
             bucket_name=STATEMENTS_S3_BUCKET_NAME,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
@@ -93,6 +93,10 @@ class StatementProcessorStack(Stack):
                 ]
             )
         )
+
+        tenant_statements_table.grant_read_write_data(statement_processor_instance_role)
+        tenant_contacts_config_table.grant_read_write_data(statement_processor_instance_role)
+        statements_bucket.grant_read_write(statement_processor_instance_role)
 
         apprunner_asset = DockerImageAsset(self, "AppRunnerImage", directory="../service/")
         web = apprunner_alpha.Service(

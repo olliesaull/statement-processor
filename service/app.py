@@ -16,7 +16,7 @@ from flask import (
     url_for,
 )
 
-from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, logger
+from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem
 from utils import (
@@ -52,7 +52,7 @@ app.config["CLIENT_SECRET"] = CLIENT_SECRET
 
 AUTH_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
-REDIRECT_URI = "http://localhost:8080/callback"
+REDIRECT_URI = "https://cloudcathode.com/callback" if STAGE == "prod" else "http://localhost:8080/callback"
 
 # Lightweight background executor for non-blocking textraction after upload
 # Keep the pool small to avoid overwhelming Textract and our app.
@@ -394,15 +394,18 @@ def login():
 def callback():
     # Handle user-denied or error cases
     if "error" in request.args:
+        logger.error("OAuth error", error_code=400, error_description=request.args.get('error_description'), error=request.args['error'])
         return f"OAuth error: {request.args.get('error_description', request.args['error'])}", 400
 
     code = request.args.get("code")
     state = request.args.get("state")
     if not code:
+        logger.error("No authorization code returned from Xero", error_code=400)
         return "No authorization code returned from Xero", 400
 
     # Validate state
     if not state or state != session.get("oauth_state"):
+        logger.error("Invalid OAuth state", error_code=400)
         abort(400, "Invalid OAuth state")
 
     # Exchange code for tokens
@@ -416,6 +419,7 @@ def callback():
     # Xero expects client_secret_basic (HTTP Basic) auth for token endpoint
     token_res = requests.post(TOKEN_URL, data=data, headers=headers, auth=(CLIENT_ID, CLIENT_SECRET))
     if token_res.status_code != 200:
+        logger.error("Error fetching token", error=token_res.text, error_code=400)
         return f"Error fetching token: {token_res.text}", 400
 
     tokens = token_res.json()
@@ -433,6 +437,7 @@ def callback():
     conn_res.raise_for_status()
     connections = conn_res.json()
     if not connections:
+        logger.error("No Xero connections found for this user.", error_code=400)
         return "No Xero connections found for this user.", 400
     
     # pick the first active tenant (or filter by 'tenantType' as you prefer)
