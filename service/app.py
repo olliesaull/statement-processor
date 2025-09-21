@@ -116,10 +116,12 @@ def upload_statements():
     """Upload one or more PDF statements and register them for processing."""
     contacts_list = sorted(get_contacts(), key=lambda c: c["name"].casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
+    success_count: Optional[int] = None
 
     if request.method == "POST":
         files = [f for f in request.files.getlist("statements") if f and f.filename]
         names = request.form.getlist("contact_names")
+        uploads_ok = 0
 
         if not files:
             logger.info("Please add at least one statement (PDF).")
@@ -164,7 +166,16 @@ def upload_statements():
                     json_key=json_statement_key,
                 )
 
-    return render_template("upload_statements.html", contacts=contacts_list)
+                uploads_ok += 1
+
+        if uploads_ok:
+            success_count = uploads_ok
+
+    return render_template(
+        "upload_statements.html",
+        contacts=contacts_list,
+        success_count=success_count,
+    )
 
 @app.route("/statements")
 @xero_token_required
