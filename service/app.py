@@ -28,6 +28,7 @@ from utils import (
     fetch_json_statement,
     get_contact_for_statement,
     get_contacts,
+    get_statement_date_format_from_config,
     get_credit_notes_by_contact,
     get_incomplete_statements,
     get_invoices_by_contact,
@@ -44,7 +45,7 @@ from utils import (
 )
 
 app = Flask(__name__)
-app.secret_key = os.urandom(16)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(16))
 
 # Mirror selected config values in Flask app config for convenience
 app.config["CLIENT_ID"] = CLIENT_ID
@@ -227,13 +228,15 @@ def statement(statement_id: str):
     )
 
     # 3) Build right-hand rows from the matched invoices
+    stmt_date_fmt = get_statement_date_format_from_config(contact_config)
+
     right_rows_by_header = build_right_rows(
         rows_by_header=rows_by_header,
         display_headers=display_headers,
         header_to_field=header_to_field,
         matched_map=matched_invoice_to_statement_item,
         item_number_header=item_number_header,
-        statement_date_format=contact_config.get("statement_date_format"),
+        statement_date_format=stmt_date_fmt,
     )
 
     # 4) Compare LEFT (statement) vs RIGHT (Xero) for row highlighting

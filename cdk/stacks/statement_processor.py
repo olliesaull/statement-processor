@@ -86,7 +86,9 @@ class StatementProcessorStack(Stack):
         statement_processor_instance_role.add_to_policy(
             iam.PolicyStatement(
                 actions=[
-                    "cloudwatch:PutMetricData"
+                    "cloudwatch:PutMetricData",
+                    "textract:StartDocumentAnalysis",
+                    "textract:GetDocumentAnalysis",
                 ],
                 resources=[
                     "*"

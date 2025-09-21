@@ -32,11 +32,7 @@ from config import (
     s3_client,
     tenant_statements_table,
 )
-from core.date_utils import (
-    ensure_abbrev_month,
-    format_iso_with,
-    parse_with_format,
-)
+from core.date_utils import coerce_datetime_with_template, format_iso_with
 from core.get_contact_config import get_contact_config
 from core.textract_statement import run_textraction
 from core.transform import equal
@@ -89,14 +85,6 @@ def route_handler_logging(function):
         logger.info("Entering route",
                     route=request.path,
                     event_type="USER_TRAIL",
-                    event_action="START",
-                    path=request.path,
-        )
-
-        logger.info("Exiting route",
-                    route=request.path,
-                    event_type="USER_TRAIL",
-                    event_action="END",
                     path=request.path,
         )
 
@@ -662,6 +650,15 @@ def get_items_template_from_config(contact_config: Dict[str, Any]) -> Dict[str, 
     return contact_config
 
 
+def get_statement_date_format_from_config(contact_config: Dict[str, Any]) -> Optional[str]:
+    """Extract the configured statement date format from a contact configuration."""
+    if not isinstance(contact_config, dict):
+        return None
+
+    fmt = contact_config.get("statement_date_format")
+    return str(fmt) if fmt else None
+
+
 def prepare_display_mappings(
     items: List[Dict],
     contact_config: Dict[str, Any],
@@ -698,25 +695,16 @@ def prepare_display_mappings(
     # and ensure at most one header per canonical field (e.g., only one amount column).
     header_to_field: Dict[str, str] = {}
     display_headers: List[str] = []
-    used_canon: set = set()
     for h in raw_headers:
         canon = header_to_field_norm.get(_n(h))
         if not canon:
             continue
-        if canon in used_canon:
-            continue  # skip duplicates for the same canonical field
         header_to_field[h] = canon
         display_headers.append(h)
-        used_canon.add(canon)
 
     # Convert raw rows into dicts filtered by display headers, normalizing date fields for display
     rows_by_header: List[Dict[str, str]] = []
-    stmt_date_fmt: Optional[str] = None
-    if isinstance(contact_config, dict):
-        # Prefer explicit statement_date_format stored at root
-        stmt_date_fmt = contact_config.get("statement_date_format")
-    # Prefer abbreviated month form for display to save space
-    display_date_fmt = ensure_abbrev_month(stmt_date_fmt)
+    stmt_date_fmt = get_statement_date_format_from_config(contact_config)
     numeric_fields = {"total", "amount_paid", "amount_due"}
     for it in items:
         raw = it.get("raw", {}) if isinstance(it, dict) else {}
@@ -725,14 +713,13 @@ def prepare_display_mappings(
             v = raw.get(h, "")
             # If this header maps to a canonical date field, normalize to the configured format
             canon = header_to_field.get(h)
-            if canon in {"date", "due_date"} and stmt_date_fmt:
-                try:
-                    dt = parse_with_format(v, stmt_date_fmt)
-                except ValueError:
-                    dt = None
+            if canon in {"date", "due_date"}:
+                dt = coerce_datetime_with_template(v, stmt_date_fmt)
                 if dt is not None:
-                    fmt_for_display = display_date_fmt or stmt_date_fmt
-                    v = format_iso_with(dt, fmt_for_display) if fmt_for_display else dt.strftime("%Y-%m-%d")
+                    if stmt_date_fmt:
+                        v = format_iso_with(dt, stmt_date_fmt)
+                    else:
+                        v = dt.strftime("%Y-%m-%d")
             elif canon in numeric_fields:
                 v = format_money(v)
             row[h] = v
@@ -891,8 +878,6 @@ def build_right_rows(
     the invoice, aligned to the same display headers and row order as the left.
     """
     right_rows = []
-    # Prefer abbreviated month for display
-    display_date_fmt = ensure_abbrev_month(statement_date_format)
     numeric_fields = {"total", "amount_paid", "amount_due"}
 
     for r in rows_by_header:
@@ -928,7 +913,7 @@ def build_right_rows(
                 if v is None:
                     row_right[h] = ""
                 else:
-                    fmt = display_date_fmt or statement_date_format or "YYYY-MM-DD"
+                    fmt = statement_date_format or "YYYY-MM-DD"
                     row_right[h] = format_iso_with(v, fmt)
             else:
                 val = inv.get(invoice_field, "")

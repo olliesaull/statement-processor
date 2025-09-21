@@ -130,6 +130,27 @@ def format_iso_with(value: Any, template: Optional[str]) -> str:
     return _format_tokens(tokens, dt)
 
 
+def coerce_datetime_with_template(value: Any, template: Optional[str]) -> Optional[datetime]:
+    """Return a ``datetime`` parsed from ``value`` using ``template`` or fallback heuristics.
+
+    The statement upload may already have normalized dates to ISO. In that case the
+    configured format will not match, so we fall back to the generic coercion used by
+    ``format_iso_with`` to ensure we can still reformat values for display.
+    """
+
+    parsed: Optional[datetime] = None
+    if template:
+        try:
+            parsed = parse_with_format(value, template)
+        except ValueError:
+            parsed = None
+
+    if parsed is not None:
+        return parsed
+
+    return _coerce_to_datetime(value)
+
+
 def _set_component(components: dict[str, int], key: str, value: int) -> None:
     if key in components and components[key] != value:
         raise ValueError(f"Conflicting values for {key}: {components[key]} vs {value}")
