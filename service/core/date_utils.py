@@ -102,11 +102,12 @@ def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]
     day = components["day"]
 
     if not has_textual_month and numeric_month and numeric_day and not uses_ordinal:
-        if 1 <= day <= 12 and 1 <= month <= 12 and day != month:
-            raise ValueError(
-                f"Ambiguous date '{s}' for format '{template}'. "
-                "Please choose an unambiguous format such as DD/MM/YYYY or MM/DD/YYYY."
-            )
+        # Historically we rejected dates where day/month were both <= 12 to avoid
+        # ambiguity. In practice the configured template explicitly encodes the
+        # expected order (e.g., DD/MM/YY), so honour the template instead of
+        # forcing users to switch to a longer format.
+        # We keep the branch to document intent but no longer raise.
+        pass
 
     try:
         return datetime(year, month, day)

@@ -21,6 +21,51 @@ _SUMMARY_KEYWORDS = (
 )
 
 
+def _normalize_table_cell(cell: Any) -> str:
+    """Normalize a table cell for duplicate detection."""
+    if cell is None:
+        return ""
+    text = str(cell).strip()
+    if not text:
+        return ""
+    text = text.replace("−", "-")
+    compact = re.sub(r"\s+", " ", text)
+    candidate = re.sub(r"^[\$£€]\s*", "", compact)
+    candidate = re.sub(r"(?i)(cr|dr)$", "", candidate)
+    if candidate.startswith("(") and candidate.endswith(")"):
+        candidate = f"-{candidate[1:-1]}"
+    candidate = candidate.replace(",", "")
+    try:
+        value = str(Decimal(candidate))
+        if value.endswith(".0"):
+            value = value[:-2]
+        return value
+    except (InvalidOperation, ValueError):
+        return compact.lower()
+
+
+def _dedupe_grid_columns(grid: List[List[str]]) -> List[List[str]]:
+    """Remove duplicate columns where header+data match exactly."""
+    if not grid or not grid[0]:
+        return grid
+    seen: Dict[Tuple[str, Tuple[str, ...]], int] = {}
+    keep: List[int] = []
+    for idx in range(len(grid[0])):
+        header = norm(grid[0][idx]) if idx < len(grid[0]) else ""
+        column_values = tuple(
+            _normalize_table_cell(row[idx] if idx < len(row) else "")
+            for row in grid[1:]
+        )
+        signature = (header, column_values)
+        if signature in seen:
+            continue
+        seen[signature] = idx
+        keep.append(idx)
+    if len(keep) == len(grid[0]):
+        return grid
+    return [[row[i] if i < len(row) else "" for i in keep] for row in grid]
+
+
 def norm(s: str) -> str:
     return " ".join((s or "").split()).strip().lower()
 
@@ -293,6 +338,7 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
     items: List[StatementItem] = []
     for entry in selected:
         grid = entry["grid"]
+        grid = _dedupe_grid_columns(grid)
         hdr_idx, header_row = best_header_row(grid, candidates)
         data_rows = grid[hdr_idx + 1 :]
         col_index = build_col_index(header_row)
@@ -330,11 +376,13 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
 
         # Resolve candidate column indices for amount_due (handle duplicate headers like 'AMOUNT')
         amount_cols: List[int] = []
+        amount_col_labels: Dict[int, str] = {}
         if amount_due_candidates:
             cand_norm = {norm(h) for h in amount_due_candidates if h}
             for i, h in enumerate(header_row):
                 if norm(h) in cand_norm:
                     amount_cols.append(i)
+                    amount_col_labels[i] = header_row[i]
         # Fallback: try common synonyms if none configured or none matched
         if not amount_cols:
             common_amt = {"amount", "debit", "credit", "debitamount", "creditamount", "value", "total"}
@@ -342,6 +390,7 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
                 hn = norm(h).replace(" ", "")
                 if hn in common_amt:
                     amount_cols.append(i)
+                    amount_col_labels.setdefault(i, header_row[i])
 
         for i_row, r in enumerate(data_rows, start=1):
             if not any((c or "").strip() for c in r):
@@ -356,6 +405,12 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
             # simple fields
             extracted_simple: Dict[str, Any] = {}
             for field, header_name in simple_map.items():
+                idx = col_index.get(norm(header_name))
+                actual_header = (
+                    header_row[idx]
+                    if idx is not None and idx < len(header_row)
+                    else header_name
+                )
                 cell = get_by_header(r, col_index, header_name)
                 value: Any = cell
                 if field in {"date", "due_date"}:
@@ -368,45 +423,57 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
                     if parsed is not None:
                         value = parsed.strftime("%Y-%m-%d")
                 row_obj[field] = value
-                extracted_simple[field] = {"header": header_name, "value": value}
+                canonical_header = str(actual_header or header_name)
+                extracted_simple[field] = {"header": canonical_header, "value": value}
 
             # raw fields with auto-fill using the header label (preserve original case in extracted JSON)
             raw_obj: Dict[str, Any] = {}
             extracted_raw: Dict[str, Any] = {}
             for raw_key, raw_src_header in (raw_map or {}).items():
                 chosen_header = raw_src_header or raw_key
+                idx = col_index.get(norm(chosen_header))
+                actual_header = (
+                    header_row[idx]
+                    if idx is not None and idx < len(header_row)
+                    else chosen_header
+                )
+                canonical_header = str(actual_header or chosen_header)
                 val = get_by_header(r, col_index, chosen_header)
-                raw_obj[str(chosen_header)] = val
-                extracted_raw[str(chosen_header)] = {"header": str(chosen_header), "value": val}
+                raw_obj[canonical_header] = val
+                extracted_raw[canonical_header] = {"header": canonical_header, "value": val}
             row_obj["raw"] = raw_obj
 
             # Map amount_due when configured as multiple candidate headers or if we found amount columns
             picked_amount: Optional[str] = None
+            picked_idx: Optional[int] = None
             if amount_cols:
                 # Prefer the rightmost numeric-looking value among candidate columns
                 vals = [(i, (r[i] if i < len(r) else "")) for i in amount_cols]
                 # First pass: numeric-looking values
                 numeric_vals = [(i, v) for i, v in vals if _looks_money(v)]
                 if numeric_vals:
-                    picked_amount = numeric_vals[-1][1]
+                    picked_idx, picked_amount = numeric_vals[-1]
                 else:
                     # Fallback: last non-empty among candidates
                     non_empty = [(i, v) for i, v in vals if str(v or "").strip()]
                     if non_empty:
-                        picked_amount = non_empty[-1][1]
+                        picked_idx, picked_amount = non_empty[-1]
             # If we picked an amount, record it in amount_due as a single-entry list
             if picked_amount is not None and str(picked_amount).strip():
                 row_obj["amount_due"] = [picked_amount]
-                extracted_simple["amount_due"] = {"header": "|".join(str(i) for i in amount_cols) or "", "value": picked_amount}
+                header_label = ""
+                if picked_idx is not None:
+                    if picked_idx < len(header_row):
+                        header_label = header_row[picked_idx] or ""
+                    if not header_label:
+                        header_label = amount_col_labels.get(picked_idx, "") or ""
+                header_label = (header_label or (amount_due_candidates[0] if amount_due_candidates else "")).strip()
+                extracted_simple["amount_due"] = {"header": header_label, "value": picked_amount}
                 # Also surface into raw if not present and we can name the column
                 try:
                     if "raw" in row_obj and isinstance(row_obj["raw"], dict):
-                        # Pick the header label for the picked column
-                        if amount_cols:
-                            # Map to the header text of the picked column
-                            idx = amount_cols[-1] if _looks_money(picked_amount) else amount_cols[-1]
-                            hdr_label = header_row[idx] if idx < len(header_row) else "amount"
-                            row_obj["raw"].setdefault(str(hdr_label), picked_amount)
+                        if header_label:
+                            row_obj["raw"].setdefault(str(header_label), picked_amount)
                 except Exception:
                     pass
 
@@ -476,4 +543,4 @@ def equal(a: Any, b: Any) -> bool:
         return da == db
     sa = "" if a is None else str(a).strip()
     sb = "" if b is None else str(b).strip()
-    return sa == sb
+    return sa.casefold() == sb.casefold()

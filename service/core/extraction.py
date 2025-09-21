@@ -14,7 +14,7 @@ class TableOnPage(TypedDict):
 
 
 def _sanitize_grid(grid: List[List[str]]) -> List[List[str]]:
-    """Remove empty rows/columns so downstream logic matches legacy output."""
+    """Normalize Textract tables to remove empty and duplicated columns."""
 
     meaningful_rows = [row for row in grid if any(cell.strip() for cell in row)]
     if not meaningful_rows:
@@ -28,7 +28,26 @@ def _sanitize_grid(grid: List[List[str]]) -> List[List[str]]:
     if not keep_cols:
         return []
 
-    return [[row[idx] for idx in keep_cols] for row in meaningful_rows]
+    cleaned = [[row[idx] for idx in keep_cols] for row in meaningful_rows]
+    if not cleaned or not cleaned[0]:
+        return cleaned
+
+    # Drop duplicate columns where the header and all cell values match
+    seen_signatures = set()
+    keep_dedup: List[int] = []
+    for col_idx in range(len(cleaned[0])):
+        header = (cleaned[0][col_idx] or "").strip().lower()
+        column_values = tuple((row[col_idx] or "").strip() for row in cleaned[1:])
+        signature = (header, column_values)
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        keep_dedup.append(col_idx)
+
+    if len(keep_dedup) == len(cleaned[0]):
+        return cleaned
+
+    return [[row[idx] for idx in keep_dedup] for row in cleaned]
 
 
 def _table_to_grid(table: Table) -> List[List[str]]:
