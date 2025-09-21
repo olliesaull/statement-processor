@@ -59,6 +59,18 @@ REDIRECT_URI = "https://cloudcathode.com/callback" if STAGE == "prod" else "http
 # Keep the pool small to avoid overwhelming Textract and our app.
 _executor = ThreadPoolExecutor(max_workers=2)
 
+
+def _set_active_tenant(tenant_id: Optional[str]) -> None:
+    """Persist the selected tenant in the session."""
+    tenants = session.get("xero_tenants", []) or []
+    tenant_map = {t.get("tenantId"): t for t in tenants if t.get("tenantId")}
+    if tenant_id and tenant_id in tenant_map:
+        session["xero_tenant_id"] = tenant_id
+        session["xero_tenant_name"] = tenant_map[tenant_id].get("tenantName")
+    else:
+        session.pop("xero_tenant_id", None)
+        session.pop("xero_tenant_name", None)
+
 FIELD_DESCRIPTIONS: Dict[str, str] = {
     "amount_due": (
         "One or more statement columns that represent the running balance for a line. "
@@ -97,6 +109,11 @@ def ignore_favicon():
 @route_handler_logging
 def contacts():
     """List tenant contacts; on POST, echo the selected contact ID to logs."""
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        session["tenant_error"] = "Please select a tenant to view contacts."
+        return redirect(url_for("index"))
+
     contacts_list = sorted(get_contacts(), key=lambda c: c["name"].casefold())
 
     if request.method == "POST":
@@ -114,6 +131,11 @@ def contacts():
 @route_handler_logging
 def upload_statements():
     """Upload one or more PDF statements and register them for processing."""
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        session["tenant_error"] = "Please select a tenant before uploading statements."
+        return redirect(url_for("index"))
+
     contacts_list = sorted(get_contacts(), key=lambda c: c["name"].casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     success_count: Optional[int] = None
@@ -128,9 +150,6 @@ def upload_statements():
         elif len(files) != len(names):
             logger.info("Each statement must have a contact selected.")
         else:
-            # Create statement identifier etc
-            tenant_id = session.get("xero_tenant_id")
-
             for f, contact in zip(files, names):
                 if not contact.strip():
                     logger.info("Missing contact", filename=f.filename)
@@ -181,6 +200,11 @@ def upload_statements():
 @xero_token_required
 @route_handler_logging
 def statements():
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        session["tenant_error"] = "Please select a tenant to view statements."
+        return redirect(url_for("index"))
+
     return render_template("statements.html", incomplete_statements=get_incomplete_statements())
 
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
@@ -188,6 +212,9 @@ def statements():
 @route_handler_logging
 def statement(statement_id: str):
     tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        session["tenant_error"] = "Please select a tenant to view statements."
+        return redirect(url_for("index"))
 
     route_key = f"{tenant_id}/{statement_id}"
     json_statement_key = f"{route_key}.json"
@@ -271,18 +298,102 @@ def statement(statement_id: str):
 @app.route("/")
 @route_handler_logging
 def index():
-    return render_template("index.html")
+    tenants = session.get("xero_tenants") or []
+    active_tenant_id = session.get("xero_tenant_id")
+    message = session.pop("tenant_message", None)
+    error = session.pop("tenant_error", None)
+
+    active_tenant = next((t for t in tenants if t.get("tenantId") == active_tenant_id), None)
+
+    return render_template(
+        "index.html",
+        tenants=tenants,
+        active_tenant_id=active_tenant_id,
+        active_tenant=active_tenant,
+        message=message,
+        error=error,
+        is_authenticated=bool(session.get("access_token")),
+    )
+
+
+@app.route("/tenants/select", methods=["POST"])
+@xero_token_required
+@route_handler_logging
+def select_tenant():
+    tenant_id = (request.form.get("tenant_id") or "").strip()
+    tenants = session.get("xero_tenants") or []
+
+    if tenant_id and any(t.get("tenantId") == tenant_id for t in tenants):
+        _set_active_tenant(tenant_id)
+        tenant_name = session.get("xero_tenant_name") or tenant_id
+        session["tenant_message"] = f"Switched to tenant: {tenant_name}."
+    else:
+        session["tenant_error"] = "Unable to select tenant. Please try again."
+
+    return redirect(url_for("index"))
+
+
+@app.route("/tenants/disconnect", methods=["POST"])
+@xero_token_required
+@route_handler_logging
+def disconnect_tenant():
+    tenant_id = (request.form.get("tenant_id") or "").strip()
+    tenants = session.get("xero_tenants") or []
+    tenant = next((t for t in tenants if t.get("tenantId") == tenant_id), None)
+
+    if not tenant:
+        session["tenant_error"] = "Tenant not found in session."
+        return redirect(url_for("index"))
+
+    connection_id = tenant.get("connectionId")
+    access_token = session.get("access_token")
+
+    if connection_id and access_token:
+        try:
+            resp = requests.delete(
+                f"https://api.xero.com/connections/{connection_id}",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=20,
+            )
+            if resp.status_code not in (200, 204):
+                logger.info(
+                    "Failed to disconnect tenant",
+                    tenant_id=tenant_id,
+                    status_code=resp.status_code,
+                    body=resp.text,
+                )
+                session["tenant_error"] = "Unable to disconnect tenant from Xero."
+                return redirect(url_for("index"))
+        except Exception as exc:
+            logger.info("Exception disconnecting tenant", tenant_id=tenant_id, error=exc)
+            session["tenant_error"] = "An error occurred while disconnecting the tenant."
+            return redirect(url_for("index"))
+
+    # Remove tenant locally regardless (in case it was already disconnected)
+    updated = [t for t in tenants if t.get("tenantId") != tenant_id]
+    session["xero_tenants"] = updated
+
+    if session.get("xero_tenant_id") == tenant_id:
+        next_tenant_id = updated[0]["tenantId"] if updated else None
+        _set_active_tenant(next_tenant_id)
+
+    session["tenant_message"] = "Tenant disconnected."
+    return redirect(url_for("index"))
 
 @app.route("/configs", methods=["GET", "POST"])
 @xero_token_required
 @route_handler_logging
 def configs():
     """View and edit contact-specific mapping configuration."""
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        session["tenant_error"] = "Please select a tenant before configuring mappings."
+        return redirect(url_for("index"))
+
     # List contacts for dropdown
     contacts_list = sorted(get_contacts(), key=lambda c: c["name"].casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
 
-    tenant_id = session.get("xero_tenant_id")
 
     selected_contact_name: Optional[str] = None
     selected_contact_id: Optional[str] = None
@@ -453,9 +564,28 @@ def callback():
     if not connections:
         logger.error("No Xero connections found for this user.", error_code=400)
         return "No Xero connections found for this user.", 400
-    
-    # pick the first active tenant (or filter by 'tenantType' as you prefer)
-    session["xero_tenant_id"] = connections[0]["tenantId"]
+
+    tenants = [
+        {
+            "tenantId": conn.get("tenantId"),
+            "tenantName": conn.get("tenantName"),
+            "tenantType": conn.get("tenantType"),
+            "connectionId": conn.get("id"),
+        }
+        for conn in connections
+        if conn.get("tenantId")
+    ]
+
+    session["xero_tenants"] = tenants
+
+    current = session.get("xero_tenant_id")
+    tenant_ids = [t["tenantId"] for t in tenants]
+    if current in tenant_ids:
+        _set_active_tenant(current)
+    elif tenant_ids:
+        _set_active_tenant(tenant_ids[0])
+    else:
+        _set_active_tenant(None)
 
     # Clear state after successful exchange
     session.pop("oauth_state", None)

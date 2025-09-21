@@ -1,1 +1,73 @@
 {% extends "base.html" %}
+
+{% block content %}
+<div class="py-4">
+  {% if is_authenticated %}
+    <h1 class="mb-4">Tenant Management</h1>
+  {% endif %}
+
+  {% if message %}
+    <div class="alert alert-success" role="alert">{{ message }}</div>
+  {% endif %}
+  {% if error %}
+    <div class="alert alert-danger" role="alert">{{ error }}</div>
+  {% endif %}
+
+  {% if not is_authenticated %}
+    <p class="mb-3">Login with Xero to start processing statements.</p>
+    <a class="btn btn-primary" href="{{ url_for('login') }}">Login with Xero</a>
+  {% else %}
+    <div class="d-flex flex-wrap gap-2 mb-4">
+      <a class="btn btn-primary" href="{{ url_for('login') }}">Add Tenant</a>
+      {% if active_tenant %}
+        <span class="align-self-center">Current tenant: <strong>{{ active_tenant.tenantName or active_tenant.tenantId }}</strong></span>
+      {% endif %}
+    </div>
+
+    {% if tenants %}
+      <div class="table-responsive">
+        <table class="table table-bordered align-middle">
+          <thead class="table-light">
+            <tr>
+              <th scope="col">Tenant Name</th>
+              <th scope="col" class="text-center">Status</th>
+              <th scope="col" class="text-center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for tenant in tenants %}
+              {% set is_active = tenant.tenantId == active_tenant_id %}
+              <tr>
+                <td>{{ tenant.tenantName or tenant.tenantId }}</td>
+                <td class="text-center">
+                  {% if is_active %}
+                    <span class="badge bg-success">Active</span>
+                  {% else %}
+                    <span class="text-muted">Inactive</span>
+                  {% endif %}
+                </td>
+                <td class="text-center">
+                  <div class="d-flex justify-content-center gap-2">
+                    {% if not is_active %}
+                      <form method="post" action="{{ url_for('select_tenant') }}">
+                        <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
+                        <button class="btn btn-outline-primary btn-sm" type="submit">Select</button>
+                      </form>
+                    {% endif %}
+                    <form method="post" action="{{ url_for('disconnect_tenant') }}">
+                      <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
+                      <button class="btn btn-outline-danger btn-sm" type="submit">Disconnect</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p>No tenants connected yet. Use the button above to add one.</p>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

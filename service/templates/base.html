@@ -25,6 +25,10 @@
                 <ul class="navbar-nav ms-auto">
                     {% if session.get('access_token') and session.get('xero_tenant_id') %}
                     <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}"
+                            href="{{ url_for('index') }}">Home</a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'upload_statements' %}active{% endif %}"
                             href="{{ url_for('upload_statements') }}">Upload Statements</a>
                     </li>
