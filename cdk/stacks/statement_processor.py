@@ -54,6 +54,13 @@ class StatementProcessorStack(Stack):
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
+        # Allows filtering statements on whether they are marked as completed or not
+        tenant_statements_table.add_global_secondary_index(
+            index_name="TenantIDCompletedIndex",
+            partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="Completed", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
 
         tenant_contacts_config_table = dynamodb.Table(
             self, TENANT_CONTACTS_CONFIG_TABLE_NAME,

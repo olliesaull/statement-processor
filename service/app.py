@@ -256,7 +256,7 @@ def statement(statement_id: str):
     json_statement_key = f"{route_key}.json"
 
     contact_id = record.get("ContactID")
-    is_completed = record.get("Completed") is True
+    is_completed = str(record.get("Completed", "")).lower() == "true"
     try:
         data, _ = fetch_json_statement(
             tenant_id=tenant_id,

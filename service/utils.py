@@ -38,21 +38,15 @@ from core.textract_statement import run_textraction
 from core.transform import equal
 
 
-def _is_statement_completed(item: Dict[str, Any]) -> bool:
-    """Return True when a DynamoDB statement record is marked as completed."""
-    if not item:
-        return False
-    return item.get("Completed") is True
-
-
-def _fetch_statements_for_tenant(tenant_id: Optional[str]) -> List[Dict[str, Any]]:
-    """Fetch all statement records for the provided tenant ID."""
+def _query_statements_by_completed(tenant_id: Optional[str], completed_value: str) -> List[Dict[str, Any]]:
+    """Query statements for a tenant filtered by the Completed flag via GSI."""
     if not tenant_id:
         return []
 
     items: List[Dict[str, Any]] = []
     kwargs: Dict[str, Any] = {
-        "KeyConditionExpression": Key("TenantID").eq(tenant_id),
+        "IndexName": "TenantIDCompletedIndex",
+        "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("Completed").eq(completed_value),
     }
 
     while True:
@@ -436,15 +430,13 @@ def get_contact_for_statement(tenant_id: str, statement_id: str) -> Optional[str
 def get_incomplete_statements() -> List[Dict[str, Any]]:
     """Return statements for the active tenant that are not completed."""
     tenant_id = session.get("xero_tenant_id")
-    records = _fetch_statements_for_tenant(tenant_id)
-    return [item for item in records if not _is_statement_completed(item)]
+    return _query_statements_by_completed(tenant_id, "false")
 
 
 def get_completed_statements() -> List[Dict[str, Any]]:
     """Return statements for the active tenant that are marked completed."""
     tenant_id = session.get("xero_tenant_id")
-    records = _fetch_statements_for_tenant(tenant_id)
-    return [item for item in records if _is_statement_completed(item)]
+    return _query_statements_by_completed(tenant_id, "true")
 
 
 def mark_statement_completed(tenant_id: str, statement_id: str, completed: bool) -> None:
@@ -454,13 +446,9 @@ def mark_statement_completed(tenant_id: str, statement_id: str, completed: bool)
             "TenantID": tenant_id,
             "StatementID": statement_id,
         },
-        UpdateExpression="SET #completed = :true",
-        ExpressionAttributeNames={
-            "#completed": "Completed",
-        },
-        ExpressionAttributeValues={
-            ":true": bool(completed),
-        },
+        UpdateExpression="SET #completed = :completed",
+        ExpressionAttributeNames={"#completed": "Completed"},
+        ExpressionAttributeValues={":completed": "true" if completed else "false"},
         ConditionExpression=Attr("StatementID").exists(),
     )
 
@@ -472,6 +460,7 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
         "OriginalStatementFilename": entry["statement_name"],
         "ContactID": entry["contact_id"],
         "ContactName": entry["contact_name"],
+        "Completed": "false",
     }
     try:
         # Ensure we don't overwrite an existing statement for this tenant.
