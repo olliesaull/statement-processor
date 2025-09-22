@@ -1,11 +1,17 @@
 {% extends "base.html" %}
-{% block title %}Incomplete Statements{% endblock %}
+{% block title %}{{ 'Completed' if show_completed else 'Incomplete' }} Statements{% endblock %}
 
 {% block content %}
   <div class="container mt-5">
-    <h1 class="mb-4">Incomplete Statements</h1>
+    <h1 class="mb-4">{{ 'Completed Statements' if show_completed else 'Incomplete Statements' }}</h1>
 
-    {% if incomplete_statements %}
+    {% if message %}
+      <div class="alert alert-success" role="alert">
+        {{ message }}
+      </div>
+    {% endif %}
+
+    {% if statements %}
       <table class="table table-striped table-bordered align-middle">
         <thead class="table-light">
           <tr>
@@ -15,7 +21,7 @@
           </tr>
         </thead>
         <tbody>
-          {% for stmt in incomplete_statements %}
+          {% for stmt in statements %}
             <tr>
               <td>{{ stmt["ContactName"] }}</td>
               <td>{{ stmt["OriginalStatementFilename"] }}</td>
@@ -31,8 +37,16 @@
       </table>
     {% else %}
       <div class="alert alert-info">
-        No incomplete statements found.
+        No {{ 'completed' if show_completed else 'incomplete' }} statements found.
       </div>
     {% endif %}
+
+    <div class="d-flex justify-content-end gap-2 mt-4">
+      {% if show_completed %}
+        <a href="{{ url_for('statements') }}" class="btn btn-secondary">View incomplete</a>
+      {% else %}
+        <a href="{{ url_for('statements', view='completed') }}" class="btn btn-outline-secondary">View completed</a>
+      {% endif %}
+    </div>
   </div>
 {% endblock %}

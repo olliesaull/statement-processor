@@ -37,6 +37,45 @@ from core.get_contact_config import get_contact_config
 from core.textract_statement import run_textraction
 from core.transform import equal
 
+
+def _is_statement_completed(item: Dict[str, Any]) -> bool:
+    """Return True when a DynamoDB statement record is marked as completed."""
+    if not item:
+        return False
+    return item.get("Completed") is True
+
+
+def _fetch_statements_for_tenant(tenant_id: Optional[str]) -> List[Dict[str, Any]]:
+    """Fetch all statement records for the provided tenant ID."""
+    if not tenant_id:
+        return []
+
+    items: List[Dict[str, Any]] = []
+    kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": Key("TenantID").eq(tenant_id),
+    }
+
+    while True:
+        resp = tenant_statements_table.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+
+    return items
+
+
+def get_statement_record(tenant_id: str, statement_id: str) -> Optional[Dict[str, Any]]:
+    """Return the full DynamoDB record for a tenant/statement pair."""
+    response = tenant_statements_table.get_item(
+        Key={
+            "TenantID": tenant_id,
+            "StatementID": statement_id,
+        }
+    )
+    return response.get("Item")
+
 # MIME/extension guards for uploads
 ALLOWED_EXTENSIONS = {".pdf", ".PDF"}
 SCOPES = [
@@ -388,41 +427,42 @@ def get_contacts() -> List[Dict[str, Any]]:
 
 def get_contact_for_statement(tenant_id: str, statement_id: str) -> Optional[str]:
     """Get the contact ID for a given statement ID."""
-    response = tenant_statements_table.get_item(
-        Key={
-            "TenantID": tenant_id,
-            "StatementID": statement_id
-        },
-        ProjectionExpression="ContactID"  # fetch only the needed attribute
-    )
-
-    item = response.get("Item")
-    if item:
-        return item.get("ContactID")
+    record = get_statement_record(tenant_id, statement_id)
+    if record:
+        return record.get("ContactID")
     return None
 
 
 def get_incomplete_statements() -> List[Dict[str, Any]]:
-    """
-    Return all statements for the given tenant where `complete` is not True
-    (i.e., either False or attribute missing).
-    """
+    """Return statements for the active tenant that are not completed."""
     tenant_id = session.get("xero_tenant_id")
-    items: List[Dict[str, Any]] = []
-    kwargs = {
-        "KeyConditionExpression": Key("TenantID").eq(tenant_id),
-        "FilterExpression": Attr("complete").not_exists() | Attr("complete").eq(False),
-    }
+    records = _fetch_statements_for_tenant(tenant_id)
+    return [item for item in records if not _is_statement_completed(item)]
 
-    while True:
-        resp = tenant_statements_table.query(**kwargs)
-        items.extend(resp.get("Items", []))
-        lek = resp.get("LastEvaluatedKey")
-        if not lek:
-            break
-        kwargs["ExclusiveStartKey"] = lek
 
-    return items
+def get_completed_statements() -> List[Dict[str, Any]]:
+    """Return statements for the active tenant that are marked completed."""
+    tenant_id = session.get("xero_tenant_id")
+    records = _fetch_statements_for_tenant(tenant_id)
+    return [item for item in records if _is_statement_completed(item)]
+
+
+def mark_statement_completed(tenant_id: str, statement_id: str, completed: bool) -> None:
+    """Persist a completion flag on the statement record in DynamoDB."""
+    tenant_statements_table.update_item(
+        Key={
+            "TenantID": tenant_id,
+            "StatementID": statement_id,
+        },
+        UpdateExpression="SET #completed = :true",
+        ExpressionAttributeNames={
+            "#completed": "Completed",
+        },
+        ExpressionAttributeValues={
+            ":true": bool(completed),
+        },
+        ConditionExpression=Attr("StatementID").exists(),
+    )
 
 
 def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:

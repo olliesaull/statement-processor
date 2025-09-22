@@ -26,14 +26,16 @@ from utils import (
     build_right_rows,
     build_row_matches,
     fetch_json_statement,
-    get_contact_for_statement,
+    get_completed_statements,
     get_contacts,
     get_statement_date_format_from_config,
     get_credit_notes_by_contact,
     get_incomplete_statements,
     get_invoices_by_contact,
+    get_statement_record,
     guess_statement_item_type,
     is_allowed_pdf,
+    mark_statement_completed,
     match_invoices_to_statement_items,
     prepare_display_mappings,
     route_handler_logging,
@@ -205,7 +207,17 @@ def statements():
         session["tenant_error"] = "Please select a tenant to view statements."
         return redirect(url_for("index"))
 
-    return render_template("statements.html", incomplete_statements=get_incomplete_statements())
+    view = request.args.get("view", "incomplete").lower()
+    show_completed = view == "completed"
+    statement_rows = get_completed_statements() if show_completed else get_incomplete_statements()
+    message = session.pop("statements_message", None)
+
+    return render_template(
+        "statements.html",
+        statements=statement_rows,
+        show_completed=show_completed,
+        message=message,
+    )
 
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @xero_token_required
@@ -216,10 +228,35 @@ def statement(statement_id: str):
         session["tenant_error"] = "Please select a tenant to view statements."
         return redirect(url_for("index"))
 
+    record = get_statement_record(tenant_id, statement_id)
+    if not record:
+        abort(404)
+
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action in {"mark_complete", "mark_incomplete"}:
+            completed_flag = action == "mark_complete"
+            try:
+                mark_statement_completed(tenant_id, statement_id, completed_flag)
+                session["statements_message"] = (
+                    "Statement marked as complete." if completed_flag else "Statement marked as incomplete."
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.info(
+                    "Failed to toggle statement completion",
+                    statement_id=statement_id,
+                    tenant_id=tenant_id,
+                    desired_state=completed_flag,
+                    error=exc,
+                )
+                abort(500)
+            return redirect(url_for("statements"))
+
     route_key = f"{tenant_id}/{statement_id}"
     json_statement_key = f"{route_key}.json"
 
-    contact_id = get_contact_for_statement(tenant_id, statement_id)
+    contact_id = record.get("ContactID")
+    is_completed = record.get("Completed") is True
     try:
         data, _ = fetch_json_statement(
             tenant_id=tenant_id,
@@ -232,6 +269,7 @@ def statement(statement_id: str):
             "statement.html",
             statement_id=statement_id,
             is_processing=True,
+            is_completed=is_completed,
         )
 
     # 1) Parse display configuration and left-side rows
@@ -288,6 +326,7 @@ def statement(statement_id: str):
         "statement.html",
         statement_id=statement_id,
         is_processing=False,
+        is_completed=is_completed,
         raw_statement_headers=display_headers,
         raw_statement_rows=[[r[h] for h in display_headers] for r in rows_by_header],
         item_number_header=item_number_header,
