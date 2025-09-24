@@ -61,6 +61,13 @@ class StatementProcessorStack(Stack):
             sort_key=dynamodb.Attribute(name="Completed", type=dynamodb.AttributeType.STRING),
             projection_type=dynamodb.ProjectionType.ALL,
         )
+        # Allows storing data for each item on a given statement
+        tenant_statements_table.add_global_secondary_index(
+            index_name="TenantIDStatementItemIDIndex",
+            partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="StatementItemID", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
 
         tenant_contacts_config_table = dynamodb.Table(
             self, TENANT_CONTACTS_CONFIG_TABLE_NAME,

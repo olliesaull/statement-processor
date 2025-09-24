@@ -2,6 +2,7 @@ import re
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 from config import logger
 from core.date_utils import parse_with_format
@@ -19,6 +20,12 @@ _SUMMARY_KEYWORDS = (
     "due",
     "statement total",
 )
+
+
+def _generate_statement_item_id(statement_id: Optional[str], sequence: int) -> str:
+    if statement_id:
+        return f"{statement_id}#item-{sequence:04d}"
+    return f"stmt-item-{uuid4().hex[:12]}-{sequence:04d}"
 
 
 def _normalize_table_cell(cell: Any) -> str:
@@ -227,11 +234,26 @@ def row_is_summary_like(raw_row: List[str], mapped_item: Dict[str, Any]) -> bool
     money_count = sum(1 for cell in raw_cells if _looks_money(cell))
 
     def _iter_amount_like_values(values: Any) -> List[str]:
+        results: List[str] = []
         if isinstance(values, (list, tuple)):
-            return [str(v) for v in values if str(v or "").strip()]
+            for entry in values:
+                if isinstance(entry, dict):
+                    candidate = entry.get("value")
+                elif hasattr(entry, "value"):
+                    candidate = getattr(entry, "value")
+                else:
+                    candidate = entry
+                if str(candidate or "").strip():
+                    results.append(str(candidate))
+            return results
+        if isinstance(values, dict):
+            for val in values.values():
+                if str(val or "").strip():
+                    results.append(str(val))
+            return results
         if str(values or "").strip():
-            return [str(values)]
-        return []
+            results.append(str(values))
+        return results
 
     amount_like_values: List[str] = []
     for field_name in ("amount_due", "total", "amount_paid", "amount_credited"):
@@ -285,7 +307,13 @@ def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], can
     return selected
 
 
-def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: str, contact_id: str) -> Dict[str, Any]:
+def table_to_json(
+    key: str,
+    tables_with_pages: List[Dict[str, Any]],
+    tenant_id: str,
+    contact_id: str,
+    statement_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Produce canonical dict (validated by Pydantic)."""
     map_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
 
@@ -313,7 +341,11 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
         raise ValueError("statement_date_format must be configured for this contact")
     # Limit simple fields to those supported by StatementItem (exclude special handled keys)
     # Exclude 'statement_date_format' so it is never treated as a header mapping.
-    allowed_fields = set(StatementItem.model_fields.keys()) - {"raw", "statement_date_format"}
+    allowed_fields = set(StatementItem.model_fields.keys()) - {
+        "raw",
+        "statement_date_format",
+        "statement_item_id",
+    }
     for field, value in items_template.items():
         if field == "raw" and isinstance(value, dict):
             raw_map = value
@@ -336,6 +368,7 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
     selected = select_relevant_tables_per_page(tables_with_pages, candidates=candidates)
 
     items: List[StatementItem] = []
+    item_counter = 0
     for entry in selected:
         grid = entry["grid"]
         grid = _dedupe_grid_columns(grid)
@@ -374,23 +407,14 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
                 error=e,
             )
 
-        # Resolve candidate column indices for amount_due (handle duplicate headers like 'AMOUNT')
-        amount_cols: List[int] = []
-        amount_col_labels: Dict[int, str] = {}
-        if amount_due_candidates:
-            cand_norm = {norm(h) for h in amount_due_candidates if h}
-            for i, h in enumerate(header_row):
-                if norm(h) in cand_norm:
-                    amount_cols.append(i)
-                    amount_col_labels[i] = header_row[i]
-        # Fallback: try common synonyms if none configured or none matched
-        if not amount_cols:
-            common_amt = {"amount", "debit", "credit", "debitamount", "creditamount", "value", "total"}
-            for i, h in enumerate(header_row):
-                hn = norm(h).replace(" ", "")
-                if hn in common_amt:
-                    amount_cols.append(i)
-                    amount_col_labels.setdefault(i, header_row[i])
+        # Resolve amount_due entries strictly from configured headers
+        configured_amount_headers: List[Tuple[Optional[int], str]] = []
+        for cand in amount_due_candidates:
+            clean = cand.strip()
+            if not clean:
+                continue
+            idx = col_index.get(norm(clean))
+            configured_amount_headers.append((idx, clean))
 
         for i_row, r in enumerate(data_rows, start=1):
             if not any((c or "").strip() for c in r):
@@ -398,6 +422,7 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
 
             # start from template dict (but we’ll build StatementItem)
             row_obj: Dict[str, Any] = deepcopy(items_template)
+            row_obj.pop("statement_item_id", None)
 
             # Surface the statement date format explicitly for downstream consumers
             row_obj["statement_date_format"] = date_format
@@ -443,39 +468,50 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
                 extracted_raw[canonical_header] = {"header": canonical_header, "value": val}
             row_obj["raw"] = raw_obj
 
-            # Map amount_due when configured as multiple candidate headers or if we found amount columns
-            picked_amount: Optional[str] = None
-            picked_idx: Optional[int] = None
-            if amount_cols:
-                # Prefer the rightmost numeric-looking value among candidate columns
-                vals = [(i, (r[i] if i < len(r) else "")) for i in amount_cols]
-                # First pass: numeric-looking values
-                numeric_vals = [(i, v) for i, v in vals if _looks_money(v)]
-                if numeric_vals:
-                    picked_idx, picked_amount = numeric_vals[-1]
+            # Map amount_due using configured headers only (e.g., debit/credit columns)
+            amount_entries: Dict[str, Any] = {}
+
+            def _resolve_header(idx: Optional[int], fallback: str) -> str:
+                if idx is not None and idx < len(header_row):
+                    candidate_header = header_row[idx] or ""
                 else:
-                    # Fallback: last non-empty among candidates
-                    non_empty = [(i, v) for i, v in vals if str(v or "").strip()]
-                    if non_empty:
-                        picked_idx, picked_amount = non_empty[-1]
-            # If we picked an amount, record it in amount_due as a single-entry list
-            if picked_amount is not None and str(picked_amount).strip():
-                row_obj["amount_due"] = [picked_amount]
-                header_label = ""
-                if picked_idx is not None:
-                    if picked_idx < len(header_row):
-                        header_label = header_row[picked_idx] or ""
-                    if not header_label:
-                        header_label = amount_col_labels.get(picked_idx, "") or ""
-                header_label = (header_label or (amount_due_candidates[0] if amount_due_candidates else "")).strip()
-                extracted_simple["amount_due"] = {"header": header_label, "value": picked_amount}
-                # Also surface into raw if not present and we can name the column
-                try:
-                    if "raw" in row_obj and isinstance(row_obj["raw"], dict):
-                        if header_label:
-                            row_obj["raw"].setdefault(str(header_label), picked_amount)
-                except Exception:
-                    pass
+                    candidate_header = ""
+                candidate_header = candidate_header or fallback or ""
+                return candidate_header.strip()
+
+            for idx, configured_label in configured_amount_headers:
+                header_label = _resolve_header(idx, configured_label)
+                value = get_by_header(r, col_index, configured_label)
+                label_key = header_label or configured_label
+                if label_key:
+                    amount_entries[label_key] = value
+
+            row_obj["amount_due"] = amount_entries
+
+            primary_entry_value: Optional[Any] = None
+            primary_entry_label: str = ""
+            for label, val in amount_entries.items():
+                if str(val or "").strip():
+                    primary_entry_label = label
+                    primary_entry_value = val
+                    break
+            if primary_entry_value is None and amount_entries:
+                primary_entry_label, primary_entry_value = next(iter(amount_entries.items()))
+
+            if primary_entry_label:
+                extracted_simple["amount_due"] = {
+                    "header": primary_entry_label,
+                    "value": primary_entry_value or "",
+                }
+
+            # Surface all amount entries into raw for completeness (without overwriting existing values)
+            try:
+                if "raw" in row_obj and isinstance(row_obj["raw"], dict):
+                    for label, val in amount_entries.items():
+                        if isinstance(label, str) and label.strip():
+                            row_obj["raw"].setdefault(label, val)
+            except Exception:
+                pass
 
             # Ensure raw contains the simple-mapped headers/values (preserve original case)
             try:
@@ -496,13 +532,17 @@ def table_to_json(key: str, tables_with_pages: List[Dict[str, Any]], tenant_id: 
             if row_is_summary_like(r, row_obj):
                 continue
 
+            item_counter += 1
+            row_obj["statement_item_id"] = _generate_statement_item_id(statement_id, item_counter)
+
             # validate to canonical StatementItem
             try:
                 si = StatementItem(**row_obj)
                 items.append(si)
                 fields_logged = {k: getattr(si, k) for k in simple_map.keys()}
-                if getattr(si, "amount_due", None):
-                    fields_logged["amount_due"] = getattr(si, "amount_due")
+                amount_components = getattr(si, "amount_due", None)
+                if amount_components:
+                    fields_logged["amount_due"] = dict(amount_components)
             except Exception as e:
                 logger.info(
                     "[table_to_json] validation error",

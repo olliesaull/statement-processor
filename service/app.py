@@ -497,11 +497,13 @@ def configs():
         flat.update(nested)
         if isinstance(cfg, dict):
             for k, v in cfg.items():
-                if k in StatementItem.model_fields and k != "raw":
+                if k in StatementItem.model_fields and k not in {"raw", "statement_item_id"}:
                     flat[k] = v
 
         # Canonical field order from the Pydantic model
-        canonical_order = [f for f in StatementItem.model_fields.keys() if f != "raw"]
+        canonical_order = [
+            f for f in StatementItem.model_fields.keys() if f not in {"raw", "statement_item_id"}
+        ]
 
         rows: List[Dict[str, Any]] = []
         for f in canonical_order:
