@@ -35,11 +35,14 @@ from utils import (
     get_incomplete_statements,
     get_invoices_by_contact,
     get_statement_record,
+    get_statement_item_status_map,
     guess_statement_item_type,
     is_allowed_pdf,
     mark_statement_completed,
     match_invoices_to_statement_items,
     prepare_display_mappings,
+    set_all_statement_items_completed,
+    set_statement_item_completed,
     route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
@@ -234,12 +237,26 @@ def statement(statement_id: str):
     if not record:
         abort(404)
 
+    items_view = (request.values.get("items_view") or "incomplete").strip().lower()
+    if items_view not in {"incomplete", "completed", "all"}:
+        items_view = "incomplete"
+
     if request.method == "POST":
         action = request.form.get("action")
         if action in {"mark_complete", "mark_incomplete"}:
             completed_flag = action == "mark_complete"
             try:
                 mark_statement_completed(tenant_id, statement_id, completed_flag)
+                try:
+                    set_all_statement_items_completed(tenant_id, statement_id, completed_flag)
+                except Exception as exc:
+                    logger.info(
+                        "Failed to toggle all statement items",
+                        statement_id=statement_id,
+                        tenant_id=tenant_id,
+                        desired_state=completed_flag,
+                        error=exc,
+                    )
                 session["statements_message"] = (
                     "Statement marked as complete." if completed_flag else "Statement marked as incomplete."
                 )
@@ -253,6 +270,29 @@ def statement(statement_id: str):
                 )
                 abort(500)
             return redirect(url_for("statements"))
+
+        elif action in {"complete_item", "incomplete_item"}:
+            statement_item_id = (request.form.get("statement_item_id") or "").strip()
+            if statement_item_id:
+                desired_state = action == "complete_item"
+                try:
+                    set_statement_item_completed(tenant_id, statement_item_id, desired_state)
+                except Exception as exc:
+                    logger.info(
+                        "Failed to toggle statement item completion",
+                        statement_id=statement_id,
+                        statement_item_id=statement_item_id,
+                        tenant_id=tenant_id,
+                        desired_state=desired_state,
+                        error=exc,
+                    )
+            return redirect(
+                url_for(
+                    "statement",
+                    statement_id=statement_id,
+                    items_view=items_view,
+                )
+            )
 
     route_key = f"{tenant_id}/{statement_id}"
     json_statement_key = f"{route_key}.json"
@@ -272,6 +312,12 @@ def statement(statement_id: str):
             statement_id=statement_id,
             is_processing=True,
             is_completed=is_completed,
+            items_view=items_view,
+            incomplete_count=0,
+            completed_count=0,
+            all_statement_rows=[],
+            statement_rows=[],
+            raw_statement_headers=[],
         )
 
     # 1) Parse display configuration and left-side rows
@@ -370,16 +416,49 @@ def statement(statement_id: str):
         response.headers["Content-Disposition"] = f"attachment; filename=statement_{statement_id}.csv"
         return response
 
+    item_status_map = get_statement_item_status_map(tenant_id, statement_id)
+
+    statement_rows: List[Dict[str, Any]] = []
+    for idx, left_row in enumerate(rows_by_header):
+        item = items[idx] if idx < len(items) else {}
+        statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
+        is_item_completed = False
+        if statement_item_id:
+            is_item_completed = item_status_map.get(statement_item_id, False)
+
+        right_row_dict = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
+
+        statement_rows.append(
+            {
+                "statement_item_id": statement_item_id,
+                "left_values": [left_row.get(h, "") for h in display_headers],
+                "right_values": [right_row_dict.get(h, "") for h in display_headers],
+                "matches": row_matches[idx] if idx < len(row_matches) else False,
+                "is_completed": is_item_completed,
+            }
+        )
+
+    completed_count = sum(1 for row in statement_rows if row["is_completed"])
+    incomplete_count = len(statement_rows) - completed_count
+
+    if items_view == "completed":
+        visible_rows = [row for row in statement_rows if row["is_completed"]]
+    elif items_view == "incomplete":
+        visible_rows = [row for row in statement_rows if not row["is_completed"]]
+    else:
+        visible_rows = statement_rows
+
     return render_template(
         "statement.html",
         statement_id=statement_id,
         is_processing=False,
         is_completed=is_completed,
         raw_statement_headers=display_headers,
-        raw_statement_rows=[[r[h] for h in display_headers] for r in rows_by_header],
-        item_number_header=item_number_header,
-        right_rows_by_header=right_rows_by_header,
-        row_matches=row_matches,
+        statement_rows=visible_rows,
+        all_statement_rows=statement_rows,
+        completed_count=completed_count,
+        incomplete_count=incomplete_count,
+        items_view=items_view,
     )
 
 @app.route("/")

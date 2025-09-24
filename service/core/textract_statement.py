@@ -55,24 +55,43 @@ def _persist_statement_items(
         return
 
     keys_to_delete: List[str] = []
+    existing_status: Dict[str, bool] = {}
     query_kwargs: Dict[str, Any] = {
         "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("StatementID").begins_with(
             f"{statement_id}#item-"
         ),
-        "ProjectionExpression": "StatementID",
+        "ProjectionExpression": "#sid, #completed",
+        "ExpressionAttributeNames": {"#sid": "StatementID", "#completed": "Completed"},
     }
 
     while True:
         resp = tenant_statements_table.query(**query_kwargs)
-        keys_to_delete.extend(
-            it.get("StatementID")
-            for it in resp.get("Items", [])
-            if isinstance(it, dict) and it.get("StatementID")
-        )
+        for it in resp.get("Items", []):
+            if not isinstance(it, dict):
+                continue
+            sid = it.get("StatementID")
+            if not sid:
+                continue
+            keys_to_delete.append(sid)
+            completed_val = str(it.get("Completed", "false")).strip().lower()
+            existing_status[sid] = completed_val == "true"
         lek = resp.get("LastEvaluatedKey")
         if not lek:
             break
         query_kwargs["ExclusiveStartKey"] = lek
+
+    try:
+        header_resp = tenant_statements_table.get_item(
+            Key={"TenantID": tenant_id, "StatementID": statement_id}
+        )
+        header_item = header_resp.get("Item") if isinstance(header_resp, dict) else None
+        header_completed = (
+            str(header_item.get("Completed", "false")).strip().lower() == "true"
+            if header_item
+            else False
+        )
+    except Exception:
+        header_completed = False
 
     if keys_to_delete:
         with tenant_statements_table.batch_writer() as batch:
@@ -103,6 +122,9 @@ def _persist_statement_items(
                 "StatementItemID": item_id,
                 "ParentStatementID": statement_id,
                 "RecordType": "statement_item",
+                "Completed": "true"
+                if existing_status.get(item_id, header_completed)
+                else "false",
             }
             if contact_id:
                 record["ContactID"] = contact_id

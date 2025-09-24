@@ -4,11 +4,29 @@
 {% block content %}
   <div class="container mt-4">
     <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
-      <h1 class="mb-0">Statement {{ statement_id }}</h1>
+      <div>
+        <h1 class="mb-2 mb-md-0">Statement {{ statement_id }}</h1>
+        {% if not is_processing %}
+          <div class="btn-group" role="group" aria-label="Filter statement items">
+            <a
+              class="btn btn-sm {% if items_view == 'incomplete' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+              href="{{ url_for('statement', statement_id=statement_id, items_view='incomplete') }}"
+            >Incomplete ({{ incomplete_count }})</a>
+            <a
+              class="btn btn-sm {% if items_view == 'completed' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+              href="{{ url_for('statement', statement_id=statement_id, items_view='completed') }}"
+            >Completed ({{ completed_count }})</a>
+            <a
+              class="btn btn-sm {% if items_view == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+              href="{{ url_for('statement', statement_id=statement_id, items_view='all') }}"
+            >All ({{ all_statement_rows|length }})</a>
+          </div>
+        {% endif %}
+      </div>
       {% if not is_processing %}
         <a
           class="btn btn-outline-primary"
-          href="{{ url_for('statement', statement_id=statement_id, download='csv') }}"
+          href="{{ url_for('statement', statement_id=statement_id, download='csv', items_view=items_view) }}"
         >Download CSV</a>
       {% endif %}
     </div>
@@ -28,28 +46,59 @@
         <div class="col-12 col-lg-6">
           <h2>Statement Items</h2>
           <div class="table-responsive">
-            <table class="table table-striped table-bordered align-middle">
+            <table class="table table-striped table-bordered align-middle table-fixed-height">
               <thead class="table-light">
                 <tr>
                   {% for h in raw_statement_headers %}
                     <th>{{ h|capitalize }}</th>
                   {% endfor %}
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {% if raw_statement_rows %}
-                  {% for row in raw_statement_rows %}
-                    {% set idx = loop.index0 %}
-                    <tr class="{{ 'table-success' if row_matches[idx] else 'table-danger' }}">
-                      {% for h in raw_statement_headers %}
-                        <td>{{ row[loop.index0] }}</td>
+                {% if statement_rows %}
+                  {% for row in statement_rows %}
+                    {% set row_class = 'table-success' if row.matches else 'table-danger' %}
+                    {% if row.is_completed %}
+                      {% set row_class = row_class + ' opacity-75' %}
+                    {% endif %}
+                    <tr class="{{ row_class }}">
+                      {% for value in row.left_values %}
+                        <td>{{ value }}</td>
                       {% endfor %}
+                      <td class="text-center">
+                        {% if row.statement_item_id %}
+                          {% if row.is_completed %}
+                            <form method="post" class="d-inline">
+                              <input type="hidden" name="action" value="incomplete_item">
+                              <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
+                              <input type="hidden" name="items_view" value="{{ items_view }}">
+                              <button type="submit" class="btn btn-sm btn-outline-warning text-nowrap px-2 py-0">Mark incomplete</button>
+                            </form>
+                          {% else %}
+                            <form method="post" class="d-inline">
+                              <input type="hidden" name="action" value="complete_item">
+                              <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
+                              <input type="hidden" name="items_view" value="{{ items_view }}">
+                              <button type="submit" class="btn btn-sm btn-outline-success text-nowrap px-2 py-0">Mark complete</button>
+                            </form>
+                          {% endif %}
+                        {% else %}
+                          <span class="badge bg-secondary">Unavailable</span>
+                        {% endif %}
+                      </td>
                     </tr>
                   {% endfor %}
                 {% else %}
                   <tr>
-                    <td colspan="{{ raw_statement_headers|length }}" class="text-center text-muted">
-                      No raw data found.
+                    <td colspan="{{ raw_statement_headers|length + 1 }}" class="text-center text-muted">
+                      {% if items_view == 'completed' %}
+                        No completed statement items found.
+                      {% elif items_view == 'incomplete' %}
+                        No incomplete statement items found.
+                      {% else %}
+                        No statement items found.
+                      {% endif %}
                     </td>
                   </tr>
                 {% endif %}
@@ -62,7 +111,7 @@
         <div class="col-12 col-lg-6">
           <h2>Xero Items</h2>
           <div class="table-responsive">
-            <table class="table table-striped table-bordered align-middle">
+            <table class="table table-striped table-bordered align-middle table-fixed-height">
               <thead class="table-light">
                 <tr>
                   {% for h in raw_statement_headers %}
@@ -71,12 +120,15 @@
                 </tr>
               </thead>
               <tbody>
-                {% if raw_statement_rows %}
-                  {% for row in raw_statement_rows %}
-                    {% set idx = loop.index0 %}
-                    <tr class="{{ 'table-success' if row_matches[idx] else 'table-danger' }}">
-                      {% for h in raw_statement_headers %}
-                        <td>{{ right_rows_by_header[idx][h] }}</td>
+                {% if statement_rows %}
+                  {% for row in statement_rows %}
+                    {% set row_class = 'table-success' if row.matches else 'table-danger' %}
+                    {% if row.is_completed %}
+                      {% set row_class = row_class + ' opacity-75' %}
+                    {% endif %}
+                    <tr class="{{ row_class }}">
+                      {% for value in row.right_values %}
+                        <td>{{ value }}</td>
                       {% endfor %}
                     </tr>
                   {% endfor %}
@@ -93,19 +145,19 @@
         </div>
       </div>
 
-      <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mt-4">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mt-4 mb-5">
         <a href="{{ url_for('statements') }}" class="btn btn-outline-secondary">Back to statements</a>
         <div class="d-flex align-items-center gap-3">
           {% if is_completed %}
             <span class="badge bg-success fs-6">Completed</span>
             <form method="post" class="mb-0">
               <input type="hidden" name="action" value="mark_incomplete">
-              <button type="submit" class="btn btn-outline-warning">Mark incomplete</button>
+              <button type="submit" class="btn btn-outline-warning text-nowrap px-3 py-1">Mark incomplete</button>
             </form>
           {% else %}
             <form method="post" class="mb-0">
               <input type="hidden" name="action" value="mark_complete">
-              <button type="submit" class="btn btn-success">Complete Statement</button>
+              <button type="submit" class="btn btn-success text-nowrap px-3 py-1">Complete statement</button>
             </form>
           {% endif %}
         </div>

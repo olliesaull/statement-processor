@@ -47,6 +47,7 @@ def _query_statements_by_completed(tenant_id: Optional[str], completed_value: st
     kwargs: Dict[str, Any] = {
         "IndexName": "TenantIDCompletedIndex",
         "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("Completed").eq(completed_value),
+        "FilterExpression": Attr("RecordType").not_exists() | Attr("RecordType").eq("statement"),
     }
 
     while True:
@@ -453,6 +454,62 @@ def mark_statement_completed(tenant_id: str, statement_id: str, completed: bool)
     )
 
 
+def get_statement_item_status_map(tenant_id: str, statement_id: str) -> Dict[str, bool]:
+    """Return completion status for each statement item keyed by statement_item_id."""
+    if not tenant_id or not statement_id:
+        return {}
+
+    statuses: Dict[str, bool] = {}
+    prefix = f"{statement_id}#item-"
+    kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("StatementID").begins_with(prefix),
+        "ProjectionExpression": "#sid, #completed",
+        "ExpressionAttributeNames": {"#sid": "StatementID", "#completed": "Completed"},
+    }
+
+    while True:
+        resp = tenant_statements_table.query(**kwargs)
+        for item in resp.get("Items", []):
+            statement_item_id = item.get("StatementID")
+            if not statement_item_id:
+                continue
+            completed_val = str(item.get("Completed", "false")).strip().lower()
+            statuses[statement_item_id] = completed_val == "true"
+
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+
+    return statuses
+
+
+def set_statement_item_completed(tenant_id: str, statement_item_id: str, completed: bool) -> None:
+    """Toggle completion flag for a single statement item."""
+    if not tenant_id or not statement_item_id:
+        return
+
+    tenant_statements_table.update_item(
+        Key={
+            "TenantID": tenant_id,
+            "StatementID": statement_item_id,
+        },
+        UpdateExpression="SET #completed = :completed",
+        ExpressionAttributeNames={"#completed": "Completed"},
+        ExpressionAttributeValues={":completed": "true" if completed else "false"},
+    )
+
+
+def set_all_statement_items_completed(tenant_id: str, statement_id: str, completed: bool) -> None:
+    """Set completion flag for all statement items tied to a statement."""
+    statuses = get_statement_item_status_map(tenant_id, statement_id)
+    if not statuses:
+        return
+
+    for statement_item_id in statuses.keys():
+        set_statement_item_completed(tenant_id, statement_item_id, completed)
+
+
 def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
     item = {
         "TenantID": tenant_id,
@@ -461,6 +518,7 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
         "ContactID": entry["contact_id"],
         "ContactName": entry["contact_name"],
         "Completed": "false",
+        "RecordType": "statement",
     }
     try:
         # Ensure we don't overwrite an existing statement for this tenant.
