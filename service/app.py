@@ -1,7 +1,9 @@
+import csv
 import os
 import secrets
 import urllib.parse
 import uuid
+from io import StringIO
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
@@ -321,6 +323,52 @@ def statement(statement_id: str):
         right_rows=right_rows_by_header,
         display_headers=display_headers,
     )
+
+    if request.args.get("download") == "csv":
+        header_labels = []
+        statement_headers: List[str] = []
+        xero_headers: List[str] = []
+
+        for header in display_headers:
+            label = (header or "").replace("_", " ").strip()
+            if label:
+                label = label[0].upper() + label[1:]
+            else:
+                label = header or ""
+            header_labels.append((header, label))
+            statement_headers.append(f"Statement {label}")
+            xero_headers.append(f"Xero {label}")
+
+        csv_headers = statement_headers + xero_headers
+
+        output = StringIO()
+        writer = csv.DictWriter(output, fieldnames=csv_headers)
+        writer.writeheader()
+
+        row_count = max(len(rows_by_header), len(right_rows_by_header))
+        for idx in range(row_count):
+            left_row = rows_by_header[idx] if idx < len(rows_by_header) else {}
+            right_row = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
+
+            csv_row: Dict[str, Any] = {}
+            for src_header, label in header_labels:
+                statement_key = f"Statement {label}"
+                left_value = left_row.get(src_header, "") if isinstance(left_row, dict) else ""
+                csv_row[statement_key] = "" if left_value is None else left_value
+
+            for src_header, label in header_labels:
+                xero_key = f"Xero {label}"
+                right_value = right_row.get(src_header, "") if isinstance(right_row, dict) else ""
+                csv_row[xero_key] = "" if right_value is None else right_value
+
+            writer.writerow(csv_row)
+
+        csv_payload = output.getvalue()
+        output.close()
+
+        response = app.response_class(csv_payload, mimetype="text/csv")
+        response.headers["Content-Disposition"] = f"attachment; filename=statement_{statement_id}.csv"
+        return response
 
     return render_template(
         "statement.html",

@@ -3,7 +3,15 @@
 
 {% block content %}
   <div class="container mt-4">
-    <h1 class="mb-4">Statement {{ statement_id }}</h1>
+    <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+      <h1 class="mb-0">Statement {{ statement_id }}</h1>
+      {% if not is_processing %}
+        <a
+          class="btn btn-outline-primary"
+          href="{{ url_for('statement', statement_id=statement_id, download='csv') }}"
+        >Download CSV</a>
+      {% endif %}
+    </div>
 
     {% if is_processing %}
       <div class="text-center py-5">
