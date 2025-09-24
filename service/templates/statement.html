@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Statement {{ statement_id }}{% endblock %}
 
+{% block container_class %}container-fluid px-2 px-lg-4 py-4{% endblock %}
+
 {% block content %}
-  <div class="container mt-4">
     <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
       <div>
         <h1 class="mb-2 mb-md-0">Statement {{ statement_id }}</h1>
@@ -41,108 +42,77 @@
         setTimeout(function () { window.location.reload(); }, 5000);
       </script>
     {% else %}
-      <div class="row g-4">
-        <!-- Left column: raw statement table -->
-        <div class="col-12 col-lg-6">
-          <h2>Statement Items</h2>
-          <div class="table-responsive">
-            <table class="table table-striped table-bordered align-middle table-fixed-height">
-              <thead class="table-light">
-                <tr>
-                  {% for h in raw_statement_headers %}
-                    <th>{{ h|capitalize }}</th>
-                  {% endfor %}
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% if statement_rows %}
-                  {% for row in statement_rows %}
-                    {% set row_class = 'table-success' if row.matches else 'table-danger' %}
-                    {% if row.is_completed %}
-                      {% set row_class = row_class + ' opacity-75' %}
-                    {% endif %}
-                    <tr class="{{ row_class }}">
-                      {% for value in row.left_values %}
-                        <td>{{ value }}</td>
-                      {% endfor %}
-                      <td class="text-center">
-                        {% if row.statement_item_id %}
-                          {% if row.is_completed %}
-                            <form method="post" class="d-inline">
-                              <input type="hidden" name="action" value="incomplete_item">
-                              <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
-                              <input type="hidden" name="items_view" value="{{ items_view }}">
-                              <button type="submit" class="btn btn-sm btn-outline-warning text-nowrap px-2 py-0">Mark incomplete</button>
-                            </form>
-                          {% else %}
-                            <form method="post" class="d-inline">
-                              <input type="hidden" name="action" value="complete_item">
-                              <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
-                              <input type="hidden" name="items_view" value="{{ items_view }}">
-                              <button type="submit" class="btn btn-sm btn-outline-success text-nowrap px-2 py-0">Mark complete</button>
-                            </form>
-                          {% endif %}
-                        {% else %}
-                          <span class="badge bg-secondary">Unavailable</span>
-                        {% endif %}
-                      </td>
-                    </tr>
-                  {% endfor %}
-                {% else %}
-                  <tr>
-                    <td colspan="{{ raw_statement_headers|length + 1 }}" class="text-center text-muted">
-                      {% if items_view == 'completed' %}
-                        No completed statement items found.
-                      {% elif items_view == 'incomplete' %}
-                        No incomplete statement items found.
-                      {% else %}
-                        No statement items found.
-                      {% endif %}
-                    </td>
-                  </tr>
-                {% endif %}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      {% set statement_col_count = raw_statement_headers|length %}
 
-        <!-- Right column: same headers, values from Xero invoice -->
-        <div class="col-12 col-lg-6">
-          <h2>Xero Items</h2>
-          <div class="table-responsive">
-            <table class="table table-striped table-bordered align-middle table-fixed-height">
-              <thead class="table-light">
-                <tr>
-                  {% for h in raw_statement_headers %}
-                    <th>{{ h|capitalize }}</th>
-                  {% endfor %}
-                </tr>
-              </thead>
-              <tbody>
-                {% if statement_rows %}
-                  {% for row in statement_rows %}
-                    {% set row_class = 'table-success' if row.matches else 'table-danger' %}
-                    {% if row.is_completed %}
-                      {% set row_class = row_class + ' opacity-75' %}
-                    {% endif %}
-                    <tr class="{{ row_class }}">
-                      {% for value in row.right_values %}
-                        <td>{{ value }}</td>
-                      {% endfor %}
-                    </tr>
-                  {% endfor %}
-                {% else %}
-                  <tr>
-                    <td colspan="{{ raw_statement_headers|length }}" class="text-center text-muted">
-                      No invoice data found.
-                    </td>
-                  </tr>
+      <div class="table-responsive statement-table-wrapper">
+        <table class="table table-striped table-bordered align-middle table-fixed-height table-compare w-100">
+          <thead class="table-light">
+            <tr>
+              <th class="split-right text-center" colspan="{{ statement_col_count }}">Statement</th>
+              <th class="text-center" colspan="{{ statement_col_count }}">Xero</th>
+              <th class="text-center" rowspan="2">Status</th>
+            </tr>
+            <tr>
+              {% for h in raw_statement_headers %}
+                <th class="{% if loop.last %}split-right{% endif %}">{{ h|capitalize }}</th>
+              {% endfor %}
+              {% for h in raw_statement_headers %}
+                <th>{{ h|capitalize }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% if statement_rows %}
+              {% for row in statement_rows %}
+                {% set row_class = 'table-success' if row.matches else 'table-danger' %}
+                {% if row.is_completed %}
+                  {% set row_class = row_class + ' opacity-75' %}
                 {% endif %}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                <tr class="{{ row_class }}">
+                  {% for value in row.left_values %}
+                    <td class="{% if loop.last %}split-right{% endif %}">{{ value }}</td>
+                  {% endfor %}
+                  {% for value in row.right_values %}
+                    <td>{{ value }}</td>
+                  {% endfor %}
+                  <td class="text-center">
+                    {% if row.statement_item_id %}
+                      {% if row.is_completed %}
+                        <form method="post" class="d-inline">
+                          <input type="hidden" name="action" value="incomplete_item">
+                          <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
+                          <input type="hidden" name="items_view" value="{{ items_view }}">
+                          <button type="submit" class="btn btn-sm btn-outline-warning text-nowrap px-2 py-0">Mark incomplete</button>
+                        </form>
+                      {% else %}
+                        <form method="post" class="d-inline">
+                          <input type="hidden" name="action" value="complete_item">
+                          <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
+                          <input type="hidden" name="items_view" value="{{ items_view }}">
+                          <button type="submit" class="btn btn-sm btn-outline-success text-nowrap px-2 py-0">Mark complete</button>
+                        </form>
+                      {% endif %}
+                    {% else %}
+                      <span class="badge bg-secondary">Unavailable</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr>
+                <td colspan="{{ statement_col_count * 2 + 1 }}" class="text-center text-muted">
+                  {% if items_view == 'completed' %}
+                    No completed statement items found.
+                  {% elif items_view == 'incomplete' %}
+                    No incomplete statement items found.
+                  {% else %}
+                    No statement items found.
+                  {% endif %}
+                </td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
       </div>
 
       <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mt-4 mb-5">
@@ -163,5 +133,4 @@
         </div>
       </div>
     {% endif %}
-  </div>
 {% endblock %}

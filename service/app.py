@@ -125,6 +125,9 @@ def contacts():
 
     if request.method == "POST":
         contact_name = request.form.get("contact_name")
+        print("*"*88)
+        print(f"TenantID: {tenant_id}")
+        print("*"*88)
         for c in contacts_list:
             if c["name"] == contact_name:
                 print("*"*88)

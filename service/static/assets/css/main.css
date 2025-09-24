@@ -1,0 +1,41 @@
+/* Statement comparison table container */
+.statement-table-wrapper {
+width: 100%;
+max-width: 1200px;
+margin: 0 auto;
+}
+
+/* Keep the comparison table constrained within the page */
+.table-compare {
+table-layout: auto;
+width: 100%;
+max-width: 100%;
+--split-border: 4px solid var(--bs-border-color);
+}
+
+/* Split border between Statement and Xero halves */
+.table-compare thead tr:first-child th.split-right { border-right: var(--split-border); }
+.table-compare thead tr:last-child th.split-right  { border-right: var(--split-border); }
+.table-compare tbody td.split-right                { border-right: var(--split-border); }
+
+/* General cell text behavior */
+.table-compare th, .table-compare td {
+vertical-align: middle;
+word-break: normal;        /* stop per-letter breaks */
+overflow-wrap: anywhere;   /* allow wrap when needed */
+hyphens: auto;             /* nicer hyphenation where supported */
+white-space: normal;
+}
+
+/* Numeric/money columns shouldn't wrap */
+.col-amount, .col-pay, .col-balance { white-space: nowrap; }
+
+/* Reasonable minimum widths per column (tweak to taste) */
+.col-date     { min-width: 9ch; }
+.col-ref      { min-width: 14ch; }     /* fixes ugly Reference wrapping */
+.col-due      { min-width: 9ch; }
+.col-activity { min-width: 16ch; }
+.col-amount   { min-width: 11ch; text-align: right; }
+.col-pay      { min-width: 9ch;  text-align: right; }
+.col-balance  { min-width: 11ch; text-align: right; }
+.col-status   { min-width: 14ch; }

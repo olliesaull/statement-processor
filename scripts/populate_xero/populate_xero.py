@@ -38,17 +38,26 @@ from typing import Any, Dict, List, Optional
 
 import boto3
 import requests
+from dotenv import load_dotenv
 
 # Allow importing helpers from the service directory
 THIS_DIR = Path(__file__).resolve().parent
 SERVICE_DIR = (THIS_DIR.parent.parent / "service").resolve()
+SERVICE_ENV_PATH = SERVICE_DIR / ".env"
+LOCAL_ENV_PATH = THIS_DIR / ".env"
 if str(SERVICE_DIR) not in sys.path:
     sys.path.insert(0, str(SERVICE_DIR))
 
-from configuration.config import (  # type: ignore
+# Load shared service environment first, then apply local overrides if present.
+load_dotenv(SERVICE_ENV_PATH)
+load_dotenv(LOCAL_ENV_PATH, override=True)
+
+from config import (  # type: ignore
     AWS_PROFILE,
     AWS_REGION,
     S3_BUCKET_NAME,
+    CLIENT_ID as CONFIG_XERO_CLIENT_ID,
+    CLIENT_SECRET as CONFIG_XERO_CLIENT_SECRET,
 )
 from core.get_contact_config import get_contact_config  # type: ignore
 from utils import (  # type: ignore
@@ -76,23 +85,21 @@ from xero_python.exceptions import AccountingBadRequestException  # type: ignore
 # Global settings
 # ---------------------
 
+TENANT_ID = os.getenv("TENANT_ID", "80985eea-b0fe-4b9e-a6f8-787e0b017ce9")
 # ButtaNut
-# TENANT_ID = os.getenv("TENANT_ID", "234a8cb8-33d4-45d9-a1cc-d6075fb65533")
-# STATEMENT_ID = os.getenv("STATEMENT_ID", "f943c82d-d3ee-4c5b-bd16-9641b9244567")
-# CONTACT_ID = os.getenv("CONTACT_ID", "cc1e8ee2-30e2-400d-ac10-404b3c01784c")
+# STATEMENT_ID = os.getenv("STATEMENT_ID", "0de99b0d-6b5e-4f64-b548-8b9a4b477e21")
+# CONTACT_ID = os.getenv("CONTACT_ID", "d187a088-978e-46c3-9bb9-26f3c3961e51")
 
 # Geotina
-# TENANT_ID = os.getenv("TENANT_ID", "234a8cb8-33d4-45d9-a1cc-d6075fb65533")
-# STATEMENT_ID = os.getenv("STATEMENT_ID", "7fa655ea-9371-4c9e-99ef-8aaeedff2cb1")
-# CONTACT_ID = os.getenv("CONTACT_ID", "b6663af0-9454-4356-a41e-c5e6093ef222")
+# STATEMENT_ID = os.getenv("STATEMENT_ID", "4a62b4c1-9bd3-45d2-a94f-3437dee55feb")
+# CONTACT_ID = os.getenv("CONTACT_ID", "d67b0b6f-ed25-4591-8b84-e3b76a390d2a")
 
 # Sapuma
-TENANT_ID = os.getenv("TENANT_ID", "234a8cb8-33d4-45d9-a1cc-d6075fb65533")
-STATEMENT_ID = os.getenv("STATEMENT_ID", "2ef8cc97-ece3-41a6-a0d9-21cde15234b7")
-CONTACT_ID = os.getenv("CONTACT_ID", "7cc055e1-c14e-4ae6-a483-0ec5f8e92fcc")
+STATEMENT_ID = os.getenv("STATEMENT_ID", "eae79b39-f527-4c39-abd8-5fe39c7c8a1c")
+CONTACT_ID = os.getenv("CONTACT_ID", "a9dcc903-5ecb-45b0-b02f-818244d531d2")
 
-XERO_CLIENT_ID = os.getenv("XERO_CLIENT_ID")
-XERO_CLIENT_SECRET = os.getenv("XERO_CLIENT_SECRET")
+XERO_CLIENT_ID = os.getenv("XERO_CLIENT_ID") or CONFIG_XERO_CLIENT_ID
+XERO_CLIENT_SECRET = os.getenv("XERO_CLIENT_SECRET") or CONFIG_XERO_CLIENT_SECRET
 XERO_TOKEN_PATH = Path(os.getenv("XERO_TOKEN_PATH", str(Path.home() / ".xero_token.json")))
 XERO_TENANT_ID = os.getenv("XERO_TENANT_ID")  # optional; discover if missing
 XERO_REDIRECT_URI = os.getenv("XERO_REDIRECT_URI", "http://localhost:8080/callback")
@@ -434,11 +441,39 @@ def pick_amount(it: Dict[str, Any], doc_type: str) -> Optional[Decimal]:
     """
     total = to_number(it.get("total"))
 
-    def _resolve_token(tok: Any) -> Optional[Decimal]:
+    def _resolve_token(tok: Any, _seen: Optional[set[int]] = None) -> Optional[Decimal]:
         # direct numeric
         n = to_number(tok)
         if n is not None:
             return n
+        if _seen is None:
+            _seen = set()
+        # Avoid infinite recursion on nested structures
+        obj_id = id(tok)
+        if obj_id in _seen:
+            return None
+        _seen.add(obj_id)
+
+        # handle mapping containers (e.g. {"Debit": 123, "Credit": ""})
+        if isinstance(tok, dict):
+            # Prefer values first, then fall back to keys as header tokens
+            for value in tok.values():
+                num = _resolve_token(value, _seen)
+                if num is not None and num != 0:
+                    return num
+            for key in tok.keys():
+                num = _resolve_token(key, _seen)
+                if num is not None and num != 0:
+                    return num
+            return None
+
+        # handle iterables of potential tokens (lists/tuples/sets)
+        if isinstance(tok, (list, tuple, set)):
+            for item in tok:
+                num = _resolve_token(item, _seen)
+                if num is not None and num != 0:
+                    return num
+            return None
         # treat as header in raw
         if isinstance(tok, str) and tok.strip():
             try:
