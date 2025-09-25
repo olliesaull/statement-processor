@@ -41,9 +41,9 @@
                 <td>{{ tenant.tenantName or tenant.tenantId }}</td>
                 <td class="text-center">
                   {% if is_active %}
-                    <span class="badge bg-success">Active</span>
+                    <span class="badge bg-success">Current Tenant</span>
                   {% else %}
-                    <span class="text-muted">Inactive</span>
+                    <span class="text-muted">Not in use</span>
                   {% endif %}
                 </td>
                 <td class="text-center">
@@ -51,12 +51,12 @@
                     {% if not is_active %}
                       <form method="post" action="{{ url_for('select_tenant') }}">
                         <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
-                        <button class="btn btn-outline-primary btn-sm" type="submit">Select</button>
+                        <button class="btn btn-outline-primary btn-sm" type="submit">Switch to Tenant</button>
                       </form>
                     {% endif %}
                     <form method="post" action="{{ url_for('disconnect_tenant') }}">
                       <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
-                      <button class="btn btn-outline-danger btn-sm" type="submit">Disconnect</button>
+                      <button class="btn btn-outline-danger btn-sm" type="submit">Disconnect Tenant</button>
                     </form>
                   </div>
                 </td>
