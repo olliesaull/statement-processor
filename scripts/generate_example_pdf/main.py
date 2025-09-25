@@ -1,6 +1,7 @@
+from pdf2image import convert_from_path
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfgen import canvas
-from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle
 
 data = [
@@ -38,7 +39,10 @@ table.setStyle(TableStyle([
 ]))
 table_width, table_height = table.wrapOn(c, width, height)
 table_x = (width - table_width) / 2
-table.drawOn(c, table_x, height - 310 - table_height)
+table.drawOn(c, table_x, height - 230 - table_height)
 
 c.showPage()
 c.save()
+
+images = convert_from_path(pdf_path, dpi=150)
+images[0].save("sample_statement.png", "PNG")

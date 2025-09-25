@@ -3,8 +3,8 @@ import os
 import secrets
 import urllib.parse
 import uuid
-from io import StringIO
 from concurrent.futures import ThreadPoolExecutor
+from io import StringIO
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -19,6 +19,7 @@ from flask import (
 )
 
 from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger
+from core.contact_config_metadata import FIELD_DESCRIPTIONS, EXAMPLE_CONFIG
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem
 from utils import (
@@ -30,22 +31,22 @@ from utils import (
     fetch_json_statement,
     get_completed_statements,
     get_contacts,
-    get_statement_date_format_from_config,
     get_credit_notes_by_contact,
     get_incomplete_statements,
     get_invoices_by_contact,
-    get_statement_record,
+    get_statement_date_format_from_config,
     get_statement_item_status_map,
+    get_statement_record,
     guess_statement_item_type,
     is_allowed_pdf,
     mark_statement_completed,
     match_invoices_to_statement_items,
     prepare_display_mappings,
-    set_all_statement_items_completed,
-    set_statement_item_completed,
     route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
+    set_all_statement_items_completed,
+    set_statement_item_completed,
     textract_in_background,
     upload_statement_to_s3,
     xero_token_required,
@@ -77,34 +78,6 @@ def _set_active_tenant(tenant_id: Optional[str]) -> None:
     else:
         session.pop("xero_tenant_id", None)
         session.pop("xero_tenant_name", None)
-
-FIELD_DESCRIPTIONS: Dict[str, str] = {
-    "amount_due": (
-        "One or more statement columns that represent the running balance for a line. "
-        "If there are separate debit and credit columns, add both so we can pick the right amount."
-    ),
-    "amount_paid": (
-        "Column showing payments or credits applied against the invoice. This is used to display Xero's amount paid."
-    ),
-    "date": (
-        "Invoice or transaction date as it appears on the statement. This helps with formatting and matching."
-    ),
-    "due_date": (
-        "Payment due date from the statement line. Leave blank if the supplier does not show a due date."
-    ),
-    "number": (
-        "Document number on the statement (e.g. invoice number). This is the primary key we use when matching to Xero."
-    ),
-    "reference": (
-        "Any descriptive text that helps identify the transaction (project, PO number, memo, etc.)."
-    ),
-    "statement_date_format": (
-        "Date pattern using SDF tokens (e.g., 'D MMMM YYYY', 'MM/DD/YY'). See the guide below for full token descriptions and examples."
-    ),
-    "total": (
-        "The gross invoice amount on the statement. We use this for comparisons when lining up the Xero totals."
-    ),
-}
 
 @app.route("/favicon.ico")
 def ignore_favicon():
@@ -643,13 +616,22 @@ def configs():
                     else:
                         val = request.form.get(f"map[{f}]")
                         new_map[f] = (val or "").strip()
-                # Merge and save (root-level only; no nested 'statement_items')
-                to_save = {**preserved, **new_map}
-                set_contact_config(tenant_id, selected_contact_id, to_save)
-                message = "Config updated successfully."
-                mapping_rows = _build_rows(to_save)
+                number_value = (new_map.get("number") or "").strip()
+                if not number_value:
+                    error = "The 'Number' field is mandatory. Please map the statement column that contains invoice numbers."
+                    message = None
+                    combined = {**preserved, **new_map}
+                    mapping_rows = _build_rows(combined)
+                else:
+                    # Merge and save (root-level only; no nested 'statement_items')
+                    to_save = {**preserved, **new_map}
+                    set_contact_config(tenant_id, selected_contact_id, to_save)
+                    message = "Config updated successfully."
+                    mapping_rows = _build_rows(to_save)
             except Exception as e:
                 error = f"Failed to save config: {e}"
+
+    example_rows = _build_rows(EXAMPLE_CONFIG)
 
     return render_template(
         "configs.html",
@@ -657,6 +639,7 @@ def configs():
         selected_contact_name=selected_contact_name,
         selected_contact_id=selected_contact_id,
         mapping_rows=mapping_rows,
+        example_rows=example_rows,
         message=message,
         error=error,
         field_descriptions=FIELD_DESCRIPTIONS,

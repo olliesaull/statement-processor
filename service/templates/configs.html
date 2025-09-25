@@ -5,6 +5,82 @@
 <div class="container mt-4">
   <h1 class="mb-4">Edit Contact Config</h1>
 
+  <div class="mb-4">
+    <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#exampleConfig" aria-expanded="false" aria-controls="exampleConfig">
+      View example config
+    </button>
+  </div>
+
+  <div class="collapse mb-4" id="exampleConfig">
+    <div class="card">
+      <div class="card-header">How the PDF lines up with a config</div>
+      <div class="card-body">
+        <div class="row g-4 align-items-start">
+          <div class="col-lg-6">
+            <img src="{{ url_for('static', filename='assets/images/sample_statement.png') }}" class="img-fluid border rounded" alt="Sample PDF statement layout">
+          </div>
+          <div class="col-lg-6">
+            <p class="fw-bold mt-4">Statement column headers are all lower case even though that is not how they appear on the statement.</p>
+            <div class="table-responsive">
+              {% if example_rows %}
+              <table class="table table-bordered table-sm align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th style="width: 55%">Xero field</th>
+                    <th>Statement column</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in example_rows %}
+                  {% set field_key = row['field'] %}
+                  {% set field_label_raw = (field_key or '').replace('_', ' ') %}
+                  {% set field_label = field_label_raw.title() %}
+                  {% if field_key == 'number' %}
+                  {% set field_label = field_label + ' (Mandatory)' %}
+                  {% endif %}
+                  <tr>
+                    <td>
+                      <div class="fw-semibold">{{ field_label }}</div>
+                      {% set desc = field_descriptions.get(field_key) if field_descriptions else None %}
+                      {% if desc %}
+                      <div class="text-muted small mt-1">{{ desc }}</div>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% set values = row['values'] or [] %}
+                      {% if row['is_multi'] %}
+                        {% if values %}
+                          {% for value in values %}
+                          <div class="input-group mb-2">
+                            <input type="text" class="form-control" value="{{ value }}" placeholder="Enter column heading" disabled>
+                            <button type="button" class="btn btn-outline-danger" disabled>Remove</button>
+                          </div>
+                          {% endfor %}
+                        {% else %}
+                          <div class="input-group mb-2">
+                            <input type="text" class="form-control" value="" placeholder="Enter column heading" disabled>
+                            <button type="button" class="btn btn-outline-danger" disabled>Remove</button>
+                          </div>
+                        {% endif %}
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled>Add another column</button>
+                      {% else %}
+                        <input type="text" class="form-control" value="{{ values[0] if values else '' }}" placeholder="Enter column heading" disabled>
+                      {% endif %}
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+              {% else %}
+              <div class="text-muted">Example will appear once fields are available.</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   {% if error %}
   <div class="alert alert-danger" role="alert">{{ error }}</div>
   {% endif %}
@@ -37,40 +113,47 @@
     <input type="hidden" name="contact_id" value="{{ selected_contact_id }}">
     <input type="hidden" name="contact_name" value="{{ selected_contact_name }}">
 
-    <p class="fw-bold mt-4">Enter statement column headers in all lower case even if that is not how they appear on the PDF.</p>
+    <p class="fw-bold mt-4">Enter statement column headers in all lower case even if that is not how they appear on the statement. The only mandatory column heading is Number.</p>
 
     <div class="table-responsive">
       <table class="table table-bordered align-middle">
         <thead class="table-light">
           <tr>
-            <th style="width: 35%">Xero</th>
+            <th style="width: 60%">Xero</th>
             <th>Statement column</th>
           </tr>
         </thead>
         <tbody>
           {% for row in mapping_rows %}
+          {% set field_key = row.field %}
+          {% set field_label_raw = field_key.replace('_', ' ') %}
+          {% set field_label = field_label_raw.title() %}
+          {% if field_key == 'number' %}
+          {% set field_label = field_label + ' (Mandatory)' %}
+          {% endif %}
           <tr>
             <td>
-              <div class="fw-semibold text-capitalize">{{ row.field.replace('_', ' ') }}</div>
-              {% set desc = field_descriptions.get(row.field) if field_descriptions else None %}
+              <div class="fw-semibold">{{ field_label }}</div>
+              {% set desc = field_descriptions.get(field_key) if field_descriptions else None %}
               {% if desc %}
               <div class="text-muted small mt-1">{{ desc }}</div>
               {% endif %}
             </td>
             <td>
-              <input type="hidden" name="fields[]" value="{{ row.field }}">
+              <input type="hidden" name="fields[]" value="{{ field_key }}">
+              {% set values = row['values'] or [] %}
               {% if row.is_multi %}
-                <div id="container-{{ row.field }}">
-                  {% for v in row['values'] %}
-                  <div class="input-group mb-2">
-                    <input type="text" class="form-control" name="map[{{ row.field }}][]" value="{{ v }}" placeholder="Enter column heading">
-                    <button type="button" class="btn btn-outline-danger" onclick="this.parentElement.remove()">Remove</button>
-                  </div>
-                  {% endfor %}
+              <div id="container-{{ field_key }}">
+                {% for v in values %}
+                <div class="input-group mb-2">
+                  <input type="text" class="form-control" name="map[{{ field_key }}][]" value="{{ v }}" placeholder="Enter column heading">
+                  <button type="button" class="btn btn-outline-danger" onclick="this.parentElement.remove()">Remove</button>
                 </div>
-                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addInput('{{ row.field }}')">Add another column</button>
+                {% endfor %}
+              </div>
+              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addInput('{{ field_key }}')">Add another column</button>
               {% else %}
-                <input type="text" class="form-control" name="map[{{ row.field }}]" value="{{ row['values'][0] }}" placeholder="Enter column heading">
+              <input type="text" class="form-control" name="map[{{ field_key }}]" value="{{ values[0] if values else '' }}" placeholder="Enter column heading" {% if field_key == 'number' %}required{% endif %}>
               {% endif %}
             </td>
           </tr>
@@ -83,21 +166,21 @@
       <h2 class="h5">Supplier Date Format (SDF) reference</h2>
       <p>Use the following tokens when describing how your supplier prints dates:</p>
       <ul class="mb-3">
-        <li><code>YYYY</code> / <code>YY</code> – four-digit year / two-digit year (assumed 2000–2099)</li>
-        <li><code>M</code>, <code>MM</code> – month number (1–12 / zero-padded)</li>
-        <li><code>MMM</code>, <code>MMMM</code> – abbreviated / full month name</li>
-        <li><code>D</code>, <code>DD</code> – day of month (1–31 / zero-padded)</li>
-        <li><code>Do</code> – day with ordinal suffix (1st, 2nd, …)</li>
+        <li><code>YYYY</code> / <code>YY</code> - four-digit year / two-digit year (assumed 2000-2099)</li>
+        <li><code>M</code>, <code>MM</code> - month number (1-12 / 01-12, zero-padded)</li>
+        <li><code>MMM</code>, <code>MMMM</code> - abbreviated / full month name</li>
+        <li><code>D</code>, <code>DD</code> - day of month (1-31 / 01-31, zero-padded)</li>
+        <li><code>Do</code> - day with ordinal suffix (1st, 2nd, …)</li>
       </ul>
-      <p class="mb-3">Wrap optional literals in square brackets to ignore them if present (for example, <code>[dddd, ]D MMMM YYYY</code> matches both <code>Wednesday, 14 May 2025</code> and <code>14 May 2025</code>). Separators such as spaces, slashes, dashes, dots, and commas can be written directly.</p>
+      <p class="mb-3">Wrap optional literals in square brackets to ignore them if present (for example, <code>[dddd, ]D MMM YYYY</code> matches both <code>Friday, 01 Aug 2025</code> and <code>01 Aug 2025</code>). Separators such as spaces, slashes, dashes, dots, and commas can be written directly.</p>
       <p class="mb-1 fw-semibold">Examples</p>
       <ul class="mb-3">
-        <li><code>14 May 2025</code> → <code>D MMMM YYYY or DD MMMM YYYY</code></li>
-        <li><code>05/14/25</code> → <code>MM/DD/YY</code></li>
-        <li><code>2025-05-14</code> → <code>YYYY-MM-DD</code></li>
-        <li><code>14th May, 2025</code> → <code>Do MMMM, YYYY</code></li>
-        <li><code>Wed, 14 May 2025</code> → <code>[dddd, ]D MMMM YYYY</code></li>
-        <li><code>14.05.2025</code> → <code>DD.MM.YYYY</code></li>
+        <li><code>01 Aug 2025 / 1 Aug 2025</code> → <code>DD MMM YYYY / D MMM YYYY</code></li>
+        <li><code>08/01/25</code> → <code>MM/DD/YY</code></li>
+        <li><code>2025-08-01</code> → <code>YYYY-MM-DD</code></li>
+        <li><code>1st Aug, 2025</code> → <code>Do MMM, YYYY</code></li>
+        <li><code>Fri, 01 Aug 2025</code> → <code>[dddd, ]D MMM YYYY</code></li>
+        <li><code>01.08.2025</code> → <code>DD.MM.YYYY</code></li>
       </ul>
       <div class="alert alert-warning" role="alert">
         Numeric-only formats can be ambiguous (e.g., <code>1/2/2025</code>). Make sure you choose the correct ordering, such as <code>DD/MM/YYYY</code> or <code>MM/DD/YYYY</code>.
