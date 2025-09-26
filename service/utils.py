@@ -18,6 +18,7 @@ from flask import (
     url_for,
 )
 from werkzeug.datastructures import FileStorage
+from werkzeug.exceptions import HTTPException
 from xero_python.accounting import AccountingApi
 from xero_python.api_client import ApiClient  # type: ignore
 from xero_python.api_client.configuration import Configuration  # type: ignore
@@ -102,6 +103,43 @@ api_client = ApiClient(
     oauth2_token_saver=save_xero_oauth2_token,
 )
 api = AccountingApi(api_client)
+
+
+class RedirectToLogin(HTTPException):
+    """HTTP exception that produces a redirect to the login route."""
+
+    code = 302
+
+    def __init__(self) -> None:
+        super().__init__(description="Redirecting to login")
+
+    def get_response(self, environ=None):  # type: ignore[override]
+        return redirect(url_for("login"))
+
+
+def _raise_for_unauthorized(error: Exception) -> None:
+    """Redirect the user to login if the Xero API returned 401/403."""
+    potential_statuses = []
+    for attr in ("status", "status_code", "code"):
+        potential_statuses.append(getattr(error, attr, None))
+
+    response = getattr(error, "response", None)
+    if response is not None:
+        for attr in ("status", "status_code", "code"):
+            potential_statuses.append(getattr(response, attr, None))
+
+    for status in potential_statuses:
+        try:
+            status_code = int(status)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+
+        if status_code in {401, 403}:
+            logger.info(
+                "Xero API returned unauthorized/forbidden; redirecting to login",
+                status_code=status_code,
+            )
+            raise RedirectToLogin()
 
 
 def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
@@ -239,9 +277,11 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
         return by_number
 
     except AccountingBadRequestException as e:
+        _raise_for_unauthorized(e)
         logger.info("Exception occurred", error=e)
         return {}
     except Exception as e:
+        _raise_for_unauthorized(e)
         logger.info("Exception occurred", error=e)
         return {}
 
@@ -313,9 +353,11 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
         return invoices
 
     except AccountingBadRequestException as e:
+        _raise_for_unauthorized(e)
         logger.info("Exception occurred", error=e)
         return []
     except Exception as e:
+        _raise_for_unauthorized(e)
         logger.info("Exception occurred", error=e)
         return []
 
@@ -377,9 +419,11 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
         return credit_notes
 
     except AccountingBadRequestException as e:
+        _raise_for_unauthorized(e)
         logger.info("Exception occurred", error=e)
         return []
     except Exception as e:
+        _raise_for_unauthorized(e)
         logger.info("Exception occurred", error=e)
         return []
 
@@ -412,10 +456,12 @@ def get_contacts() -> List[Dict[str, Any]]:
 
     except AccountingBadRequestException as e:
         # Xero returned a 400
+        _raise_for_unauthorized(e)
         logger.info("AccountingBadRequestException", error=e)
         return []
     except Exception as e:
         # Catch-all for other errors (network, token, etc.)
+        _raise_for_unauthorized(e)
         logger.info("Error", error=e)
         return []
 
