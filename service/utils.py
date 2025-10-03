@@ -50,6 +50,7 @@ SCOPES = [
 def _query_statements_by_completed(tenant_id: Optional[str], completed_value: str) -> List[Dict[str, Any]]:
     """Query statements for a tenant filtered by the Completed flag via GSI."""
     if not tenant_id:
+        logger.info("Skipping statement query; tenant missing", completed=completed_value)
         return []
 
     items: List[Dict[str, Any]] = []
@@ -58,27 +59,34 @@ def _query_statements_by_completed(tenant_id: Optional[str], completed_value: st
         "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("Completed").eq(completed_value),
         "FilterExpression": Attr("RecordType").not_exists() | Attr("RecordType").eq("statement"),
     }
+    logger.info("Querying statements by completion", tenant_id=tenant_id, completed=completed_value)
 
     while True:
         resp = tenant_statements_table.query(**kwargs)
-        items.extend(resp.get("Items", []))
+        batch = resp.get("Items", [])
+        items.extend(batch)
         lek = resp.get("LastEvaluatedKey")
+        logger.debug("Fetched statement batch", tenant_id=tenant_id, completed=completed_value, batch=len(batch), has_more=bool(lek))
         if not lek:
             break
         kwargs["ExclusiveStartKey"] = lek
 
+    logger.info("Collected statements by completion", tenant_id=tenant_id, completed=completed_value, count=len(items))
     return items
 
 
 def get_statement_record(tenant_id: str, statement_id: str) -> Optional[Dict[str, Any]]:
     """Return the full DynamoDB record for a tenant/statement pair."""
+    logger.info("Fetching statement record", tenant_id=tenant_id, statement_id=statement_id)
     response = tenant_statements_table.get_item(
         Key={
             "TenantID": tenant_id,
             "StatementID": statement_id,
         }
     )
-    return response.get("Item")
+    item = response.get("Item")
+    logger.debug("Statement record fetched", tenant_id=tenant_id, statement_id=statement_id, found=bool(item))
+    return item
 
 def scope_str() -> str:
     """Return Xero OAuth scopes as a space-separated string."""
@@ -136,10 +144,7 @@ def _raise_for_unauthorized(error: Exception) -> None:
             continue
 
         if status_code in {401, 403}:
-            logger.info(
-                "Xero API returned unauthorized/forbidden; redirecting to login",
-                status_code=status_code,
-            )
+            logger.info("Xero API returned unauthorized/forbidden; redirecting to login", status_code=status_code)
             raise RedirectToLogin()
 
 
@@ -147,19 +152,19 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
     """Flask route decorator ensuring the user has an access token + tenant."""
     @wraps(f)
     def decorated_function(*args: Any, **kwargs: Any):
+        tenant_id = session.get("xero_tenant_id")
         if "access_token" not in session or "xero_tenant_id" not in session:
+            logger.info("Missing Xero token or tenant; redirecting", route=request.path, tenant_id=tenant_id)
             return redirect(url_for("login"))
+
         return f(*args, **kwargs)
     return decorated_function
 
 def route_handler_logging(function):
     @wraps(function)
     def decorator(*args, **kwargs):
-        logger.info("Entering route",
-                    route=request.path,
-                    event_type="USER_TRAIL",
-                    path=request.path,
-        )
+        tenant_id = session.get("xero_tenant_id")
+        logger.info("Entering route", route=request.path, event_type="USER_TRAIL", path=request.path, tenant_id=tenant_id)
 
         return function(*args, **kwargs)
 
@@ -245,11 +250,14 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
     by_number = {}
     BATCH = 40
     PAGE_SIZE = 50
+    total_requested = 0
 
     try:
+        logger.info("Fetching invoices by numbers", tenant_id=tenant_id, requested=len(normalized), batch_size=BATCH)
         for i in range(0, len(normalized), BATCH):
             batch = normalized[i:i+BATCH]
             page = 1
+            total_requested += len(batch)
             while True:
                 # Exclude deleted invoices explicitly via Status filter
                 result = api.get_invoices(
@@ -265,6 +273,7 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
                     statuses=["DRAFT", "SUBMITTED", "AUTHORISED", "PAID", "VOIDED"],
                 )
                 invs = result.invoices or []
+                logger.debug("Fetched invoice page", tenant_id=tenant_id, batch=len(batch), page=page, returned=len(invs))
                 for inv in invs:
                     rec = _fmt(inv)
                     n = rec.get("number")
@@ -276,15 +285,16 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
                     break
                 page += 1
 
+        logger.info("Fetched invoices by numbers", tenant_id=tenant_id, requested=total_requested, returned=len(by_number))
         return by_number
 
     except AccountingBadRequestException as e:
         _raise_for_unauthorized(e)
-        logger.info("Exception occurred", error=e)
+        logger.exception("Failed to fetch invoices by numbers", tenant_id=tenant_id, error=e)
         return {}
     except Exception as e:
         _raise_for_unauthorized(e)
-        logger.info("Exception occurred", error=e)
+        logger.exception("Failed to fetch invoices by numbers", tenant_id=tenant_id, error=e)
         return {}
 
 
@@ -293,6 +303,7 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
     PAGE_SIZE = 50
 
     try:
+        logger.info("Fetching invoices for contact", tenant_id=tenant_id, contact_id=contact_id)
         invoices: List[Dict[str, Any]] = []
         page = 1
 
@@ -311,6 +322,7 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
             )
 
             invs = result.invoices or []
+            logger.debug("Fetched invoice contact page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(invs))
             for inv in invs:
                 # Minimal contact summary (safe getattr)
                 c = getattr(inv, "contact", None)
@@ -362,15 +374,16 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
             page += 1
 
+        logger.info("Fetched invoices for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(invoices))
         return invoices
 
     except AccountingBadRequestException as e:
         _raise_for_unauthorized(e)
-        logger.info("Exception occurred", error=e)
+        logger.exception("Failed to fetch invoices for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
         return []
     except Exception as e:
         _raise_for_unauthorized(e)
-        logger.info("Exception occurred", error=e)
+        logger.exception("Failed to fetch invoices for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
         return []
 
 
@@ -379,6 +392,7 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
     PAGE_SIZE = 50
 
     try:
+        logger.info("Fetching credit notes for contact", tenant_id=tenant_id, contact_id=contact_id)
         credit_notes: List[Dict[str, Any]] = []
         page = 1
 
@@ -393,6 +407,7 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
             )
 
             cnotes = result.credit_notes or []
+            logger.debug("Fetched credit note page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(cnotes))
             for cn in cnotes:
                 c = getattr(cn, "contact", None)
                 contact = {
@@ -438,15 +453,16 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
             page += 1
 
+        logger.info("Fetched credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(credit_notes))
         return credit_notes
 
     except AccountingBadRequestException as e:
         _raise_for_unauthorized(e)
-        logger.info("Exception occurred", error=e)
+        logger.exception("Failed to fetch credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
         return []
     except Exception as e:
         _raise_for_unauthorized(e)
-        logger.info("Exception occurred", error=e)
+        logger.exception("Failed to fetch credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
         return []
 
 
@@ -455,6 +471,7 @@ def get_contacts() -> List[Dict[str, Any]]:
     PAGE_SIZE = 50
 
     try:
+        logger.info("Fetching contacts", tenant_id=tenant_id)
         contacts: List[Dict[str, Any]] = []
         page = 1
 
@@ -468,6 +485,7 @@ def get_contacts() -> List[Dict[str, Any]]:
             )
 
             page_contacts = result.contacts or []
+            logger.debug("Fetched contacts page", tenant_id=tenant_id, page=page, returned=len(page_contacts))
             for c in page_contacts:
                 contacts.append(
                     {
@@ -485,17 +503,18 @@ def get_contacts() -> List[Dict[str, Any]]:
 
             page += 1
 
+        logger.info("Fetched contacts", tenant_id=tenant_id, returned=len(contacts))
         return contacts
 
     except AccountingBadRequestException as e:
         # Xero returned a 400
         _raise_for_unauthorized(e)
-        logger.info("AccountingBadRequestException", error=e)
+        logger.exception("Failed to fetch contacts", tenant_id=tenant_id, error=e)
         return []
     except Exception as e:
         # Catch-all for other errors (network, token, etc.)
         _raise_for_unauthorized(e)
-        logger.info("Error", error=e)
+        logger.exception("Failed to fetch contacts", tenant_id=tenant_id, error=e)
         return []
 
 
@@ -510,12 +529,14 @@ def get_contact_for_statement(tenant_id: str, statement_id: str) -> Optional[str
 def get_incomplete_statements() -> List[Dict[str, Any]]:
     """Return statements for the active tenant that are not completed."""
     tenant_id = session.get("xero_tenant_id")
+    logger.info("Fetching incomplete statements", tenant_id=tenant_id)
     return _query_statements_by_completed(tenant_id, "false")
 
 
 def get_completed_statements() -> List[Dict[str, Any]]:
     """Return statements for the active tenant that are marked completed."""
     tenant_id = session.get("xero_tenant_id")
+    logger.info("Fetching completed statements", tenant_id=tenant_id)
     return _query_statements_by_completed(tenant_id, "true")
 
 
@@ -538,6 +559,7 @@ def get_statement_item_status_map(tenant_id: str, statement_id: str) -> Dict[str
     if not tenant_id or not statement_id:
         return {}
 
+    logger.info("Fetching statement item statuses", tenant_id=tenant_id, statement_id=statement_id)
     statuses: Dict[str, bool] = {}
     prefix = f"{statement_id}#item-"
     kwargs: Dict[str, Any] = {
@@ -560,6 +582,7 @@ def get_statement_item_status_map(tenant_id: str, statement_id: str) -> Dict[str
             break
         kwargs["ExclusiveStartKey"] = lek
 
+    logger.info("Fetched statement item statuses", tenant_id=tenant_id, statement_id=statement_id, count=len(statuses))
     return statuses
 
 
@@ -606,6 +629,7 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
             Item=item,
             ConditionExpression=Attr("StatementID").not_exists(),
         )
+        logger.info("Statement added to table", tenant_id=tenant_id, statement_id=entry["statement_id"], contact_id=entry.get("contact_id"))
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             # Using single-quotes to simplify nested quotes in f-string
@@ -631,6 +655,7 @@ def upload_statement_to_s3(fs_like: Any, key: str) -> bool:
             Bucket=S3_BUCKET_NAME,
             Key=key,
         )
+        logger.info("Uploaded statement asset to S3", key=key)
         return True
     except (BotoCoreError, ClientError) as e:
         logger.info("Failed to upload to S3", key=key, error=e)
@@ -652,6 +677,7 @@ def fetch_json_statement(
     Raises:
         StatementJSONNotFoundError: if the object does not exist yet.
     """
+    logger.info("Fetching JSON statement", tenant_id=tenant_id, json_key=json_key)
     try:
         s3_client.head_object(Bucket=bucket, Key=json_key)
     except ClientError as e:
@@ -680,6 +706,7 @@ def fetch_json_statement(
     if mutated:
         json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         upload_statement_to_s3(io.BytesIO(json_bytes), json_key)
+        logger.debug("Backfilled statement date format", tenant_id=tenant_id, json_key=json_key)
 
     filename = json_key.rsplit("/", 1)[-1]
     fs = FileStorage(stream=io.BytesIO(json_bytes), filename=filename)
@@ -704,17 +731,13 @@ def get_or_create_json_statement(
     """
     try:
         data, fs = fetch_json_statement(tenant_id, contact_id, bucket, json_key)
-        logger.info("Found existing JSON, downloading", json_key=json_key)
+        logger.info("Found existing JSON, downloading", tenant_id=tenant_id, json_key=json_key)
         return data, fs
     except StatementJSONNotFoundError:
         pass
 
     # Not found → run Textract
-    logger.info(
-        "Running Textract for missing JSON",
-        json_key=json_key,
-        pdf_key=pdf_key,
-    )
+    logger.info("Running Textract for missing JSON", tenant_id=tenant_id, json_key=json_key, pdf_key=pdf_key)
     # Use the provided bucket argument for consistency with the read path.
     # Current callers pass the global bucket, so this does not alter behavior.
     json_fs = run_textraction(bucket=bucket, pdf_key=pdf_key, tenant_id=tenant_id, contact_id=contact_id)
@@ -729,6 +752,7 @@ def get_or_create_json_statement(
 
     # Return both
     fs = FileStorage(stream=io.BytesIO(json_bytes), filename=json_key.rsplit("/", 1)[-1])
+    logger.info("Generated JSON via Textract", tenant_id=tenant_id, json_key=json_key)
     return data, fs
 
 
@@ -752,9 +776,9 @@ def textract_in_background(
             pdf_key=pdf_key,
             json_key=json_key,
         )
-        logger.info("[bg] Textraction complete", pdf_key=pdf_key, json_key=json_key)
+        logger.info("[bg] Textraction complete", tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_key, json_key=json_key)
     except Exception:
-        logger.info("[bg] Textraction failed", pdf_key=pdf_key)
+        logger.info("[bg] Textraction failed", tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_key)
         traceback.print_exc()
 
 # -----------------------------
@@ -950,11 +974,7 @@ def match_invoices_to_statement_items(
                 "match_score": 1.0,
                 "matched_invoice_number": key,
             }
-            logger.info(
-                "Exact match",
-                statement_number=key,
-                invoice_number=key,
-            )
+            logger.info("Exact match", statement_number=key, invoice_number=key)
             # Track used invoice to exclude from fuzzy matching pool
             inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
             if inv_id:
@@ -1014,12 +1034,7 @@ def match_invoices_to_statement_items(
                 "matched_invoice_number": inv_no_best,
             }
             kind = "Exact" if inv_no_best == key else "Substring"
-            logger.info(
-                "Statement match",
-                match_type=kind,
-                statement_number=key,
-                invoice_number=inv_no_best,
-            )
+            logger.info("Statement match", match_type=kind, statement_number=key, invoice_number=inv_no_best)
             # Mark this invoice as used to prevent reuse in subsequent substring matches
             inv_id = inv_obj.get("invoice_id") if isinstance(inv_obj, dict) else None
             if inv_id:

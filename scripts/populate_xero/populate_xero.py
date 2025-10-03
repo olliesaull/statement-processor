@@ -95,8 +95,12 @@ TENANT_ID = os.getenv("TENANT_ID", "80985eea-b0fe-4b9e-a6f8-787e0b017ce9")
 # CONTACT_ID = os.getenv("CONTACT_ID", "d67b0b6f-ed25-4591-8b84-e3b76a390d2a")
 
 # Sapuma
-STATEMENT_ID = os.getenv("STATEMENT_ID", "eae79b39-f527-4c39-abd8-5fe39c7c8a1c")
-CONTACT_ID = os.getenv("CONTACT_ID", "a9dcc903-5ecb-45b0-b02f-818244d531d2")
+# STATEMENT_ID = os.getenv("STATEMENT_ID", "eae79b39-f527-4c39-abd8-5fe39c7c8a1c")
+# CONTACT_ID = os.getenv("CONTACT_ID", "a9dcc903-5ecb-45b0-b02f-818244d531d2")
+
+# SimplePay
+STATEMENT_ID = os.getenv("STATEMENT_ID", "a12917e0-3253-4d4d-9a3f-dabbb5ff92f9")
+CONTACT_ID = os.getenv("CONTACT_ID", "94975100-c0c5-4330-af86-20f8f180e8f4")
 
 XERO_CLIENT_ID = os.getenv("XERO_CLIENT_ID") or CONFIG_XERO_CLIENT_ID
 XERO_CLIENT_SECRET = os.getenv("XERO_CLIENT_SECRET") or CONFIG_XERO_CLIENT_SECRET
