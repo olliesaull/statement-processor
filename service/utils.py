@@ -39,6 +39,14 @@ from core.textract_statement import run_textraction
 from core.transform import equal
 
 
+# MIME/extension guards for uploads
+ALLOWED_EXTENSIONS = {".pdf", ".PDF"}
+SCOPES = [
+    "offline_access", "openid", "profile", "email", "accounting.transactions", "accounting.reports.read", "accounting.journals.read",
+    "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
+]
+
+
 def _query_statements_by_completed(tenant_id: Optional[str], completed_value: str) -> List[Dict[str, Any]]:
     """Query statements for a tenant filtered by the Completed flag via GSI."""
     if not tenant_id:
@@ -71,13 +79,6 @@ def get_statement_record(tenant_id: str, statement_id: str) -> Optional[Dict[str
         }
     )
     return response.get("Item")
-
-# MIME/extension guards for uploads
-ALLOWED_EXTENSIONS = {".pdf", ".PDF"}
-SCOPES = [
-    "offline_access", "openid", "profile", "email", "accounting.transactions", "accounting.reports.read", "accounting.journals.read",
-    "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
-]
 
 def scope_str() -> str:
     """Return Xero OAuth scopes as a space-separated string."""
@@ -243,6 +244,7 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
 
     by_number = {}
     BATCH = 40
+    PAGE_SIZE = 50
 
     try:
         for i in range(0, len(normalized), BATCH):
@@ -259,7 +261,7 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
                     created_by_my_app=False,
                     unitdp=2,
                     summary_only=False,
-                    page_size=50,
+                    page_size=PAGE_SIZE,
                     statuses=["DRAFT", "SUBMITTED", "AUTHORISED", "PAID", "VOIDED"],
                 )
                 invs = result.invoices or []
@@ -270,7 +272,7 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
                         # last one wins if duplicates appear
                         by_number[n] = rec
 
-                if len(invs) < 50:
+                if len(invs) < PAGE_SIZE:
                     break
                 page += 1
 
@@ -288,67 +290,77 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
 
 def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
     tenant_id = session["xero_tenant_id"]
+    PAGE_SIZE = 50
 
     try:
-        # Restrict to the contact and exclude deleted invoices
-        result = api.get_invoices(
-            tenant_id,
-            where=f'Contact.ContactID==Guid("{contact_id}") AND Status!="DELETED"',
-            order="InvoiceNumber ASC",
-            page=1,
-            include_archived=False,
-            created_by_my_app=False,
-            unitdp=2,
-            summary_only=False,
-            page_size=50,
-        )
+        invoices: List[Dict[str, Any]] = []
+        page = 1
 
-        invoices = []
-        for inv in (result.invoices or []):
-            # Minimal contact summary (safe getattr)
-            c = getattr(inv, "contact", None)
-            contact = {
-                "contact_id": getattr(c, "contact_id", None),
-                "name": getattr(c, "name", None),
-                "email": getattr(c, "email_address", None),
-                "is_customer": getattr(c, "is_customer", None),
-                "is_supplier": getattr(c, "is_supplier", None),
-                "status": getattr(c, "contact_status", None),
-            } if c else None
+        while True:
+            # Restrict to the contact and exclude deleted invoices
+            result = api.get_invoices(
+                tenant_id,
+                where=f'Contact.ContactID==Guid("{contact_id}") AND Status!="DELETED"',
+                order="InvoiceNumber ASC",
+                page=page,
+                include_archived=False,
+                created_by_my_app=False,
+                unitdp=2,
+                summary_only=False,
+                page_size=PAGE_SIZE,
+            )
 
-            # Monetary fields
-            total = getattr(inv, "total", None)
-            amount_paid = getattr(inv, "amount_paid", None)
-            amount_credited = getattr(inv, "amount_credited", None)
-            amount_due = getattr(inv, "amount_due", None)
+            invs = result.invoices or []
+            for inv in invs:
+                # Minimal contact summary (safe getattr)
+                c = getattr(inv, "contact", None)
+                contact = {
+                    "contact_id": getattr(c, "contact_id", None),
+                    "name": getattr(c, "name", None),
+                    "email": getattr(c, "email_address", None),
+                    "is_customer": getattr(c, "is_customer", None),
+                    "is_supplier": getattr(c, "is_supplier", None),
+                    "status": getattr(c, "contact_status", None),
+                } if c else None
 
-            # Compute a consistent "amount_remaining" (use API field if present; fall back to calc)
-            if amount_due is None and None not in (total, amount_paid, amount_credited):
-                amount_due_calc = (total or 0) - (amount_paid or 0) - (amount_credited or 0)
-            else:
-                amount_due_calc = amount_due
+                # Monetary fields
+                total = getattr(inv, "total", None)
+                amount_paid = getattr(inv, "amount_paid", None)
+                amount_credited = getattr(inv, "amount_credited", None)
+                amount_due = getattr(inv, "amount_due", None)
 
-            invoices.append({
-                "invoice_id": getattr(inv, "invoice_id", None),
-                "number": getattr(inv, "invoice_number", None),
-                "type": getattr(inv, "type", None),                 # e.g., ACCREC / ACCPAY
-                "status": getattr(inv, "status", None),
+                # Compute a consistent "amount_remaining" (use API field if present; fall back to calc)
+                if amount_due is None and None not in (total, amount_paid, amount_credited):
+                    amount_due_calc = (total or 0) - (amount_paid or 0) - (amount_credited or 0)
+                else:
+                    amount_due_calc = amount_due
 
-                "date": _fmt_date(getattr(inv, "date", None)),
-                "due_date": _fmt_date(getattr(inv, "due_date", None)),
+                invoices.append({
+                    "invoice_id": getattr(inv, "invoice_id", None),
+                    "number": getattr(inv, "invoice_number", None),
+                    "type": getattr(inv, "type", None),                 # e.g., ACCREC / ACCPAY
+                    "status": getattr(inv, "status", None),
 
-                "reference": getattr(inv, "reference", None),
+                    "date": _fmt_date(getattr(inv, "date", None)),
+                    "due_date": _fmt_date(getattr(inv, "due_date", None)),
 
-                "subtotal": getattr(inv, "sub_total", None),
-                "total_tax": getattr(inv, "total_tax", None),
-                "total": total,
+                    "reference": getattr(inv, "reference", None),
 
-                "amount_paid": amount_paid,
-                "amount_credited": amount_credited,
-                "amount_due": amount_due_calc,   # normalized remaining balance
+                    "subtotal": getattr(inv, "sub_total", None),
+                    "total_tax": getattr(inv, "total_tax", None),
+                    "total": total,
 
-                "contact": contact,
-            })
+                    "amount_paid": amount_paid,
+                    "amount_credited": amount_credited,
+                    "amount_due": amount_due_calc,   # normalized remaining balance
+
+                    "contact": contact,
+                })
+
+            if len(invs) < PAGE_SIZE:
+                break
+
+            page += 1
 
         return invoices
 
@@ -364,57 +376,67 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
 def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
     tenant_id = session["xero_tenant_id"]
+    PAGE_SIZE = 50
 
     try:
-        result = api.get_credit_notes(
-            tenant_id,
-            where=f'Contact.ContactID==Guid("{contact_id}")',
-            order="CreditNoteNumber ASC",
-            page=1,
-            unitdp=2,
-            page_size=50,
-        )
+        credit_notes: List[Dict[str, Any]] = []
+        page = 1
 
-        credit_notes = []
-        for cn in (result.credit_notes or []):
-            c = getattr(cn, "contact", None)
-            contact = {
-                "contact_id": getattr(c, "contact_id", None),
-                "name": getattr(c, "name", None),
-                "email": getattr(c, "email_address", None),
-                "is_customer": getattr(c, "is_customer", None),
-                "is_supplier": getattr(c, "is_supplier", None),
-                "status": getattr(c, "contact_status", None),
-            } if c else None
+        while True:
+            result = api.get_credit_notes(
+                tenant_id,
+                where=f'Contact.ContactID==Guid("{contact_id}")',
+                order="CreditNoteNumber ASC",
+                page=page,
+                unitdp=2,
+                page_size=PAGE_SIZE,
+            )
 
-            total = getattr(cn, "total", None)
-            amount_paid = getattr(cn, "amount_paid", None)
-            amount_credited = getattr(cn, "amount_credited", None)
-            remaining_credit = getattr(cn, "remaining_credit", None)
+            cnotes = result.credit_notes or []
+            for cn in cnotes:
+                c = getattr(cn, "contact", None)
+                contact = {
+                    "contact_id": getattr(c, "contact_id", None),
+                    "name": getattr(c, "name", None),
+                    "email": getattr(c, "email_address", None),
+                    "is_customer": getattr(c, "is_customer", None),
+                    "is_supplier": getattr(c, "is_supplier", None),
+                    "status": getattr(c, "contact_status", None),
+                } if c else None
 
-            credit_notes.append({
-                "credit_note_id": getattr(cn, "credit_note_id", None),
-                "number": getattr(cn, "credit_note_number", None),
-                "type": getattr(cn, "type", None),                 # e.g., ACCRECCREDIT
-                "status": getattr(cn, "status", None),
+                total = getattr(cn, "total", None)
+                amount_paid = getattr(cn, "amount_paid", None)
+                amount_credited = getattr(cn, "amount_credited", None)
+                remaining_credit = getattr(cn, "remaining_credit", None)
 
-                "date": _fmt_date(getattr(cn, "date", None)),
-                "due_date": _fmt_date(getattr(cn, "due_date", None)),
+                credit_notes.append({
+                    "credit_note_id": getattr(cn, "credit_note_id", None),
+                    "number": getattr(cn, "credit_note_number", None),
+                    "type": getattr(cn, "type", None),                 # e.g., ACCRECCREDIT
+                    "status": getattr(cn, "status", None),
 
-                "reference": getattr(cn, "reference", None),
+                    "date": _fmt_date(getattr(cn, "date", None)),
+                    "due_date": _fmt_date(getattr(cn, "due_date", None)),
 
-                "subtotal": getattr(cn, "sub_total", None),
-                "total_tax": getattr(cn, "total_tax", None),
-                "total": total,
+                    "reference": getattr(cn, "reference", None),
 
-                "amount_paid": amount_paid,
-                "amount_credited": amount_credited,
-                # For credit notes, carry remaining_credit as amount_due analogue if present
-                "amount_due": remaining_credit,
-                "remaining_credit": remaining_credit,
+                    "subtotal": getattr(cn, "sub_total", None),
+                    "total_tax": getattr(cn, "total_tax", None),
+                    "total": total,
 
-                "contact": contact,
-            })
+                    "amount_paid": amount_paid,
+                    "amount_credited": amount_credited,
+                    # For credit notes, carry remaining_credit as amount_due analogue if present
+                    "amount_due": remaining_credit,
+                    "remaining_credit": remaining_credit,
+
+                    "contact": contact,
+                })
+
+            if len(cnotes) < PAGE_SIZE:
+                break
+
+            page += 1
 
         return credit_notes
 
@@ -430,27 +452,38 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
 def get_contacts() -> List[Dict[str, Any]]:
     tenant_id = session["xero_tenant_id"]
+    PAGE_SIZE = 50
 
     try:
-        # Explicitly exclude archived contacts (treat as deleted/hidden)
-        result = api.get_contacts(
-            xero_tenant_id=tenant_id,
-            page=1,
-            include_archived=False,
-            page_size=60,  # default is 100; keep smaller for testing
-        )
+        contacts: List[Dict[str, Any]] = []
+        page = 1
 
-        contacts = [
-            {
-                "contact_id": c.contact_id,
-                "name": c.name,
-                "email": c.email_address,
-                "is_customer": c.is_customer,
-                "is_supplier": c.is_supplier,
-                "status": c.contact_status,
-            }
-            for c in result.contacts or []
-        ]
+        while True:
+            # Explicitly exclude archived contacts (treat as deleted/hidden)
+            result = api.get_contacts(
+                xero_tenant_id=tenant_id,
+                page=page,
+                include_archived=False,
+                page_size=PAGE_SIZE,  # default is 100; keep smaller for testing
+            )
+
+            page_contacts = result.contacts or []
+            for c in page_contacts:
+                contacts.append(
+                    {
+                        "contact_id": c.contact_id,
+                        "name": c.name,
+                        "email": c.email_address,
+                        "is_customer": c.is_customer,
+                        "is_supplier": c.is_supplier,
+                        "status": c.contact_status,
+                    }
+                )
+
+            if len(page_contacts) < PAGE_SIZE:
+                break
+
+            page += 1
 
         return contacts
 
