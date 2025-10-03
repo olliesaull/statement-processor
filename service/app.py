@@ -117,6 +117,7 @@ def upload_statements():
     contacts_list = sorted(get_contacts(), key=lambda c: c["name"].casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     success_count: Optional[int] = None
+    error_messages: List[str] = []
     logger.info("Rendering upload statements", tenant_id=tenant_id, available_contacts=len(contacts_list))
 
     if request.method == "POST":
@@ -125,44 +126,66 @@ def upload_statements():
         uploads_ok = 0
         logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
 
-        for f, contact in zip(files, names):
-            if not contact.strip():
-                logger.info("Missing contact", filename=f.filename)
-                continue
-            if not is_allowed_pdf(f.filename, f.mimetype):
-                logger.info("Rejected non-PDF upload", filename=f.filename)
-                continue
+        if not files:
+            logger.info("Please add at least one statement (PDF).")
+        elif len(files) != len(names):
+            logger.info("Each statement must have a contact selected.")
+        else:
+            for f, contact in zip(files, names):
+                if not contact.strip():
+                    logger.info("Missing contact", statement_filename=f.filename)
+                    continue
+                if not is_allowed_pdf(f.filename, f.mimetype):
+                    logger.info("Rejected non-PDF upload", statement_filename=f.filename)
+                    continue
 
-            contact_id: Optional[str] = contact_lookup.get(contact.strip())
-            statement_id = str(uuid.uuid4())
+                contact_name = contact.strip()
+                contact_id: Optional[str] = contact_lookup.get(contact_name)
+                if not contact_id:
+                    logger.warning("Upload blocked; contact not found", tenant_id=tenant_id, contact_name=contact_name, statement_filename=f.filename)
+                    error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")
+                    continue
 
-            entry = {
-                "statement_id": statement_id,
-                "statement_name": f.filename,
-                "contact_name": contact.strip(),
-                "contact_id": contact_id,
-            }
+                try:
+                    get_contact_config(tenant_id, contact_id)
+                except KeyError:
+                    logger.exception("Upload blocked; contact config missing", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=f.filename)
+                    error_messages.append(f"Contact '{contact_name}' does not have a statement config yet. Please configure it before uploading.")
+                    continue
+                except Exception as exc:
+                    logger.exception("Upload blocked; config lookup failed", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=f.filename, error=exc)
+                    error_messages.append(f"Could not load the config for '{contact_name}'. Please try again later.")
+                    continue
 
-            # Upload pdf statement to S3
-            pdf_statement_key = f"{tenant_id}/{statement_id}.pdf"
-            upload_statement_to_s3(fs_like=f, key=pdf_statement_key)
+                statement_id = str(uuid.uuid4())
 
-            # Upload statement to ddb
-            add_statement_to_table(tenant_id, entry)
+                entry = {
+                    "statement_id": statement_id,
+                    "statement_name": f.filename,
+                    "contact_name": contact_name,
+                    "contact_id": contact_id,
+                }
 
-            logger.info("Statement submitted", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id)
+                # Upload pdf statement to S3
+                pdf_statement_key = f"{tenant_id}/{statement_id}.pdf"
+                upload_statement_to_s3(fs_like=f, key=pdf_statement_key)
 
-            # Kick off background textraction so it's ready by the time the user views it
-            json_statement_key = f"{tenant_id}/{statement_id}.json"
-            _executor.submit(textract_in_background, tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
+                # Upload statement to ddb
+                add_statement_to_table(tenant_id, entry)
 
-            uploads_ok += 1
+                logger.info("Statement submitted", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id)
+
+                # Kick off background textraction so it's ready by the time the user views it
+                json_statement_key = f"{tenant_id}/{statement_id}.json"
+                _executor.submit(textract_in_background, tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
+
+                uploads_ok += 1
 
         if uploads_ok:
             success_count = uploads_ok
-        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok)
+        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=len(error_messages))
 
-    return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count)
+    return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages)
 
 @app.route("/statements")
 @xero_token_required

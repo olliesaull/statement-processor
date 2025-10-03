@@ -4,6 +4,20 @@
 {% block content %}
 <div class="d-flex flex-column align-items-center" style="margin-top: 10vh;">
   <h1>Upload Statements</h1>
+  {% if error_messages %}
+    <div class="alert alert-danger w-100" style="max-width: 720px;">
+      {% if error_messages|length == 1 %}
+        {{ error_messages[0] }}
+      {% else %}
+        <ul class="mb-0">
+          {% for err in error_messages %}
+          <li>{{ err }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+  {% endif %}
+
   {% if success_count %}
     <div class="alert alert-success w-100" style="max-width: 720px;">
       Uploaded {{ success_count }} statement{% if success_count != 1 %}s{% endif %} successfully.
