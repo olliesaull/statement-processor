@@ -162,6 +162,49 @@ def to_number(s: Any) -> Optional[Decimal]:
     try:
         return Decimal(t)
     except InvalidOperation:
+        pass
+
+    # Handle common statement formats like "R 1,234.56" or "(R 1,234.56)"
+    # where currency symbols/parentheses prevent Decimal from parsing directly.
+    import re
+
+    # Strip alphabetic currency markers while keeping signs, digits, dots, parentheses
+    normalized = re.sub(r"[A-Za-z]", "", t)
+
+    negative = False
+    trimmed = normalized.strip()
+    if trimmed.startswith("(") and trimmed.endswith(")"):
+        negative = True
+        trimmed = trimmed[1:-1]
+
+    # Remove any remaining parentheses and non-numeric separators
+    trimmed = trimmed.replace("(", "").replace(")", "")
+    trimmed = re.sub(r"[^0-9.+-]", "", trimmed)
+
+    if not trimmed:
+        return None
+
+    # Preserve a single leading sign; drop extra +/- characters to avoid InvalidOperation
+    sign = ""
+    if trimmed[0] in "+-":
+        sign = trimmed[0]
+        trimmed = trimmed[1:]
+    trimmed = re.sub(r"[+-]", "", trimmed)
+    if sign:
+        trimmed = sign + trimmed
+
+    if negative:
+        if not trimmed.startswith("-"):
+            trimmed = "-" + trimmed.lstrip("+")
+    elif trimmed.startswith("+"):
+        trimmed = trimmed[1:]
+
+    if not trimmed:
+        return None
+
+    try:
+        return Decimal(trimmed)
+    except InvalidOperation:
         return None
 
 
