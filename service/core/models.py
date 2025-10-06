@@ -14,7 +14,7 @@ class StatementItem(BaseModel):
     due_date: Optional[str] = ""
     number: Optional[str] = ""
     reference: Optional[str] = ""
-    statement_date_format: str = ""
+    date_format: str = ""
     total: Optional[Number] = ""
     raw: dict = Field(default_factory=dict)
 

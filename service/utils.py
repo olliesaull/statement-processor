@@ -666,12 +666,7 @@ class StatementJSONNotFoundError(Exception):
     """Raised when the structured JSON for a statement is not yet available."""
 
 
-def fetch_json_statement(
-    tenant_id: str,
-    contact_id: str,
-    bucket: str,
-    json_key: str,
-) -> Tuple[Dict[str, Any], FileStorage]:
+def fetch_json_statement(tenant_id: str, contact_id: str, bucket: str, json_key: str) -> Tuple[Dict[str, Any], FileStorage]:
     """Download and return the JSON statement from S3.
 
     Raises:
@@ -688,25 +683,6 @@ def fetch_json_statement(
     obj = s3_client.get_object(Bucket=bucket, Key=json_key)
     json_bytes = obj["Body"].read()
     data = json.loads(json_bytes.decode("utf-8"))
-
-    # Backfill statement_date_format for existing JSON if missing
-    try:
-        cfg = get_contact_config(tenant_id, contact_id) if contact_id else {}
-        fmt = cfg.get("statement_date_format") if isinstance(cfg, dict) else None
-    except Exception:
-        fmt = None
-
-    mutated = False
-    if fmt:
-        items = data.get("statement_items") or []
-        for it in items:
-            if isinstance(it, dict) and not it.get("statement_date_format"):
-                it["statement_date_format"] = fmt
-                mutated = True
-    if mutated:
-        json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-        upload_statement_to_s3(io.BytesIO(json_bytes), json_key)
-        logger.debug("Backfilled statement date format", tenant_id=tenant_id, json_key=json_key)
 
     filename = json_key.rsplit("/", 1)[-1]
     fs = FileStorage(stream=io.BytesIO(json_bytes), filename=filename)
@@ -840,12 +816,12 @@ def get_items_template_from_config(contact_config: Dict[str, Any]) -> Dict[str, 
     return contact_config
 
 
-def get_statement_date_format_from_config(contact_config: Dict[str, Any]) -> Optional[str]:
-    """Extract the configured statement date format from a contact configuration."""
+def get_date_format_from_config(contact_config: Dict[str, Any]) -> Optional[str]:
+    """Extract the configured date format from a contact configuration."""
     if not isinstance(contact_config, dict):
         return None
 
-    fmt = contact_config.get("statement_date_format")
+    fmt = contact_config.get("date_format")
     return str(fmt) if fmt else None
 
 
@@ -870,7 +846,7 @@ def prepare_display_mappings(
     header_to_field_norm: Dict[str, str] = {}
     # Simple (string) mappings first
     for canonical_field, mapped in (items_template or {}).items():
-        if canonical_field in {"raw", "statement_date_format"}:
+        if canonical_field in {"raw", "date_format"}:
             continue
         if isinstance(mapped, str) and mapped.strip():
             header_to_field_norm[_n(mapped)] = canonical_field
@@ -894,7 +870,7 @@ def prepare_display_mappings(
 
     # Convert raw rows into dicts filtered by display headers, normalizing date fields for display
     rows_by_header: List[Dict[str, str]] = []
-    stmt_date_fmt = get_statement_date_format_from_config(contact_config)
+    date_fmt = get_date_format_from_config(contact_config)
     numeric_fields = {"total", "amount_paid", "amount_due"}
     for it in items:
         raw = it.get("raw", {}) if isinstance(it, dict) else {}
@@ -904,10 +880,10 @@ def prepare_display_mappings(
             # If this header maps to a canonical date field, normalize to the configured format
             canon = header_to_field.get(h)
             if canon in {"date", "due_date"}:
-                dt = coerce_datetime_with_template(v, stmt_date_fmt)
+                dt = coerce_datetime_with_template(v, date_fmt)
                 if dt is not None:
-                    if stmt_date_fmt:
-                        v = format_iso_with(dt, stmt_date_fmt)
+                    if date_fmt:
+                        v = format_iso_with(dt, date_fmt)
                     else:
                         v = dt.strftime("%Y-%m-%d")
             elif canon in numeric_fields:
@@ -1052,7 +1028,7 @@ def build_right_rows(
     header_to_field: Dict[str, str],
     matched_map: Dict[str, Dict],
     item_number_header: Optional[str],
-    statement_date_format: Optional[str] = None,
+    date_format: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """
     Using the matched map, build the right-hand table rows with values from
@@ -1094,7 +1070,7 @@ def build_right_rows(
                 if v is None:
                     row_right[h] = ""
                 else:
-                    fmt = statement_date_format or "YYYY-MM-DD"
+                    fmt = date_format or "YYYY-MM-DD"
                     row_right[h] = format_iso_with(v, fmt)
             else:
                 val = inv.get(invoice_field, "")

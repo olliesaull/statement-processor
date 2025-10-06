@@ -21,7 +21,7 @@ FIELD_DESCRIPTIONS: Dict[str, str] = {
     "reference": (
         "Any descriptive text that helps identify the transaction (project, memo, etc.)."
     ),
-    "statement_date_format": (
+    "date_format": (
         "Date pattern (e.g., 'D MMMM YYYY', 'MM/DD/YY'). See the guide below for full token descriptions and examples."
     ),
     "total": (
@@ -36,6 +36,6 @@ EXAMPLE_CONFIG: Dict[str, str | List[str]] = {
     "due_date": "",
     "number": "reference",
     "reference": "description",
-    "statement_date_format": "YYYY-MM-DD",
+    "date_format": "YYYY-MM-DD",
     "total": "",
 }

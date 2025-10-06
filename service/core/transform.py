@@ -335,15 +335,18 @@ def table_to_json(
     simple_map: Dict[str, str] = {}
     raw_map: Dict[str, str] = {}
     date_format = None
-    # Use explicit statement_date_format from config (preferred)
-    date_format = map_cfg.get("statement_date_format") if isinstance(map_cfg, dict) else None
+    # Use explicit date_format from config (preferred)
+    if isinstance(map_cfg, dict):
+        date_format = map_cfg.get("date_format")
+    else:
+        date_format = None
     if not date_format:
-        raise ValueError("statement_date_format must be configured for this contact")
+        raise ValueError("date_format must be configured for this contact")
     # Limit simple fields to those supported by StatementItem (exclude special handled keys)
-    # Exclude 'statement_date_format' so it is never treated as a header mapping.
+    # Exclude 'date_format' so it is never treated as a header mapping.
     allowed_fields = set(StatementItem.model_fields.keys()) - {
         "raw",
-        "statement_date_format",
+        "date_format",
         "statement_item_id",
     }
     for field, value in items_template.items():
@@ -424,8 +427,8 @@ def table_to_json(
             row_obj: Dict[str, Any] = deepcopy(items_template)
             row_obj.pop("statement_item_id", None)
 
-            # Surface the statement date format explicitly for downstream consumers
-            row_obj["statement_date_format"] = date_format
+            # Surface the configured date format explicitly for downstream consumers
+            row_obj["date_format"] = date_format
 
             # simple fields
             extracted_simple: Dict[str, Any] = {}

@@ -34,7 +34,7 @@ from utils import (
     get_credit_notes_by_contact,
     get_incomplete_statements,
     get_invoices_by_contact,
-    get_statement_date_format_from_config,
+    get_date_format_from_config,
     get_statement_item_status_map,
     get_statement_record,
     guess_statement_item_type,
@@ -311,7 +311,7 @@ def statement(statement_id: str):
     )
 
     # 3) Build right-hand rows from the matched invoices
-    stmt_date_fmt = get_statement_date_format_from_config(contact_config)
+    date_fmt = get_date_format_from_config(contact_config)
 
     right_rows_by_header = build_right_rows(
         rows_by_header=rows_by_header,
@@ -319,7 +319,7 @@ def statement(statement_id: str):
         header_to_field=header_to_field,
         matched_map=matched_invoice_to_statement_item,
         item_number_header=item_number_header,
-        statement_date_format=stmt_date_fmt,
+        date_format=date_fmt,
     )
 
     # 4) Compare LEFT (statement) vs RIGHT (Xero) for row highlighting
