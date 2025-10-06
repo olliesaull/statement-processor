@@ -513,8 +513,14 @@ def table_to_json(
                     for label, val in amount_entries.items():
                         if isinstance(label, str) and label.strip():
                             row_obj["raw"].setdefault(label, val)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "[table_to_json] failed to merge amount entries into raw",
+                    statement_id=statement_id,
+                    row_number=i_row,
+                    error=str(exc),
+                    exc_info=True,
+                )
 
             # Ensure raw contains the simple-mapped headers/values (preserve original case)
             try:
@@ -523,8 +529,14 @@ def table_to_json(
                     val = meta.get("value") if isinstance(meta, dict) else None
                     if isinstance(hdr, str) and hdr.strip():
                         row_obj["raw"].setdefault(hdr, val)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "[table_to_json] failed to merge simple headers into raw",
+                    statement_id=statement_id,
+                    row_number=i_row,
+                    error=str(exc),
+                    exc_info=True,
+                )
 
             # Keep raw key insertion order (do not reorder to PDF header order)
 

@@ -100,8 +100,8 @@ def get_tables(bucket: str, key: str) -> Dict[str, List[TableOnPage]]:
     result: Dict[str, List[TableOnPage]] = {}
     try:
         result[key] = analyze_tables_s3(bucket, key)
-    except ClientError as ce:
-        logger.info("AWS error", key=key, error=ce)
-    except Exception as e:
-        logger.info("Error processing file", key=key, error=e)
+    except ClientError as exc:
+        logger.exception("Textract request failed", bucket=bucket, key=key, error=str(exc), exc_info=True)
+    except Exception as exc:
+        logger.exception("Unexpected error processing file", bucket=bucket, key=key, error=str(exc))
     return result

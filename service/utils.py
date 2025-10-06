@@ -2,7 +2,6 @@ import difflib
 import io
 import json
 import re
-import traceback
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -740,9 +739,15 @@ def textract_in_background(tenant_id: str, contact_id: Optional[str], pdf_key: s
             json_key=json_key,
         )
         logger.info("[bg] Textraction complete", tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_key, json_key=json_key)
-    except Exception:
-        logger.info("[bg] Textraction failed", tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_key)
-        traceback.print_exc()
+    except Exception as exc:
+        logger.exception(
+            "[bg] Textraction failed",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            pdf_key=pdf_key,
+            json_key=json_key,
+            error=str(exc),
+        )
 
 # -----------------------------
 # Helpers for statement view

@@ -90,7 +90,8 @@ def _persist_statement_items(
             if header_item
             else False
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to fetch statement header completion flag", tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
         header_completed = False
 
     if keys_to_delete:
@@ -157,12 +158,7 @@ def run_textraction(bucket: str, pdf_key: str, tenant_id: str, contact_id: str) 
             items=statement.get("statement_items", []) or [],
         )
     except Exception as exc:
-        logger.info(
-            "Failed to persist statement items",
-            statement_id=statement_id,
-            tenant_id=tenant_id,
-            error=exc,
-        )
+        logger.exception("Failed to persist statement items", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id, error=str(exc))
 
     # Fetch PDF bytes from S3 and validate against extracted JSON
     try:
@@ -170,12 +166,8 @@ def run_textraction(bucket: str, pdf_key: str, tenant_id: str, contact_id: str) 
         pdf_bytes = obj["Body"].read()
         statement_items = statement.get("statement_items", []) or []
         validate_references_roundtrip(pdf_bytes, statement_items)
-    except Exception as e:
-        logger.info(
-            "[WARNING] Reference validation skipped",
-            key=key,
-            error=e,
-        )
+    except Exception as exc:
+        logger.warning("Reference validation skipped", key=key, tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
 
     # optional: ML outlier pass (kept commented; requires sklearn and data volume)
     # from core.validation.anomaly_detection import apply_outlier_flags
