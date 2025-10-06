@@ -34,7 +34,6 @@ from config import (
     tenant_statements_table,
 )
 from core.date_utils import coerce_datetime_with_template, format_iso_with
-from core.get_contact_config import get_contact_config
 from core.textract_statement import run_textraction
 from core.transform import equal
 
@@ -689,13 +688,7 @@ def fetch_json_statement(tenant_id: str, contact_id: str, bucket: str, json_key:
     return data, fs
 
 
-def get_or_create_json_statement(
-    tenant_id: str,
-    contact_id: str,
-    bucket: str,
-    pdf_key: str,
-    json_key: str,
-) -> Tuple[Dict[str, Any], FileStorage]:
+def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, pdf_key: str, json_key: str) -> Tuple[Dict[str, Any], FileStorage]:
     """
     Look for JSON statement in S3. If it exists, download and return it.
     Otherwise, run Textract on the PDF, upload the JSON, and return it.
@@ -732,13 +725,7 @@ def get_or_create_json_statement(
     return data, fs
 
 
-def textract_in_background(
-    *,
-    tenant_id: str,
-    contact_id: Optional[str],
-    pdf_key: str,
-    json_key: str,
-) -> None:
+def textract_in_background(tenant_id: str, contact_id: Optional[str], pdf_key: str, json_key: str) -> None:
     """Run get_or_create_json_statement to generate and upload JSON.
 
     Designed to be run off the request thread. Swallows exceptions after logging.
