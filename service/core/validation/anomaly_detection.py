@@ -27,21 +27,6 @@ def _num(x: Any) -> float:
     return 0.0
 
 
-def _num_with_flag(x: Any) -> Tuple[float, float]:
-    """Return (value, parse_error_flag). Flag is 1.0 if parsing failed."""
-    if isinstance(x, (int, float)):
-        return float(x), 0.0
-    if isinstance(x, str):
-        t = x.replace(",", "").replace(" ", "").strip()
-        if not t:
-            return 0.0, 0.0
-        try:
-            return float(t), 0.0
-        except Exception:
-            return 0.0, 1.0
-    return 0.0, 0.0
-
-
 def _day(s: Any) -> int:
     """Extract day-of-month from a simple DD/... string; else 0."""
     if not isinstance(s, str):

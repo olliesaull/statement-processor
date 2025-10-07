@@ -20,6 +20,9 @@ xero-python
 # Textraction
 amazon-textract-textractor
 
+# Testing
+pytest
+
 # Other
 pandas
 pydantic
