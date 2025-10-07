@@ -39,3 +39,24 @@ white-space: normal;
 .col-pay      { min-width: 9ch;  text-align: right; }
 .col-balance  { min-width: 11ch; text-align: right; }
 .col-status   { min-width: 14ch; }
+
+.statement-legend .legend-swatch {
+display: inline-block;
+width: 14px;
+height: 14px;
+border-radius: 2px;
+border: 1px solid rgba(0, 0, 0, 0.15);
+}
+
+.statement-legend .legend-swatch.bg-warning {
+border-color: rgba(0, 0, 0, 0.05);
+}
+
+.legend-swatch-faded {
+background-color: var(--bs-secondary-bg);
+opacity: 0.6;
+}
+
+.anomaly-row td {
+position: relative;
+}

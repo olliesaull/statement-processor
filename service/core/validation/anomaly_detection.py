@@ -236,4 +236,9 @@ def apply_outlier_flags(
         "flagged_items": flagged_items,
         "field_stats": field_stats,
     }
+
+    print("*"*88)
+    print(summary)
+    print("*"*88)
+
     return statement, summary

@@ -35,7 +35,7 @@
     {% if is_processing %}
       <div class="text-center py-5">
         <div class="spinner-border text-primary" role="status" aria-hidden="true"></div>
-        <p class="mt-3 mb-1">We're still preparing this statement.</p>
+        <p class="mt-3 mb-1">We're still preparing this statement. This can take anywhere from 5 seconds to 10 minutes.</p>
         <p class="text-muted mb-0">This page will refresh automatically in a few seconds.</p>
       </div>
       <script>
@@ -43,6 +43,21 @@
       </script>
     {% else %}
       {% set statement_col_count = raw_statement_headers|length %}
+
+      <div class="statement-legend d-flex flex-wrap align-items-center gap-3 small text-muted mb-3">
+        <span class="legend-item d-flex align-items-center gap-2">
+          <span class="legend-swatch bg-success"></span>Match
+        </span>
+        <span class="legend-item d-flex align-items-center gap-2">
+          <span class="legend-swatch bg-danger"></span>Mismatch
+        </span>
+        <span class="legend-item d-flex align-items-center gap-2 text-dark">
+          <span class="legend-swatch bg-warning"></span>Flagged anomaly
+        </span>
+        <span class="legend-item d-flex align-items-center gap-2">
+          <span class="legend-swatch legend-swatch-faded"></span>Completed rows appear faded
+        </span>
+      </div>
 
       <div class="table-responsive statement-table-wrapper">
         <table class="table table-striped table-bordered align-middle table-fixed-height table-compare w-100">
@@ -64,9 +79,13 @@
           <tbody>
             {% if statement_rows %}
               {% for row in statement_rows %}
+                {% set anomalous = 'ml-outlier' in (row.flags or []) %}
                 {% set row_class = 'table-success' if row.matches else 'table-danger' %}
+                {% if anomalous %}
+                  {% set row_class = row_class + ' table-warning anomaly-row' %}
+                {% endif %}
                 {% if row.is_completed %}
-                  {% set row_class = row_class + ' opacity-75' %}
+                  {% set row_class = row_class + ' opacity-50' %}
                 {% endif %}
                 <tr class="{{ row_class }}">
                   {% for value in row.left_values %}

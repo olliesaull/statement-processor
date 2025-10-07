@@ -387,6 +387,11 @@ def statement(statement_id: str):
             is_item_completed = item_status_map.get(statement_item_id, False)
 
         right_row_dict = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
+        flags = []
+        if isinstance(item, dict):
+            raw_flags = item.get("_flags") or []
+            if isinstance(raw_flags, list):
+                flags = [str(flag) for flag in raw_flags]
 
         statement_rows.append(
             {
@@ -395,6 +400,7 @@ def statement(statement_id: str):
                 "right_values": [right_row_dict.get(h, "") for h in display_headers],
                 "matches": row_matches[idx] if idx < len(row_matches) else False,
                 "is_completed": is_item_completed,
+                "flags": flags,
             }
         )
 

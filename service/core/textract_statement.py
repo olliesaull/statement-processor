@@ -170,9 +170,9 @@ def run_textraction(bucket: str, pdf_key: str, tenant_id: str, contact_id: str) 
         logger.warning("Reference validation skipped", key=key, tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
 
     # optional: ML outlier pass (kept commented; requires sklearn and data volume)
-    # from core.validation.anomaly_detection import apply_outlier_flags
-    # statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True, threshold_method="iqr")
-    # print(json.dumps(summary, indent=2))
+    from core.validation.anomaly_detection import apply_outlier_flags
+    statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True, threshold_method="iqr")
+    print(json.dumps(summary, indent=2))
 
     # Serialize to bytes in memory for upload/response
     buf = io.BytesIO(json.dumps(statement, ensure_ascii=False, indent=2).encode("utf-8"))
