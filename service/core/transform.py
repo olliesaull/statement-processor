@@ -372,43 +372,67 @@ def table_to_json(
 
     items: List[StatementItem] = []
     item_counter = 0
-    for entry in selected:
+    primary_header_row: Optional[List[str]] = None
+    primary_col_index: Optional[Dict[str, int]] = None
+    for _page_number, entry in enumerate(selected, start=1):
         grid = entry["grid"]
         grid = _dedupe_grid_columns(grid)
-        hdr_idx, header_row = best_header_row(grid, candidates)
-        data_rows = grid[hdr_idx + 1 :]
-        col_index = build_col_index(header_row)
+
+        header_row: List[str]
+        col_index: Dict[str, int]
+        data_rows: List[List[str]]
+        header_detected = False
+
+        if primary_header_row is None:
+            hdr_idx, detected_header = best_header_row(grid, candidates)
+            header_row = list(detected_header)
+            col_index = build_col_index(header_row)
+            data_rows = grid[hdr_idx + 1 :]
+            primary_header_row = list(header_row)
+            primary_col_index = dict(col_index)
+            header_detected = True
+        else:
+            header_row = list(primary_header_row)
+            col_index = dict(primary_col_index or build_col_index(header_row))
+            start_idx = _first_nonempty_row_index(grid)
+            first_content_row = grid[start_idx] if start_idx < len(grid) else []
+            if _rows_match_header(first_content_row, primary_header_row):
+                data_rows = grid[start_idx + 1 :]
+                header_detected = True
+            else:
+                data_rows = grid[start_idx:]
 
         # Ensure the contact's config table has a 'raw' mapping for discovered headers.
         # We add missing raw keys as identity mappings (lower-cased): {"header": "header"}.
-        try:
-            cfg_existing: Dict[str, Any] = {}
+        if header_detected:
             try:
-                cfg_existing = get_contact_config(tenant_id, contact_id)
-            except Exception:
-                cfg_existing = {}
+                cfg_existing: Dict[str, Any] = {}
+                try:
+                    cfg_existing = get_contact_config(tenant_id, contact_id)
+                except Exception:
+                    cfg_existing = {}
 
-            updated = False
-            # Root-level raw only
-            root_raw = cfg_existing.get("raw") if isinstance(cfg_existing.get("raw"), dict) else {}
-            root_raw = dict(root_raw)
-            for h in header_row:
-                hh = str(h or "").strip()
-                if not hh:
-                    continue
-                kl = hh.lower()
-                if kl not in root_raw:
-                    root_raw[kl] = kl
-                    updated = True
-            if updated:
-                new_cfg = dict(cfg_existing)
-                new_cfg["raw"] = root_raw
-                set_contact_config(tenant_id, contact_id, new_cfg)
-        except Exception as e:
-            logger.info(
-                "[table_to_json] failed to persist raw headers",
-                error=e,
-            )
+                updated = False
+                # Root-level raw only
+                root_raw = cfg_existing.get("raw") if isinstance(cfg_existing.get("raw"), dict) else {}
+                root_raw = dict(root_raw)
+                for h in header_row:
+                    hh = str(h or "").strip()
+                    if not hh:
+                        continue
+                    kl = hh.lower()
+                    if kl not in root_raw:
+                        root_raw[kl] = kl
+                        updated = True
+                if updated:
+                    new_cfg = dict(cfg_existing)
+                    new_cfg["raw"] = root_raw
+                    set_contact_config(tenant_id, contact_id, new_cfg)
+            except Exception as e:
+                logger.info(
+                    "[table_to_json] failed to persist raw headers",
+                    error=e,
+                )
 
         # Resolve amount_due entries strictly from configured headers
         configured_amount_headers: List[Tuple[Optional[int], str]] = []
@@ -570,6 +594,23 @@ def table_to_json(
     # meta with filename
     statement = SupplierStatement(statement_items=items)
     return statement.model_dump()
+
+
+def _first_nonempty_row_index(grid: List[List[str]]) -> int:
+    for idx, row in enumerate(grid):
+        if any((cell or "").strip() for cell in row):
+            return idx
+    return 0
+
+
+def _rows_match_header(row: List[str], header: List[str]) -> bool:
+    def _clean(values: List[str]) -> List[str]:
+        cleaned = [str(v or "").strip().lower() for v in values]
+        while cleaned and cleaned[-1] == "":
+            cleaned.pop()
+        return cleaned
+
+    return _clean(row) == _clean(header)
 
 def _norm_number(x: Any) -> Optional[Decimal]:
     """Return Decimal if x looks numeric (incl. currency/commas); else None."""

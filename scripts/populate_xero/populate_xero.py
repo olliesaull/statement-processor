@@ -99,8 +99,16 @@ TENANT_ID = os.getenv("TENANT_ID", "80985eea-b0fe-4b9e-a6f8-787e0b017ce9")
 # CONTACT_ID = os.getenv("CONTACT_ID", "a9dcc903-5ecb-45b0-b02f-818244d531d2")
 
 # SimplePay
-STATEMENT_ID = os.getenv("STATEMENT_ID", "a12917e0-3253-4d4d-9a3f-dabbb5ff92f9")
-CONTACT_ID = os.getenv("CONTACT_ID", "94975100-c0c5-4330-af86-20f8f180e8f4")
+# STATEMENT_ID = os.getenv("STATEMENT_ID", "a12917e0-3253-4d4d-9a3f-dabbb5ff92f9")
+# CONTACT_ID = os.getenv("CONTACT_ID", "94975100-c0c5-4330-af86-20f8f180e8f4")
+
+# Goodstuff Delivered
+# STATEMENT_ID = os.getenv("STATEMENT_ID", "1130fdd0-4406-47ea-862d-37b79f3941ff")
+# CONTACT_ID = os.getenv("CONTACT_ID", "fb07c7dc-3237-4fc4-8e0a-9a0c6eb0d1f1")
+
+# Acme Property Management
+STATEMENT_ID = os.getenv("STATEMENT_ID", "44ab5e71-18ff-40a1-9544-38bf2649ffba")
+CONTACT_ID = os.getenv("CONTACT_ID", "738729e8-ff76-4341-8f29-f96a667d6014")
 
 XERO_CLIENT_ID = os.getenv("XERO_CLIENT_ID") or CONFIG_XERO_CLIENT_ID
 XERO_CLIENT_SECRET = os.getenv("XERO_CLIENT_SECRET") or CONFIG_XERO_CLIENT_SECRET
