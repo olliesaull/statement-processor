@@ -1,242 +1,239 @@
-from typing import Any, Dict, List, Tuple, Type, Union, get_args, get_origin
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
 
 import numpy as np
-import pandas as pd
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import RobustScaler
 
-from core.models import StatementItem
-
-
-# ---------------- helpers ----------------
-def _has(x: Any) -> bool:
-    """Return True if value is non-empty/meaningful."""
-    return not (x is None or (isinstance(x, str) and x.strip() == ""))
+FLAG_LABEL = "ml-outlier"
+DEFAULT_Z_THRESHOLD = 3.5
+MIN_SAMPLE_SIZE = 5
 
 
-def _num(x: Any) -> float:
-    """Parse numeric-like values to float; fall back to 0.0 on failure."""
-    if isinstance(x, (int, float)):
-        return float(x)
-    if isinstance(x, str):
-        t = x.replace(",", "").replace(" ", "").strip()
-        try:
-            return float(t) if t else 0.0
-        except Exception:
-            return 0.0
-    return 0.0
-
-
-def _day(s: Any) -> int:
-    """Extract day-of-month from a simple DD/... string; else 0."""
-    if not isinstance(s, str):
-        return 0
+def _parse_number(value: Any) -> Optional[float]:
+    """Convert common numeric representations to float, returning None when blank or invalid."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
     try:
-        d = int(s.split("/")[0])
-        return d if 1 <= d <= 31 else 0
+        text = str(value)
     except Exception:
-        return 0
+        return None
+    cleaned = (
+        text.replace(",", "")
+        .replace(" ", "")
+        .replace("£", "")
+        .strip()
+    )
+    if cleaned.startswith("(") and cleaned.endswith(")"):
+        cleaned = f"-{cleaned[1:-1]}"
+    if cleaned == "":
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
 
 
-def _norm_doctype_from_text(s: str) -> str:
-    t = (s or "").lower()
-    if "inv" in t or "invoice" in t:
-        return "invoice"
-    if any(k in t for k in ["pymt", "pmt", "pay", "receipt", "py"]):
-        return "payment"
-    if ("credit" in t and "note" in t) or " cr" in t:
-        return "credit_note"
-    if "adj" in t:
-        return "adjustment"
-    if "fee" in t or "charge" in t:
-        return "charge"
-    return t or "_global"
-
-
-def _flatten_union(ann: Any):
-    """Yield atomic types inside nested Unions/Optionals."""
-    if get_origin(ann) is Union:
-        for a in get_args(ann):
-            yield from _flatten_union(a)
+def _sum_amount_due(value: Any) -> Optional[float]:
+    """Amount due can come back as a dict of buckets, list entries, or a single value."""
+    if value is None:
+        return None
+    totals: List[float] = []
+    if isinstance(value, dict):
+        for v in value.values():
+            parsed = _parse_number(v)
+            if parsed is not None:
+                totals.append(parsed)
+    elif isinstance(value, list):
+        for entry in value:
+            if isinstance(entry, dict):
+                parsed = _parse_number(entry.get("value"))
+                if parsed is not None:
+                    totals.append(parsed)
     else:
-        yield ann
+        parsed = _parse_number(value)
+        if parsed is not None:
+            totals.append(parsed)
+    if not totals:
+        return None
+    return float(sum(totals))
 
 
-def _is_numeric_annotation(ann: Any) -> bool:
-    return any(a in (int, float) for a in _flatten_union(ann))
+def _string_length(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        try:
+            value = str(value)
+        except Exception:
+            return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return float(len(stripped))
 
-# ---------------- schema-driven feature builder ----------------
-def build_df_from_schema(
-    items: List[Dict[str, Any]],
-    *,
-    model: Type[StatementItem] = StatementItem,
-    doc_type_field: str = "reference",
-    date_field: str = "date",
-) -> Tuple[pd.DataFrame, List[str]]:
-    """
-    Build a feature DataFrame from StatementItem schema.
-    Returns (df, feature_columns).
-    """
-    # infer fields from Pydantic model
-    numeric_fields: List[str] = []
-    string_fields: List[str] = []
-    for name, field in model.model_fields.items():  # Pydantic v2
-        if name in {"raw"}:  # ignore raw dict
-            continue
-        ann = field.annotation
-        if name == date_field:  # simple date string handled separately
-            continue
-        if _is_numeric_annotation(ann):
-            numeric_fields.append(name)
-        elif ann is str:
-            string_fields.append(name)
-        # else: skip nested models (only date is expected)
 
-    # rows
-    rows: List[Dict[str, Any]] = []
-    for i, it in enumerate(items):
-        raw_text = " ".join(str(v) for v in (it.get("raw") or {}).values())
-        row = {"idx": i, "doctype_group": _norm_doctype_from_text(raw_text or it.get(doc_type_field, ""))}
+class FieldSpec(TypedDict):
+    extractor: Callable[[Dict[str, Any]], Optional[float]]
+    raw_accessor: Callable[[Dict[str, Any]], Any]
+    metric: str
 
-        # date features (simple string)
-        td = it.get(date_field, "")
-        row["date_present"] = 1.0 if _has(td) else 0.0
-        row["day_of_month"] = float(_day(td))
 
-        # string features (presence + length)
-        for f in string_fields:
-            v = it.get(f, "")
-            row[f"{f}_present"] = 1.0 if _has(v) else 0.0
-            row[f"len_{f}"] = float(len(str(v).strip())) if _has(v) else 0.0
+FIELD_SPECS: Dict[str, FieldSpec] = {
+    "total": {
+        "extractor": lambda it: _parse_number(it.get("total")),
+        "raw_accessor": lambda it: it.get("total"),
+        "metric": "value",
+    },
+    "amount_paid": {
+        "extractor": lambda it: _parse_number(it.get("amount_paid")),
+        "raw_accessor": lambda it: it.get("amount_paid"),
+        "metric": "value",
+    },
+    "amount_due": {
+        "extractor": lambda it: _sum_amount_due(it.get("amount_due")),
+        "raw_accessor": lambda it: it.get("amount_due"),
+        "metric": "value",
+    },
+    "number": {
+        "extractor": lambda it: _string_length(it.get("number")),
+        "raw_accessor": lambda it: it.get("number"),
+        "metric": "length",
+    },
+    "reference": {
+        "extractor": lambda it: _string_length(it.get("reference")),
+        "raw_accessor": lambda it: it.get("reference"),
+        "metric": "length",
+    },
+}
 
-        # numeric features (presence + log-abs + sign)
-        for f in numeric_fields:
-            v = it.get(f, "")
-            val = _num(v)
-            row[f"{f}_present"] = 1.0 if _has(v) else 0.0
-            row[f"log_abs_{f}"] = float(np.log1p(abs(val)))
-            row[f"sign_{f}"] = 0.0 if val == 0 else (1.0 if val > 0 else -1.0)
 
-        # No debit/credit legacy orientation in new schema
+def _collect_field_data(items: List[Dict[str, Any]], extractor) -> Tuple[List[Optional[float]], List[float]]:
+    per_item: List[Optional[float]] = []
+    observed: List[float] = []
+    for item in items:
+        value = extractor(item)
+        per_item.append(value)
+        if value is not None:
+            observed.append(float(value))
+    return per_item, observed
 
-        rows.append(row)
 
-    df = pd.DataFrame(rows)
-
-    # assemble feature columns dynamically
-    feature_cols = ["date_present", "day_of_month"]
-    # string-derived
-    for f in string_fields:
-        feature_cols += [f"{f}_present", f"len_{f}"]
-    # numeric-derived
-    for f in numeric_fields:
-        feature_cols += [f"{f}_present", f"log_abs_{f}", f"sign_{f}"]
-    # orientation: removed for new schema
-
-    return df, feature_cols
-
-# ---------------- robust stats for explanations ----------------
-def _robust_stats(X: np.ndarray):
-    med = np.median(X, axis=0)
-    q1 = np.quantile(X, 0.25, axis=0)
-    q3 = np.quantile(X, 0.75, axis=0)
+def _robust_center_scale(values: List[float]) -> Tuple[float, Optional[float], str]:
+    """Return (median, scale, method). Scale can be None if the data are constant."""
+    arr = np.array(values, dtype=float)
+    median = float(np.median(arr))
+    q1 = float(np.percentile(arr, 25))
+    q3 = float(np.percentile(arr, 75))
     iqr = q3 - q1
-    iqr[iqr == 0] = 1e-9
-    return med, iqr
+    if iqr > 1e-9:
+        return median, float(iqr), "iqr"
+    mad = float(np.median(np.abs(arr - median)))
+    scale = mad * 1.4826
+    if scale > 1e-9:
+        return median, float(scale), "mad"
+    unique_vals = np.unique(arr)
+    if len(unique_vals) > 1:
+        return median, 1.0, "unit_fallback"
+    return median, None, "constant"
 
-def _explain_row(x: np.ndarray, med: np.ndarray, iqr: np.ndarray, names: List[str], top_k: int = 6):
-    rz = (x - med) / iqr
-    idxs = np.argsort(np.abs(rz))[::-1][:top_k]
-    return [
-        {"feature": names[j], "value": float(x[j]), "median": float(med[j]),
-         "iqr": float(iqr[j]), "robust_z": float(rz[j])}
-        for j in idxs
-    ]
 
-# ---------------- main API ----------------
 def apply_outlier_flags(
     statement: Dict[str, Any],
     *,
     remove: bool = False,
     one_based_index: bool = False,
-    threshold_method: str = "iqr",  # or "percentile", "zscore"
-    percentile: float = 0.98,
-    iqr_k: float = 1.5,
+    threshold_method: str = "iqr",  # retained for backwards compatibility
+    percentile: float = 0.98,  # unused (legacy)
+    iqr_k: float = 1.5,  # unused (legacy)
     zscore_z: float = 3.0,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Flag rows that sit far outside the bulk of the data for key numeric fields using robust z-scores.
+
+    The previous IsolationForest approach has been replaced with a simpler, deterministic strategy.
+    Only `threshold_method="zscore"` affects behaviour (via `zscore_z`). Other parameters are kept
+    for call-site compatibility but are otherwise ignored.
+    """
+    _ = (percentile, iqr_k)  # legacy parameters are intentionally ignored
+
     items = statement.get("statement_items", []) or []
     if not items:
-        return statement, {"total": 0, "flagged": 0, "flagged_items": [], "profiles": {}}
+        return statement, {"total": 0, "flagged": 0, "flagged_items": [], "field_stats": {}}
 
-    # Build features from schema
-    df, feature_cols = build_df_from_schema(items)  # <- dynamic
-    # group by doc type with small-group fallback to global
-    groups = {}
-    for g, gdf in df.groupby("doctype_group"):
-        groups[g] = gdf.index.tolist()
-    # fold tiny groups into _global
-    idx_global = set(groups.get("_global", []))
-    for g, idxs in list(groups.items()):
-        if g != "_global" and len(idxs) < 8:
-            idx_global.update(idxs)
-            del groups[g]
-    groups["_global"] = sorted(idx_global)
+    threshold = float(zscore_z) if threshold_method == "zscore" else DEFAULT_Z_THRESHOLD
 
-    flagged_items = []
-    keep_mask = np.ones(len(items), dtype=bool)
+    field_values: Dict[str, List[Optional[float]]] = {}
+    field_stats: Dict[str, Dict[str, Any]] = {}
+    active_fields: Dict[str, Dict[str, float]] = {}
 
-    for g, idxs in groups.items():
-        if not idxs:
-            continue
-        X = df.loc[idxs, feature_cols].to_numpy(dtype=float)
+    for field, spec in FIELD_SPECS.items():
+        extractor = spec["extractor"]
+        per_item, observed = _collect_field_data(items, extractor)
+        field_values[field] = per_item
+        summary: Dict[str, Any] = {"count": len(observed), "metric": spec["metric"]}
+        if len(observed) >= MIN_SAMPLE_SIZE:
+            median, scale, method = _robust_center_scale(observed)
+            summary.update({"median": median, "scale": scale, "scale_method": method})
+            if scale is not None:
+                active_fields[field] = {"median": median, "scale": scale}
+        field_stats[field] = summary
 
-        # model & scores
-        scaler = RobustScaler()
-        Xs = scaler.fit_transform(X)
-        # CHANGED: set contamination low so only clearly different rows are flagged
-        clf = IsolationForest(n_estimators=200, contamination=0.02, random_state=42, n_jobs=-1)  # CHANGED
-        clf.fit(Xs)
-        scores = -clf.score_samples(Xs)  # higher == more anomalous
+    flagged_items: List[Dict[str, Any]] = []
+    flagged_positions: List[int] = []
+    keep_mask = [True] * len(items)
 
-        # threshold
-        if threshold_method == "percentile":
-            thr = float(np.quantile(scores, percentile))
-        elif threshold_method == "zscore":
-            mu, sd = float(np.mean(scores)), float(np.std(scores) or 1.0)
-            thr = mu + zscore_z * sd
-        else:
-            q1, q3 = np.quantile(scores, [0.25, 0.75]); iqr = q3 - q1
-            thr = q3 + iqr_k * iqr
+    for idx, item in enumerate(items):
+        field_details: List[Dict[str, Any]] = []
+        score_components: List[float] = []
 
-        # explanations
-        med, iqr = _robust_stats(X)
+        for field, stats in active_fields.items():
+            value = field_values[field][idx]
+            if value is None:
+                continue
+            z = (value - stats["median"]) / stats["scale"]
+            if abs(z) >= threshold:
+                spec = FIELD_SPECS[field]
+                field_details.append(
+                    {
+                        "field": field,
+                        "value": float(value),
+                        "median": float(stats["median"]),
+                        "scale": float(stats["scale"]),
+                        "z_score": float(z),
+                        "metric": spec["metric"],
+                        "raw_value": spec["raw_accessor"](item),
+                    }
+                )
+                score_components.append(abs(z))
 
-        for local_i, score in enumerate(scores):
-            global_i = idxs[local_i]
-            if score > thr:
-                keep_mask[global_i] = not remove
-                x = X[local_i]
-                flagged_items.append({
-                    "index": (global_i + 1) if one_based_index else global_i,
-                    "doc_type_group": df.loc[global_i, "doctype_group"],
+        if field_details:
+            flagged_positions.append(idx)
+            if remove:
+                keep_mask[idx] = False
+            score = max(score_components)
+            flagged_items.append(
+                {
+                    "index": (idx + 1) if one_based_index else idx,
                     "score": float(score),
-                    "reasons": ["ml-outlier"],
-                    "top_features": _explain_row(x, med, iqr, feature_cols, top_k=6),
-                })
+                    "reasons": [FLAG_LABEL],
+                    "details": field_details,
+                }
+            )
 
-    # attach/remove flags
     if remove:
         statement["statement_items"] = [it for i, it in enumerate(items) if keep_mask[i]]
     else:
-        for i, it in enumerate(items):
-            if not keep_mask[i]:
-                it.setdefault("_flags", []).append("ml-outlier")
+        for idx in flagged_positions:
+            flags = items[idx].setdefault("_flags", [])
+            if FLAG_LABEL not in flags:
+                flags.append(FLAG_LABEL)
+
+    flagged_items.sort(key=lambda entry: entry["score"], reverse=True)
 
     summary = {
         "total": len(items),
         "flagged": len(flagged_items),
         "flagged_items": flagged_items,
-        "profiles": {g: {"count": len(idxs)} for g, idxs in groups.items()},
-        "feature_columns": feature_cols,  # for transparency/debug
+        "field_stats": field_stats,
     }
     return statement, summary

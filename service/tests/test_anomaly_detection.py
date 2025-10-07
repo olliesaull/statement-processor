@@ -39,11 +39,11 @@ def test_apply_outlier_flags_no_anomalies():
     ]
 
     statement, summary = apply_outlier_flags(_build_statement(items))
-
     print(json.dumps(summary, indent=2))
 
     assert summary["total"] == len(items)
     assert summary["flagged"] == 0
+    assert summary["field_stats"]["total"]["count"] == len(items)
     # ensure none of the items were annotated with the flag
     assert all("_flags" not in item for item in statement["statement_items"])
 
@@ -54,14 +54,11 @@ def test_apply_outlier_flags_detects_extreme_total():
         _make_statement_item(total=120 + i * 3, number=f"INV-{i:03d}", date=f"{(i % 26) + 1:02d}/06/2024")
         for i in range(1, 26)
     ]
-    outlier = _make_statement_item(
-        total=5000.0,
-        number="INV-999",
-        date="15/06/2024",
-    )
+    outlier = _make_statement_item(total=5000.0, number="INV-999", date="15/06/2024")
     items.append(outlier)
 
     statement, summary = apply_outlier_flags(_build_statement(items))
+    print(json.dumps(summary, indent=2))
 
     assert summary["total"] == len(items)
     assert summary["flagged"] == 1
@@ -70,3 +67,29 @@ def test_apply_outlier_flags_detects_extreme_total():
     flagged_item = statement["statement_items"][len(items) - 1]
     assert flagged_item.get("_flags") == ["ml-outlier"]
     assert summary["flagged_items"][0]["reasons"] == ["ml-outlier"]
+    assert any(detail["field"] == "total" for detail in summary["flagged_items"][0]["details"])
+
+
+def test_apply_outlier_flags_detects_unusual_number_length():
+    """A dramatically different invoice number format should be flagged."""
+    items = [
+        _make_statement_item(total=150.0, number=f"INV-{i:03d}", reference="Invoice")
+        for i in range(1, 10)
+    ]
+    odd = _make_statement_item(
+        total=150.0,
+        number="SUPPLIER-ALPHA-EXTREMELY-LONG-0001",
+        reference="Invoice",
+    )
+    items.append(odd)
+
+    statement, summary = apply_outlier_flags(_build_statement(items))
+    print(json.dumps(summary, indent=2))
+
+    assert summary["flagged"] == 1
+    assert summary["field_stats"]["number"]["metric"] == "length"
+    flagged = summary["flagged_items"][0]
+    assert flagged["index"] == len(items) - 1
+    assert any(detail["field"] == "number" for detail in flagged["details"])
+    detail = next(detail for detail in flagged["details"] if detail["field"] == "number")
+    assert detail["raw_value"] == odd["number"]
