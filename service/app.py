@@ -543,10 +543,20 @@ def configs():
                 if k in StatementItem.model_fields and k not in {"raw", "statement_item_id"}:
                     flat[k] = v
 
-        # Canonical field order from the Pydantic model
-        canonical_order = [
-            f for f in StatementItem.model_fields.keys() if f not in {"raw", "statement_item_id"}
+        # Canonical field order from the Pydantic model, prioritising config UI alignment
+        preferred_order = [
+            "number",
+            "reference",
+            "total",
+            "amount_paid",
+            "amount_due",
+            "date",
+            "due_date",
+            "date_format",
         ]
+        model_fields = [f for f in StatementItem.model_fields.keys() if f not in {"raw", "statement_item_id"}]
+        remaining_fields = [f for f in model_fields if f not in preferred_order]
+        canonical_order = preferred_order + remaining_fields
 
         rows: List[Dict[str, Any]] = []
         for f in canonical_order:
