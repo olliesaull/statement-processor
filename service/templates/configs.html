@@ -20,7 +20,6 @@
             <img src="{{ url_for('static', filename='assets/images/sample_statement.png') }}" class="img-fluid border rounded" alt="Sample PDF statement layout">
           </div>
           <div class="col-lg-6">
-            <p class="fw-bold mt-4">Statement column headers are all lower case even though that is not how they appear on the statement.</p>
             <div class="table-responsive">
               {% if example_rows %}
               <table class="table table-bordered table-sm align-middle">
@@ -111,8 +110,6 @@
     <input type="hidden" name="action" value="save_map">
     <input type="hidden" name="contact_id" value="{{ selected_contact_id }}">
     <input type="hidden" name="contact_name" value="{{ selected_contact_name }}">
-
-    <p class="fw-bold mt-4">Enter statement column headers in all lower case even if that is not how they appear on the statement. The only mandatory column heading is Number.</p>
 
     <div class="table-responsive">
       <table class="table table-bordered align-middle">
