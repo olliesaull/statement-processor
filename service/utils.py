@@ -248,7 +248,7 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
 
     by_number = {}
     BATCH = 40
-    PAGE_SIZE = 50
+    PAGE_SIZE = 100  # Xero cap is 100; fetch full pages to reduce calls
     total_requested = 0
 
     try:
@@ -299,7 +299,7 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
 
 def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
     tenant_id = session["xero_tenant_id"]
-    PAGE_SIZE = 50
+    PAGE_SIZE = 100  # Xero cap is 100; fetch full pages to reduce calls
 
     try:
         logger.info("Fetching invoices for contact", tenant_id=tenant_id, contact_id=contact_id)
@@ -388,7 +388,7 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
 def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
     tenant_id = session["xero_tenant_id"]
-    PAGE_SIZE = 50
+    PAGE_SIZE = 100  # Xero cap is 100; fetch full pages to reduce calls
 
     try:
         logger.info("Fetching credit notes for contact", tenant_id=tenant_id, contact_id=contact_id)
@@ -467,7 +467,7 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
 def get_contacts() -> List[Dict[str, Any]]:
     tenant_id = session["xero_tenant_id"]
-    PAGE_SIZE = 50
+    PAGE_SIZE = 100  # Xero supports up to 100; keep high to minimise round-trips
 
     try:
         logger.info("Fetching contacts", tenant_id=tenant_id)
@@ -480,7 +480,7 @@ def get_contacts() -> List[Dict[str, Any]]:
                 xero_tenant_id=tenant_id,
                 page=page,
                 include_archived=False,
-                page_size=PAGE_SIZE,  # default is 100; keep smaller for testing
+                page_size=PAGE_SIZE,
             )
 
             page_contacts = result.contacts or []
