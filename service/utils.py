@@ -1073,6 +1073,7 @@ def build_row_comparisons(
     left_rows: List[Dict[str, str]],
     right_rows: List[Dict[str, str]],
     display_headers: List[str],
+    header_to_field: Optional[Dict[str, str]] = None,
 ) -> List[List[CellComparison]]:
     """
     Build per-cell comparison objects for each row.
@@ -1084,12 +1085,14 @@ def build_row_comparisons(
             left_val = left.get(header, "") if isinstance(left, dict) else ""
             right_val = right.get(header, "") if isinstance(right, dict) else ""
             matches = equal(left_val, right_val)
+            canonical = (header_to_field or {}).get(header)
             row_cells.append(
                 CellComparison(
                     header=header,
                     statement_value="" if left_val is None else str(left_val),
                     xero_value="" if right_val is None else str(right_val),
                     matches=matches,
+                    canonical_field=canonical,
                 )
             )
         comparisons.append(row_cells)

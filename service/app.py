@@ -327,6 +327,7 @@ def statement(statement_id: str):
         left_rows=rows_by_header,
         right_rows=right_rows_by_header,
         display_headers=display_headers,
+        header_to_field=header_to_field,
     )
     row_matches = [all(cell.matches for cell in row) for row in row_comparisons]
 

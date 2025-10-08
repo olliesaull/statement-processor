@@ -84,6 +84,15 @@ opacity: 0.6;
   line-height: 1;
 }
 
+.cell-value-truncate {
+  display: inline-block;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
 .legend-indicator {
   display: inline-flex;
   align-items: center;
