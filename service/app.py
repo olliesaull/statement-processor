@@ -329,7 +329,10 @@ def statement(statement_id: str):
         display_headers=display_headers,
         header_to_field=header_to_field,
     )
-    row_matches = [all(cell.matches for cell in row) for row in row_comparisons]
+    row_matches = [
+        all(cell.matches or cell.canonical_field == "reference" for cell in row)
+        for row in row_comparisons
+    ]
 
     if request.args.get("download") == "csv":
         header_labels = []
