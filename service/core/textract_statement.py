@@ -45,12 +45,7 @@ def _sanitize_for_dynamodb(value: Any) -> Any:
     return value
 
 
-def _persist_statement_items(
-    tenant_id: str,
-    contact_id: Optional[str],
-    statement_id: Optional[str],
-    items: List[Dict[str, Any]],
-) -> None:
+def _persist_statement_items(tenant_id: str, contact_id: Optional[str], statement_id: Optional[str], items: List[Dict[str, Any]]) -> None:
     if not statement_id:
         return
 
@@ -151,12 +146,7 @@ def run_textraction(bucket: str, pdf_key: str, tenant_id: str, contact_id: str) 
     statement = table_to_json(key, tables_wp, tenant_id, contact_id, statement_id=statement_id)
 
     try:
-        _persist_statement_items(
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            statement_id=statement_id,
-            items=statement.get("statement_items", []) or [],
-        )
+        _persist_statement_items(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, items=statement.get("statement_items", []) or [])
     except Exception as exc:
         logger.exception("Failed to persist statement items", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id, error=str(exc))
 

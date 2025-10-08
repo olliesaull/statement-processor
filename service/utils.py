@@ -35,6 +35,7 @@ from config import (
 from core.date_utils import coerce_datetime_with_template, format_iso_with
 from core.textract_statement import run_textraction
 from core.transform import equal
+from core.models_comparison import CellComparison
 
 
 # MIME/extension guards for uploads
@@ -817,10 +818,7 @@ def get_date_format_from_config(contact_config: Dict[str, Any]) -> Optional[str]
     return str(fmt) if fmt else None
 
 
-def prepare_display_mappings(
-    items: List[Dict],
-    contact_config: Dict[str, Any],
-) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
+def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
     """
     Build the display headers, filtered left rows, header->invoice_field map,
     and detect which header corresponds to the invoice "number".
@@ -893,12 +891,7 @@ def prepare_display_mappings(
     return display_headers, rows_by_header, header_to_field, item_number_header
 
 
-def match_invoices_to_statement_items(
-    items: List[Dict],
-    rows_by_header: List[Dict[str, str]],
-    item_number_header: Optional[str],
-    invoices: List[Dict],
-) -> Dict[str, Dict]:
+def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Dict[str, str]], item_number_header: Optional[str], invoices: List[Dict]) -> Dict[str, Dict]:
     """
     Build mapping from statement invoice number -> { invoice, statement_item, match_type, match_score, matched_invoice_number }.
 
@@ -1076,24 +1069,33 @@ def build_right_rows(
     return right_rows
 
 
-def build_row_matches(
+def build_row_comparisons(
     left_rows: List[Dict[str, str]],
     right_rows: List[Dict[str, str]],
     display_headers: List[str],
-) -> List[bool]:
+) -> List[List[CellComparison]]:
     """
-    Compare each left/right row cell-wise using numeric-aware equality and
-    return a list of row match booleans for UI highlighting.
+    Build per-cell comparison objects for each row.
     """
-    row_matches: List[bool] = []
+    comparisons: List[List[CellComparison]] = []
     for left, right in zip(left_rows, right_rows):
-        ok = True
-        for h in display_headers:
-            if not equal(left.get(h), right.get(h)):
-                ok = False
-                break
-        row_matches.append(ok)
-    return row_matches
+        row_cells: List[CellComparison] = []
+        for header in display_headers:
+            left_val = left.get(header, "") if isinstance(left, dict) else ""
+            right_val = right.get(header, "") if isinstance(right, dict) else ""
+            matches = equal(left_val, right_val)
+            row_cells.append(
+                CellComparison(
+                    header=header,
+                    statement_value="" if left_val is None else str(left_val),
+                    xero_value="" if right_val is None else str(right_val),
+                    matches=matches,
+                )
+            )
+        comparisons.append(row_cells)
+    return comparisons
+
+
 
 
 # ---------------------------------

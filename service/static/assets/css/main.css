@@ -58,5 +58,42 @@ opacity: 0.6;
 }
 
 .anomaly-row td {
-position: relative;
+  position: relative;
+}
+
+.cell-mismatch {
+  position: relative;
+  background-color: #fff3cd !important;
+  box-shadow: inset 0 0 0 2px rgba(240, 173, 78, 0.7);
+  font-weight: 600;
+  color: #7a1d02;
+}
+
+.cell-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.4rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  background-color: #f0ad4e;
+  color: #212529;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.legend-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  background-color: #f0ad4e;
+  color: #212529;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
 }

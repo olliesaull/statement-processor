@@ -57,6 +57,9 @@
         <span class="legend-item d-flex align-items-center gap-2">
           <span class="legend-swatch legend-swatch-faded"></span>Completed rows appear faded
         </span>
+        <span class="legend-item d-flex align-items-center gap-2">
+          <span class="legend-indicator">!</span>Cell mismatch
+        </span>
       </div>
 
       <div class="table-responsive statement-table-wrapper">
@@ -80,19 +83,31 @@
             {% if statement_rows %}
               {% for row in statement_rows %}
                 {% set anomalous = 'ml-outlier' in (row.flags or []) %}
-                {% set row_class = 'table-success' if row.matches else 'table-danger' %}
                 {% if anomalous %}
-                  {% set row_class = row_class + ' table-warning anomaly-row' %}
+                  {% set row_class = 'table-warning anomaly-row' %}
+                {% else %}
+                  {% set row_class = 'table-success' if row.matches else 'table-danger' %}
                 {% endif %}
                 {% if row.is_completed %}
                   {% set row_class = row_class + ' opacity-50' %}
                 {% endif %}
                 <tr class="{{ row_class }}">
-                  {% for value in row.left_values %}
-                    <td class="{% if loop.last %}split-right{% endif %}">{{ value }}</td>
+                  {% set cells = row.cell_comparisons or [] %}
+                  {% for cell in cells %}
+                    <td class="{% if loop.last %}split-right{% endif %}{% if not cell.matches %} cell-mismatch{% endif %}">
+                      {{ cell.statement_value }}
+                      {% if not cell.matches %}
+                        <span class="cell-indicator" title="Does not match Xero value">!</span>
+                      {% endif %}
+                    </td>
                   {% endfor %}
-                  {% for value in row.right_values %}
-                    <td>{{ value }}</td>
+                  {% for cell in cells %}
+                    <td class="{% if not cell.matches %}cell-mismatch{% endif %}">
+                      {{ cell.xero_value }}
+                      {% if not cell.matches %}
+                        <span class="cell-indicator" title="Does not match statement value">!</span>
+                      {% endif %}
+                    </td>
                   {% endfor %}
                   <td class="text-center">
                     {% if row.statement_item_id %}

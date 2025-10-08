@@ -27,7 +27,7 @@ from utils import (
     add_statement_to_table,
     api_client,
     build_right_rows,
-    build_row_matches,
+    build_row_comparisons,
     fetch_json_statement,
     get_completed_statements,
     get_contacts,
@@ -323,11 +323,12 @@ def statement(statement_id: str):
     )
 
     # 4) Compare LEFT (statement) vs RIGHT (Xero) for row highlighting
-    row_matches = build_row_matches(
+    row_comparisons = build_row_comparisons(
         left_rows=rows_by_header,
         right_rows=right_rows_by_header,
         display_headers=display_headers,
     )
+    row_matches = [all(cell.matches for cell in row) for row in row_comparisons]
 
     if request.args.get("download") == "csv":
         header_labels = []
@@ -398,6 +399,7 @@ def statement(statement_id: str):
                 "statement_item_id": statement_item_id,
                 "left_values": [left_row.get(h, "") for h in display_headers],
                 "right_values": [right_row_dict.get(h, "") for h in display_headers],
+                "cell_comparisons": row_comparisons[idx] if idx < len(row_comparisons) else [],
                 "matches": row_matches[idx] if idx < len(row_matches) else False,
                 "is_completed": is_item_completed,
                 "flags": flags,
@@ -424,6 +426,7 @@ def statement(statement_id: str):
         raw_statement_headers=display_headers,
         statement_rows=visible_rows,
         all_statement_rows=statement_rows,
+        row_comparisons=row_comparisons,
         completed_count=completed_count,
         incomplete_count=incomplete_count,
         items_view=items_view,
