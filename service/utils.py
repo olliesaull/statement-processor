@@ -700,7 +700,8 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
     """
     try:
         data, fs = fetch_json_statement(tenant_id, contact_id, bucket, json_key)
-        logger.info("Found existing JSON, downloading", tenant_id=tenant_id, json_key=json_key)
+        item_count = len(data.get("statement_items", []) or []) if isinstance(data, dict) else 0
+        logger.info("Found existing JSON, downloading", tenant_id=tenant_id, json_key=json_key, items=item_count)
         return data, fs
     except StatementJSONNotFoundError:
         pass
@@ -715,13 +716,15 @@ def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, p
 
     # Parse
     data = json.loads(json_bytes.decode("utf-8"))
+    item_count = len(data.get("statement_items", []) or []) if isinstance(data, dict) else 0
+    logger.info("Parsed generated JSON", tenant_id=tenant_id, json_key=json_key, items=item_count, bytes=len(json_bytes))
 
     # Upload new JSON
     upload_statement_to_s3(io.BytesIO(json_bytes), json_key)
 
     # Return both
     fs = FileStorage(stream=io.BytesIO(json_bytes), filename=json_key.rsplit("/", 1)[-1])
-    logger.info("Generated JSON via Textract", tenant_id=tenant_id, json_key=json_key)
+    logger.info("Generated JSON via Textract", tenant_id=tenant_id, json_key=json_key, items=item_count, bytes=len(json_bytes))
     return data, fs
 
 
@@ -935,7 +938,13 @@ def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Di
                 "match_score": 1.0,
                 "matched_invoice_number": key,
             }
-            logger.info("Exact match", statement_number=key, invoice_number=key)
+            logger.info(
+                "Exact match",
+                statement_number=key,
+                invoice_number=key,
+                statement_item=stmt_item,
+                xero_item=inv,
+            )
             # Track used invoice to exclude from fuzzy matching pool
             inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
             if inv_id:
@@ -995,7 +1004,14 @@ def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Di
                 "matched_invoice_number": inv_no_best,
             }
             kind = "Exact" if inv_no_best == key else "Substring"
-            logger.info("Statement match", match_type=kind, statement_number=key, invoice_number=inv_no_best)
+            logger.info(
+                "Statement match",
+                match_type=kind,
+                statement_number=key,
+                invoice_number=inv_no_best,
+                statement_item=stmt_item,
+                xero_item=inv_obj,
+            )
             # Mark this invoice as used to prevent reuse in subsequent substring matches
             inv_id = inv_obj.get("invoice_id") if isinstance(inv_obj, dict) else None
             if inv_id:

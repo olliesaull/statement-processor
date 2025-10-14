@@ -132,6 +132,7 @@ def upload_statements():
             logger.info("Each statement must have a contact selected.")
         else:
             for f, contact in zip(files, names):
+                file_bytes = getattr(f, "content_length", None)
                 if not contact.strip():
                     logger.info("Missing contact", statement_filename=f.filename)
                     continue
@@ -158,6 +159,7 @@ def upload_statements():
                     continue
 
                 statement_id = str(uuid.uuid4())
+                logger.info("Preparing statement upload", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_id=statement_id, statement_filename=f.filename, bytes=file_bytes)
 
                 entry = {
                     "statement_id": statement_id,
@@ -169,15 +171,18 @@ def upload_statements():
                 # Upload pdf statement to S3
                 pdf_statement_key = f"{tenant_id}/{statement_id}.pdf"
                 upload_statement_to_s3(fs_like=f, key=pdf_statement_key)
+                logger.info("Uploaded statement PDF", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, s3_key=pdf_statement_key)
 
                 # Upload statement to ddb
                 add_statement_to_table(tenant_id, entry)
+                logger.info("Registered statement metadata", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, table_entry=entry)
 
                 logger.info("Statement submitted", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id)
 
                 # Kick off background textraction so it's ready by the time the user views it
                 json_statement_key = f"{tenant_id}/{statement_id}.json"
                 _executor.submit(textract_in_background, tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
+                logger.info("Queued Textract background job", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
 
                 uploads_ok += 1
 
@@ -643,7 +648,7 @@ def configs():
                     # Merge and save (root-level only; no nested 'statement_items')
                     to_save = {**preserved, **new_map}
                     set_contact_config(tenant_id, selected_contact_id, to_save)
-                    logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id)
+                    logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name, config=to_save)
                     message = "Config updated successfully."
                     mapping_rows = _build_rows(to_save)
             except Exception as e:

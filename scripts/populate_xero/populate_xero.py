@@ -34,7 +34,7 @@ import urllib.parse
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import boto3
 import requests
@@ -107,8 +107,12 @@ TENANT_ID = os.getenv("TENANT_ID", "80985eea-b0fe-4b9e-a6f8-787e0b017ce9")
 # CONTACT_ID = os.getenv("CONTACT_ID", "fb07c7dc-3237-4fc4-8e0a-9a0c6eb0d1f1")
 
 # Acme Property Management
-STATEMENT_ID = os.getenv("STATEMENT_ID", "44ab5e71-18ff-40a1-9544-38bf2649ffba")
-CONTACT_ID = os.getenv("CONTACT_ID", "738729e8-ff76-4341-8f29-f96a667d6014")
+# STATEMENT_ID = os.getenv("STATEMENT_ID", "44ab5e71-18ff-40a1-9544-38bf2649ffba")
+# CONTACT_ID = os.getenv("CONTACT_ID", "738729e8-ff76-4341-8f29-f96a667d6014")
+
+# Weldhagen Eggs
+STATEMENT_ID = os.getenv("STATEMENT_ID", "31140616-eff3-4bc7-a816-ca12d0768c56")
+CONTACT_ID = os.getenv("CONTACT_ID", "70a00e19-192c-4a69-b090-8fb01e83d058")
 
 XERO_CLIENT_ID = os.getenv("XERO_CLIENT_ID") or CONFIG_XERO_CLIENT_ID
 XERO_CLIENT_SECRET = os.getenv("XERO_CLIENT_SECRET") or CONFIG_XERO_CLIENT_SECRET
@@ -549,11 +553,70 @@ def pick_amount(it: Dict[str, Any], doc_type: str) -> Optional[Decimal]:
             return None
         return _resolve_token(ad)
 
-    amt = total if total is not None else _first_due()
-    if amt is None:
-        return None
-    # Preserve original sign; do not force absolute/negative values.
-    return amt
+    due_amount = _first_due()
+
+    # Prefer whichever field yields a non-zero amount, falling back to zero/None.
+    for candidate in (total, due_amount):
+        if candidate is not None and candidate != 0:
+            return candidate
+
+    if total is not None:
+        return total
+    return due_amount
+
+
+def _normalize_for_match(value: Any) -> str:
+    """Normalize a string for keyword comparisons (lowercase, single spaces)."""
+    return " ".join(str(value or "").split()).strip().lower()
+
+
+def _contains_keyword(text: str, keywords: Iterable[str]) -> bool:
+    """Return True if any keyword appears in the normalized text."""
+    if not text:
+        return False
+    words = set(text.split())
+    for kw in keywords:
+        kw_norm = _normalize_for_match(kw)
+        if not kw_norm:
+            continue
+        if " " in kw_norm:
+            if kw_norm in text:
+                return True
+        else:
+            if kw_norm in words:
+                return True
+    return False
+
+
+def classify_statement_entry(raw_row: Dict[str, Any], reference_text: Optional[str]) -> str:
+    """Classify a statement row into invoice/payment/credit_note based on description."""
+    base_type = "invoice"
+    try:
+        base_type = guess_statement_item_type(raw_row) or "invoice"
+    except Exception:
+        base_type = "invoice"
+
+    text_sources: List[str] = []
+    if reference_text:
+        text_sources.append(reference_text)
+    else:
+        if isinstance(raw_row, dict):
+            for key in ("Description", "description"):
+                val = raw_row.get(key)
+                if isinstance(val, str) and val.strip():
+                    text_sources.append(val)
+                    break
+
+    text_norm = _normalize_for_match(" ".join(text_sources))
+    if text_norm:
+        if _contains_keyword(text_norm, ["payment", "receipt", "paid", "thank you", "thanks", "bank transfer", "eft", "settlement", "deposit"]):
+            return "payment"
+        if _contains_keyword(text_norm, ["credit note", "creditnote", "credit", "credit memo", "crn", "cn", "refund", "rebate", "adjustment"]):
+            return "credit_note"
+        if _contains_keyword(text_norm, ["invoice", "inv", "tax invoice", "sales order", "bill"]):
+            return "invoice"
+
+    return base_type
 
 
 # reference and numbers are derived from config; pick_identifiers removed
@@ -956,7 +1019,9 @@ def main():
             print(str(it))
 
         raw = it.get("raw", {}) if isinstance(it.get("raw"), dict) else {}
-        doc_type = guess_statement_item_type(raw)
+        ref_value = extract_reference(it, items_template)
+        entry_kind = classify_statement_entry(raw, ref_value)
+        doc_type = "credit_note" if entry_kind in {"credit_note", "payment"} else "invoice"
         amt = pick_amount(it, doc_type)
         # Skip only if amount is missing or exactly zero; allow negatives.
         if amt is None or amt == 0:
@@ -980,11 +1045,10 @@ def main():
 
         # Determine invoice/credit number and reference from config mapping first
         inv_no = extract_invoice_number(it, items_template) or None
-        ref_value = extract_reference(it, items_template)
 
         # Log parsed values right before attempting to create in Xero
         print(
-            f"Row {idx}: parsed -> date={dt}, due_date={due_dt}, number={inv_no}, reference={ref_value}, amount={amt}, doc_type={doc_type}"
+            f"Row {idx}: parsed -> date={dt}, due_date={due_dt}, number={inv_no}, reference={ref_value}, amount={amt}, doc_type={doc_type}, entry_kind={entry_kind}"
         )
 
         try:
