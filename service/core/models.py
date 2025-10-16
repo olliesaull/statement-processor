@@ -8,19 +8,17 @@ Number = Union[int, float, str]
 class StatementItem(BaseModel):
     """Canonical line item extracted from a supplier statement."""
     statement_item_id: str = ""
-    amount_due: Dict[str, Number] = Field(default_factory=dict)
-    amount_paid: Optional[Number] = ""
+    total: Dict[str, Number] = Field(default_factory=dict)
     date: Optional[str] = ""
     due_date: Optional[str] = ""
     number: Optional[str] = ""
     reference: Optional[str] = ""
     date_format: str = ""
-    total: Optional[Number] = ""
     raw: dict = Field(default_factory=dict)
 
     # Optional: coerce numeric-like strings for known numeric fields
-    @field_validator("total", "amount_paid", mode="before")
-    def _coerce_numbers(cls, v: Any) -> Any:
+    @classmethod
+    def _coerce_number(cls, v: Any) -> Any:
         if v is None:
             return ""
         if isinstance(v, (int, float)):
@@ -33,10 +31,10 @@ class StatementItem(BaseModel):
         except ValueError:
             return v
 
-    @field_validator("amount_due", mode="before")
-    def _coerce_amount_due(cls, v: Any) -> Dict[str, Number]:  # type: ignore[no-untyped-def]
+    @field_validator("total", mode="before")
+    def _coerce_total(cls, v: Any) -> Dict[str, Number]:  # type: ignore[no-untyped-def]
         def _coerce_val(val: Any) -> Number:
-            return cls._coerce_numbers(val)
+            return cls._coerce_number(val)
 
         if v is None:
             return {}

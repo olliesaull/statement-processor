@@ -10,7 +10,7 @@ margin: 0 auto;
 table-layout: auto;
 width: 100%;
 max-width: 100%;
---split-border: 4px solid var(--bs-border-color);
+--split-border: 6px solid var(--bs-border-color);
 }
 
 /* Split border between Statement and Xero halves */
@@ -39,6 +39,10 @@ white-space: normal;
 .col-pay      { min-width: 9ch;  text-align: right; }
 .col-balance  { min-width: 11ch; text-align: right; }
 .col-status   { min-width: 14ch; }
+
+.statement-filter-group {
+  margin-top: 0.5rem;
+}
 
 .statement-legend .legend-swatch {
 display: inline-block;

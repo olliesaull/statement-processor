@@ -276,6 +276,15 @@ def statement(statement_id: str):
         items_view = "incomplete"
     logger.info("Statement detail requested", tenant_id=tenant_id, statement_id=statement_id, items_view=items_view, method=request.method)
 
+    contact_name = ""
+    if record:
+        raw_contact_name = record.get("ContactName")
+        if isinstance(raw_contact_name, str):
+            contact_name = raw_contact_name.strip()
+        elif raw_contact_name is not None:
+            contact_name = str(raw_contact_name).strip()
+    page_heading = contact_name or f"Statement {statement_id}"
+
     if request.method == "POST":
         action = request.form.get("action")
         if action in {"mark_complete", "mark_incomplete"}:
@@ -322,6 +331,8 @@ def statement(statement_id: str):
         return render_template(
             "statement.html",
             statement_id=statement_id,
+            contact_name=contact_name,
+            page_heading=page_heading,
             is_processing=True,
             is_completed=is_completed,
             items_view=items_view,
@@ -478,6 +489,8 @@ def statement(statement_id: str):
     return render_template(
         "statement.html",
         statement_id=statement_id,
+        contact_name=contact_name,
+        page_heading=page_heading,
         is_processing=False,
         is_completed=is_completed,
         raw_statement_headers=display_headers,
@@ -639,8 +652,6 @@ def configs():
             "number",
             "reference",
             "total",
-            "amount_paid",
-            "amount_due",
             "date",
             "due_date",
             "date_format",
@@ -652,7 +663,7 @@ def configs():
         rows: List[Dict[str, Any]] = []
         for f in canonical_order:
             val = flat.get(f)
-            if f == "amount_due":
+            if f == "total":
                 values = [str(v) for v in val] if isinstance(val, list) else ([str(val)] if isinstance(val, str) else [""])
                 rows.append({"field": f, "values": values or [""], "is_multi": True})
             else:
@@ -708,9 +719,9 @@ def configs():
                     # Rebuild mapping from form
                     new_map: Dict[str, Any] = {}
                     for f in posted_fields:
-                        if f == "amount_due":
-                            ad_vals = [v.strip() for v in request.form.getlist("map[amount_due][]") if v.strip()]
-                            new_map["amount_due"] = ad_vals
+                        if f == "total":
+                            total_vals = [v.strip() for v in request.form.getlist("map[total][]") if v.strip()]
+                            new_map["total"] = total_vals
                         else:
                             val = request.form.get(f"map[{f}]")
                             new_map[f] = (val or "").strip()

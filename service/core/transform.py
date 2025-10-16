@@ -256,7 +256,7 @@ def row_is_summary_like(raw_row: List[str], mapped_item: Dict[str, Any]) -> bool
         return results
 
     amount_like_values: List[str] = []
-    for field_name in ("amount_due", "total", "amount_paid", "amount_credited"):
+    for field_name in ("total", "amount_credited"):
         amount_like_values.extend(_iter_amount_like_values((mapped_item or {}).get(field_name)))
 
     numeric_amounts = sum(1 for v in amount_like_values if _looks_money(v))
@@ -355,13 +355,13 @@ def table_to_json(
         elif field in allowed_fields and isinstance(value, str) and value.strip():
             simple_map[field] = value
 
-    # Special support: amount_due can be a list of candidate headers
-    amount_due_candidates: List[str] = []
-    amt_cfg = items_template.get("amount_due")
-    if isinstance(amt_cfg, list):
-        amount_due_candidates = [str(x).strip() for x in amt_cfg if isinstance(x, str) and x.strip()]
-    elif isinstance(amt_cfg, str) and amt_cfg.strip():
-        amount_due_candidates = [amt_cfg.strip()]
+    # Special support: total can be a list of candidate headers
+    total_candidates: List[str] = []
+    total_cfg = items_template.get("total")
+    if isinstance(total_cfg, list):
+        total_candidates = [str(x).strip() for x in total_cfg if isinstance(x, str) and x.strip()]
+    elif isinstance(total_cfg, str) and total_cfg.strip():
+        total_candidates = [total_cfg.strip()]
 
     candidates = list(simple_map.values())
     candidates.extend(list(raw_map.keys()))
@@ -434,9 +434,9 @@ def table_to_json(
                     error=e,
                 )
 
-        # Resolve amount_due entries strictly from configured headers
+        # Resolve total entries strictly from configured headers
         configured_amount_headers: List[Tuple[Optional[int], str]] = []
-        for cand in amount_due_candidates:
+        for cand in total_candidates:
             clean = cand.strip()
             if not clean:
                 continue
@@ -495,8 +495,8 @@ def table_to_json(
                 extracted_raw[canonical_header] = {"header": canonical_header, "value": val}
             row_obj["raw"] = raw_obj
 
-            # Map amount_due using configured headers only (e.g., debit/credit columns)
-            amount_entries: Dict[str, Any] = {}
+            # Map total using configured headers only (e.g., debit/credit columns)
+            total_entries: Dict[str, Any] = {}
 
             def _resolve_header(idx: Optional[int], fallback: str) -> str:
                 if idx is not None and idx < len(header_row):
@@ -511,22 +511,22 @@ def table_to_json(
                 value = get_by_header(r, col_index, configured_label)
                 label_key = header_label or configured_label
                 if label_key:
-                    amount_entries[label_key] = value
+                    total_entries[label_key] = value
 
-            row_obj["amount_due"] = amount_entries
+            row_obj["total"] = total_entries
 
             primary_entry_value: Optional[Any] = None
             primary_entry_label: str = ""
-            for label, val in amount_entries.items():
+            for label, val in total_entries.items():
                 if str(val or "").strip():
                     primary_entry_label = label
                     primary_entry_value = val
                     break
-            if primary_entry_value is None and amount_entries:
-                primary_entry_label, primary_entry_value = next(iter(amount_entries.items()))
+            if primary_entry_value is None and total_entries:
+                primary_entry_label, primary_entry_value = next(iter(total_entries.items()))
 
             if primary_entry_label:
-                extracted_simple["amount_due"] = {
+                extracted_simple["total"] = {
                     "header": primary_entry_label,
                     "value": primary_entry_value or "",
                 }
@@ -534,7 +534,7 @@ def table_to_json(
             # Surface all amount entries into raw for completeness (without overwriting existing values)
             try:
                 if "raw" in row_obj and isinstance(row_obj["raw"], dict):
-                    for label, val in amount_entries.items():
+                    for label, val in total_entries.items():
                         if isinstance(label, str) and label.strip():
                             row_obj["raw"].setdefault(label, val)
             except Exception as exc:
@@ -579,9 +579,9 @@ def table_to_json(
                 si = StatementItem(**row_obj)
                 items.append(si)
                 fields_logged = {k: getattr(si, k) for k in simple_map.keys()}
-                amount_components = getattr(si, "amount_due", None)
+                amount_components = getattr(si, "total", None)
                 if amount_components:
-                    fields_logged["amount_due"] = dict(amount_components)
+                    fields_logged["total"] = dict(amount_components)
             except Exception as e:
                 logger.info(
                     "[table_to_json] validation error",

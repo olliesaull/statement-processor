@@ -6,7 +6,6 @@ from core.validation.anomaly_detection import apply_outlier_flags
 def _make_statement_item(
     *,
     total: float,
-    amount_paid: float = 0.0,
     date: str = "01/07/2024",
     due_date: str = "31/07/2024",
     number: str,
@@ -14,9 +13,7 @@ def _make_statement_item(
     raw: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return {
-        "total": f"{total:.2f}",
-        "amount_due": {"current": f"{max(total - amount_paid, 0):.2f}"},
-        "amount_paid": f"{amount_paid:.2f}",
+        "total": {"current": f"{total:.2f}"},
         "date": date,
         "due_date": due_date,
         "number": number,

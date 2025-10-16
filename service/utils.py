@@ -266,10 +266,8 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
             "reference": getattr(inv, "reference", None),
             "subtotal": getattr(inv, "sub_total", None),
             "total_tax": getattr(inv, "total_tax", None),
-            "total": total,
-            "amount_paid": amount_paid,
+            "total": amount_due_calc,
             "amount_credited": amount_credited,
-            "amount_due": amount_due_calc,
             "contact": contact,
         }
 
@@ -394,12 +392,8 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
                     "subtotal": getattr(inv, "sub_total", None),
                     "total_tax": getattr(inv, "total_tax", None),
-                    "total": total,
-
-                    "amount_paid": amount_paid,
+                    "total": amount_due_calc,
                     "amount_credited": amount_credited,
-                    "amount_due": amount_due_calc,   # normalized remaining balance
-
                     "contact": contact,
                 })
 
@@ -454,7 +448,6 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
                 } if c else None
 
                 total = getattr(cn, "total", None)
-                amount_paid = getattr(cn, "amount_paid", None)
                 amount_credited = getattr(cn, "amount_credited", None)
                 remaining_credit = getattr(cn, "remaining_credit", None)
 
@@ -471,12 +464,8 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
                     "subtotal": getattr(cn, "sub_total", None),
                     "total_tax": getattr(cn, "total_tax", None),
-                    "total": total,
-
-                    "amount_paid": amount_paid,
+                    "total": remaining_credit if remaining_credit is not None else total,
                     "amount_credited": amount_credited,
-                    # For credit notes, carry remaining_credit as amount_due analogue if present
-                    "amount_due": remaining_credit,
                     "remaining_credit": remaining_credit,
 
                     "contact": contact,
@@ -866,12 +855,12 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
             continue
         if isinstance(mapped, str) and mapped.strip():
             header_to_field_norm[_n(mapped)] = canonical_field
-    # Special case: amount_due can be a list of possible headers; include all candidates.
-    mapped_amount_due = (items_template or {}).get("amount_due")
-    if isinstance(mapped_amount_due, list) and mapped_amount_due:
-        for h in mapped_amount_due:
+    # Special case: total can be a list of possible headers; include all candidates.
+    mapped_total = (items_template or {}).get("total")
+    if isinstance(mapped_total, list) and mapped_total:
+        for h in mapped_total:
             if isinstance(h, str) and h.strip():
-                header_to_field_norm[_n(h)] = "amount_due"
+                header_to_field_norm[_n(h)] = "total"
 
     # Only display headers present in the mapping (case-insensitive match),
     # and ensure at most one header per canonical field (e.g., only one amount column).
@@ -887,7 +876,7 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     # Convert raw rows into dicts filtered by display headers, normalizing date fields for display
     rows_by_header: List[Dict[str, str]] = []
     date_fmt = get_date_format_from_config(contact_config)
-    numeric_fields = {"total", "amount_paid", "amount_due"}
+    numeric_fields = {"total"}
     for it in items:
         raw = it.get("raw", {}) if isinstance(it, dict) else {}
         row: Dict[str, str] = {}
@@ -1059,16 +1048,14 @@ def build_right_rows(
     the invoice, aligned to the same display headers and row order as the left.
     """
     right_rows = []
-    numeric_fields = {"total", "amount_paid", "amount_due"}
+    numeric_fields = {"total"}
 
     for r in rows_by_header:
         inv_no = (r.get(item_number_header) or "").strip() if item_number_header else ""
         rec = (matched_map.get(inv_no, {}) or {})
         inv = rec.get("invoice", {}) if isinstance(rec, dict) else {}
 
-        # Prefer amount sources by semantic: totals for debit/credit columns, amount_due for balances
         inv_total = inv.get("total")
-        inv_due = inv.get("amount_due")
 
         row_right = {}
         for h in display_headers:
@@ -1077,16 +1064,11 @@ def build_right_rows(
                 row_right[h] = ""
                 continue
 
-            if invoice_field == "amount_due":
-                # Per-row: only populate the header that has a value on the left side
+            if invoice_field == "total":
+                # Only populate the headers that have a value on the statement side
                 left_val = r.get(h)
                 if left_val is not None and str(left_val).strip():
-                    hn = str(h or "").strip().lower()
-                    # If this header looks like 'Total', align to Xero total; otherwise align to amount_due
-                    if "total" in hn and "due" not in hn and "balance" not in hn:
-                        row_right[h] = format_money(inv_total) if inv_total is not None else ""
-                    else:
-                        row_right[h] = format_money(inv_due) if inv_due is not None else ""
+                    row_right[h] = format_money(inv_total) if inv_total is not None else ""
                 else:
                     row_right[h] = ""
             elif invoice_field in {"due_date", "date"}:
