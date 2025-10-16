@@ -32,6 +32,8 @@ from config import (
     s3_client,
     tenant_statements_table,
 )
+from core.contact_cache import ContactCache, FileContactCacheBackend
+from core.contact_sync_service import ContactSyncService
 from core.date_utils import coerce_datetime_with_template, format_iso_with
 from core.textract_statement import run_textraction
 from core.transform import equal
@@ -111,6 +113,39 @@ api_client = ApiClient(
     oauth2_token_saver=save_xero_oauth2_token,
 )
 api = AccountingApi(api_client)
+
+BASE_DIR = Path(__file__).resolve().parent
+CONTACT_CACHE_DIR = BASE_DIR / "instance" / "contact_cache"
+contact_cache = ContactCache(FileContactCacheBackend(CONTACT_CACHE_DIR))
+
+def _get_token_for_sync(_: str) -> Optional[Dict[str, Any]]:
+    token = session.get("xero_oauth2_token")
+    if not isinstance(token, dict):
+        return None
+    return dict(token)
+
+
+def _build_accounting_api_for_token(token: Dict[str, Any]) -> AccountingApi:
+    client = ApiClient(
+        Configuration(
+            oauth2_token=OAuth2Token(
+                client_id=CLIENT_ID,
+                client_secret=CLIENT_SECRET,
+            ),
+        ),
+        pool_threads=1,
+        oauth2_token_getter=lambda: token,
+        oauth2_token_saver=lambda updated: None,
+    )
+    client.set_oauth2_token(token)
+    return AccountingApi(client)
+
+
+contact_sync_service = ContactSyncService(
+    cache=contact_cache,
+    token_provider=_get_token_for_sync,
+    api_factory=_build_accounting_api_for_token,
+)
 
 
 class RedirectToLogin(HTTPException):
@@ -466,55 +501,43 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
 
 def get_contacts() -> List[Dict[str, Any]]:
-    tenant_id = session["xero_tenant_id"]
-    PAGE_SIZE = 100  # Xero supports up to 100; keep high to minimise round-trips
-
-    try:
-        logger.info("Fetching contacts", tenant_id=tenant_id)
-        contacts: List[Dict[str, Any]] = []
-        page = 1
-
-        while True:
-            # Explicitly exclude archived contacts (treat as deleted/hidden)
-            result = api.get_contacts(
-                xero_tenant_id=tenant_id,
-                page=page,
-                include_archived=False,
-                page_size=PAGE_SIZE,
-            )
-
-            page_contacts = result.contacts or []
-            logger.debug("Fetched contacts page", tenant_id=tenant_id, page=page, returned=len(page_contacts))
-            for c in page_contacts:
-                contacts.append(
-                    {
-                        "contact_id": c.contact_id,
-                        "name": c.name,
-                        "email": c.email_address,
-                        "is_customer": c.is_customer,
-                        "is_supplier": c.is_supplier,
-                        "status": c.contact_status,
-                    }
-                )
-
-            if len(page_contacts) < PAGE_SIZE:
-                break
-
-            page += 1
-
-        logger.info("Fetched contacts", tenant_id=tenant_id, returned=len(contacts))
-        return contacts
-
-    except AccountingBadRequestException as e:
-        # Xero returned a 400
-        _raise_for_unauthorized(e)
-        logger.exception("Failed to fetch contacts", tenant_id=tenant_id, error=e)
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        logger.info("Skipping contact lookup; tenant not selected")
         return []
-    except Exception as e:
-        # Catch-all for other errors (network, token, etc.)
-        _raise_for_unauthorized(e)
-        logger.exception("Failed to fetch contacts", tenant_id=tenant_id, error=e)
-        return []
+
+    status = contact_sync_service.get_status(tenant_id)
+    if status.status in {"empty", "error"}:
+        force = status.status == "error"
+        contact_sync_service.ensure_background_sync(tenant_id, force_full=force)
+    elif status.status == "ready":
+        contact_sync_service.ensure_background_sync(tenant_id)
+    else:
+        contact_sync_service.ensure_background_sync(tenant_id)
+
+    contacts = contact_sync_service.get_contacts(tenant_id)
+    logger.info(
+        "Returning cached contacts",
+        tenant_id=tenant_id,
+        available=len(contacts),
+        sync_status=status.status,
+    )
+    return contacts
+
+
+def trigger_contact_sync(force_full: bool = False) -> None:
+    tenant_id = session.get("xero_tenant_id")
+    contact_sync_service.ensure_background_sync(tenant_id, force_full=force_full)
+
+
+def get_contact_sync_status_for_current_tenant() -> Dict[str, Any]:
+    tenant_id = session.get("xero_tenant_id")
+    state = contact_sync_service.get_status(tenant_id)
+    return state.to_dict()
+
+
+def clear_contact_cache(tenant_id: Optional[str]) -> None:
+    contact_sync_service.clear(tenant_id)
 
 
 def get_contact_for_statement(tenant_id: str, statement_id: str) -> Optional[str]:

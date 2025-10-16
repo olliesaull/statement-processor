@@ -12,6 +12,51 @@
   {% if error %}
     <div class="alert alert-danger" role="alert">{{ error }}</div>
   {% endif %}
+  {% if is_authenticated and active_tenant and contact_sync_status %}
+    {% set sync = contact_sync_status %}
+    {% if sync.status == 'syncing' %}
+      <div class="alert alert-info d-flex align-items-center gap-2" role="alert">
+        <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
+        <span>Synchronising contacts{% if sync.synced_count %}: {{ sync.synced_count }} loaded{% endif %}.</span>
+      </div>
+    {% elif sync.status == 'empty' %}
+      <div class="alert alert-info d-flex align-items-center gap-2" role="alert">
+        <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
+        <span>Preparing contacts for this tenant...</span>
+      </div>
+    {% elif sync.status == 'error' %}
+      <div class="alert alert-warning" role="alert">
+        Contacts are temporarily unavailable. We'll keep trying in the background.
+      </div>
+    {% endif %}
+    {% if sync.status != 'ready' %}
+    <script>
+      (function pollContactSync() {
+        const retry = (delayMs) => setTimeout(pollContactSync, delayMs);
+        fetch("{{ url_for('contact_sync_status_api') }}", { headers: { 'Accept': 'application/json' } })
+          .then((resp) => resp.ok ? resp.json() : null)
+          .then((data) => {
+            if (!data) {
+              console.warn('Contact sync poll returned no data');
+              return retry(10000);
+            }
+            if (data.status === 'ready') {
+              window.location.reload();
+              return;
+            }
+            if (data.status === 'error') {
+              console.warn('Contact sync still reporting error');
+            }
+            retry(5000);
+          })
+          .catch((err) => {
+            console.error('Contact sync poll failed', err);
+            retry(10000);
+          });
+      })();
+    </script>
+    {% endif %}
+  {% endif %}
 
   {% if not is_authenticated %}
     <p class="mb-3">Login with Xero to start processing statements.</p>
