@@ -23,6 +23,7 @@ from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger
 from core.contact_config_metadata import FIELD_DESCRIPTIONS, EXAMPLE_CONFIG
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem
+from core.item_classification import guess_statement_item_type
 from utils import (
     StatementJSONNotFoundError,
     add_statement_to_table,
@@ -36,10 +37,10 @@ from utils import (
     get_credit_notes_by_contact,
     get_incomplete_statements,
     get_invoices_by_contact,
+    get_payments_by_contact,
     get_date_format_from_config,
     get_statement_item_status_map,
     get_statement_record,
-    guess_statement_item_type,
     is_allowed_pdf,
     mark_statement_completed,
     match_invoices_to_statement_items,
@@ -274,7 +275,9 @@ def statement(statement_id: str):
     items_view = (request.values.get("items_view") or "incomplete").strip().lower()
     if items_view not in {"incomplete", "completed", "all"}:
         items_view = "incomplete"
-    logger.info("Statement detail requested", tenant_id=tenant_id, statement_id=statement_id, items_view=items_view, method=request.method)
+    show_payments_raw = (request.values.get("show_payments") or "false").strip().lower()
+    show_payments = show_payments_raw in {"true", "1", "yes", "on"}
+    logger.info("Statement detail requested", tenant_id=tenant_id, statement_id=statement_id, items_view=items_view, show_payments=show_payments, method=request.method)
 
     contact_name = ""
     if record:
@@ -312,7 +315,14 @@ def statement(statement_id: str):
                     logger.info("Statement item updated", tenant_id=tenant_id, statement_id=statement_id, statement_item_id=statement_item_id, completed=desired_state)
                 except Exception as exc:
                     logger.exception("Failed to toggle statement item completion", statement_id=statement_id, statement_item_id=statement_item_id, tenant_id=tenant_id, desired_state=desired_state, error=exc)
-            return redirect(url_for("statement", statement_id=statement_id, items_view=items_view))
+            return redirect(
+                url_for(
+                    "statement",
+                    statement_id=statement_id,
+                    items_view=items_view,
+                    show_payments="true" if show_payments else "false",
+                )
+            )
 
     route_key = f"{tenant_id}/{statement_id}"
     json_statement_key = f"{route_key}.json"
@@ -336,11 +346,13 @@ def statement(statement_id: str):
             is_processing=True,
             is_completed=is_completed,
             items_view=items_view,
+            show_payments=show_payments,
             incomplete_count=0,
             completed_count=0,
             all_statement_rows=[],
             statement_rows=[],
             raw_statement_headers=[],
+            has_payment_rows=False,
         )
 
     # 1) Parse display configuration and left-side rows
@@ -348,13 +360,27 @@ def statement(statement_id: str):
     contact_config = get_contact_config(tenant_id, contact_id)
     display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, contact_config)
 
-    # 2) For each row, guess type (invoice/credit note); fetch the needed doc sets
-    has_invoice, has_credit_note = False, False
-    for it in items:
+    # 2) For each row, guess type (invoice/credit note/payment); fetch the needed doc sets
+    has_invoice, has_credit_note, has_payment = False, False, False
+    item_types: List[str] = []
+    for idx, it in enumerate(items):
         raw = it.get("raw", {}) if isinstance(it, dict) else {}
-        t = guess_statement_item_type(raw)
+        existing_type = ""
+        if isinstance(it, dict):
+            existing_type = str(it.get("item_type") or "").strip().lower()
+        if existing_type not in {"invoice", "credit_note", "payment"}:
+            t = guess_statement_item_type(raw)
+            if isinstance(it, dict):
+                it["item_type"] = t
+        else:
+            t = existing_type
+        statement_item_id = it.get("statement_item_id") if isinstance(it, dict) else None
+        print(f"[statement:{statement_id}] item#{idx:03d} ({statement_item_id or 'unknown'}) classified as {t}")
+        item_types.append(t)
         if t == "credit_note":
             has_credit_note = True
+        elif t == "payment":
+            has_payment = True
         else:
             has_invoice = True
 
@@ -366,6 +392,15 @@ def statement(statement_id: str):
         docs = get_credit_notes_by_contact(contact_id) or []
     else:
         docs = get_invoices_by_contact(contact_id) or []
+
+    if has_payment:
+        payments = get_payments_by_contact(contact_id) or []
+        logger.info(
+            "Payments fetched for statement items",
+            statement_id=statement_id,
+            contact_id=contact_id,
+            count=len(payments),
+        )
 
     matched_invoice_to_statement_item = match_invoices_to_statement_items(
         items=items,
@@ -410,7 +445,7 @@ def statement(statement_id: str):
             statement_headers.append(f"Statement {label}")
             xero_headers.append(f"Xero {label}")
 
-        csv_headers = statement_headers + xero_headers
+        csv_headers = ["Item Type"] + statement_headers + xero_headers
 
         output = StringIO()
         writer = csv.DictWriter(output, fieldnames=csv_headers)
@@ -421,7 +456,9 @@ def statement(statement_id: str):
             left_row = rows_by_header[idx] if idx < len(rows_by_header) else {}
             right_row = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
 
-            csv_row: Dict[str, Any] = {}
+            csv_row: Dict[str, Any] = {
+                "Item Type": item_types[idx] if idx < len(item_types) else ""
+            }
             for src_header, label in header_labels:
                 statement_key = f"Statement {label}"
                 left_value = left_row.get(src_header, "") if isinstance(left_row, dict) else ""
@@ -468,11 +505,16 @@ def statement(statement_id: str):
                 "matches": row_matches[idx] if idx < len(row_matches) else False,
                 "is_completed": is_item_completed,
                 "flags": flags,
+                "item_type": (
+                    (item.get("item_type") if isinstance(item, dict) else None)
+                    or (item_types[idx] if idx < len(item_types) else "invoice")
+                ),
             }
         )
 
     completed_count = sum(1 for row in statement_rows if row["is_completed"])
     incomplete_count = len(statement_rows) - completed_count
+    has_payment_rows = any(row.get("item_type") == "payment" for row in statement_rows)
 
     if items_view == "completed":
         visible_rows = [row for row in statement_rows if row["is_completed"]]
@@ -481,7 +523,10 @@ def statement(statement_id: str):
     else:
         visible_rows = statement_rows
 
-    logger.info("Statement detail rendered", tenant_id=tenant_id, statement_id=statement_id, visible=len(visible_rows), total=len(statement_rows), completed=completed_count, incomplete=incomplete_count, items_view=items_view)
+    if not show_payments:
+        visible_rows = [row for row in visible_rows if row.get("item_type") != "payment"]
+
+    logger.info("Statement detail rendered", tenant_id=tenant_id, statement_id=statement_id, visible=len(visible_rows), total=len(statement_rows), completed=completed_count, incomplete=incomplete_count, items_view=items_view, show_payments=show_payments)
 
     return render_template(
         "statement.html",
@@ -497,6 +542,8 @@ def statement(statement_id: str):
         completed_count=completed_count,
         incomplete_count=incomplete_count,
         items_view=items_view,
+        show_payments=show_payments,
+        has_payment_rows=has_payment_rows,
     )
 
 @app.route("/")
@@ -645,6 +692,7 @@ def configs():
                     flat[k] = v
 
         flat.pop("reference", None)
+        flat.pop("item_type", None)
 
         # Canonical field order from the Pydantic model, prioritising config UI alignment
         preferred_order = [
@@ -654,13 +702,17 @@ def configs():
             "due_date",
             "date_format",
         ]
-        model_fields = [f for f in StatementItem.model_fields.keys() if f not in {"raw", "statement_item_id"}]
+        model_fields = [
+            f
+            for f in StatementItem.model_fields.keys()
+            if f not in {"raw", "statement_item_id", "item_type"}
+        ]
         remaining_fields = [f for f in model_fields if f not in preferred_order]
         canonical_order = preferred_order + remaining_fields
 
         rows: List[Dict[str, Any]] = []
         for f in canonical_order:
-            if f == "reference":
+            if f in {"reference", "item_type"}:
                 continue
             val = flat.get(f)
             if f == "total":
@@ -717,7 +769,7 @@ def configs():
                     preserved = {
                         k: v
                         for k, v in existing.items()
-                        if k not in posted_fields + ["statement_items"] and k != "reference"
+                        if k not in posted_fields + ["statement_items"] and k not in {"reference", "item_type"}
                     }
 
                     # Rebuild mapping from form

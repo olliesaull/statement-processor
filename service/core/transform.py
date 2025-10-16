@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from config import logger
 from core.date_utils import parse_with_format
+from core.item_classification import guess_statement_item_type
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem, SupplierStatement
 
@@ -348,6 +349,7 @@ def table_to_json(
         "raw",
         "date_format",
         "statement_item_id",
+        "item_type",
     }
     for field, value in items_template.items():
         if field == "raw" and isinstance(value, dict):
@@ -448,6 +450,16 @@ def table_to_json(
                 continue
 
             # start from template dict (but we’ll build StatementItem)
+            full_raw: Dict[str, Any] = {}
+            for col_idx, header_value in enumerate(header_row):
+                label = str(header_value or "").strip() or f"column_{col_idx}"
+                cell_value = r[col_idx] if col_idx < len(r) else ""
+                if label in full_raw:
+                    dedup_label = f"{label}_{col_idx}"
+                    full_raw[dedup_label] = cell_value
+                else:
+                    full_raw[label] = cell_value
+
             row_obj: Dict[str, Any] = deepcopy(items_template)
             row_obj.pop("statement_item_id", None)
 
@@ -563,6 +575,18 @@ def table_to_json(
                 )
 
             # Keep raw key insertion order (do not reorder to PDF header order)
+
+            try:
+                row_obj["item_type"] = guess_statement_item_type(full_raw)
+            except Exception as exc:
+                logger.warning(
+                    "[table_to_json] failed to classify item type",
+                    statement_id=statement_id,
+                    row_number=i_row,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                row_obj["item_type"] = "invoice"
 
             # carried-forward skipper
             if row_is_opening_or_carried_forward(r, row_obj):

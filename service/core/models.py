@@ -8,10 +8,11 @@ Number = Union[int, float, str]
 class StatementItem(BaseModel):
     """Canonical line item extracted from a supplier statement."""
     statement_item_id: str = ""
-    total: Dict[str, Number] = Field(default_factory=dict)
     date: Optional[str] = ""
-    due_date: Optional[str] = ""
     number: Optional[str] = ""
+    total: Dict[str, Number] = Field(default_factory=dict)
+    item_type: str = "invoice"
+    due_date: Optional[str] = ""
     reference: Optional[str] = ""
     date_format: str = ""
     raw: dict = Field(default_factory=dict)

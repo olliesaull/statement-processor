@@ -1,4 +1,3 @@
-import difflib
 import io
 import json
 import re
@@ -35,6 +34,7 @@ from config import (
 from core.contact_cache import ContactCache, FileContactCacheBackend
 from core.contact_sync_service import ContactSyncService
 from core.date_utils import coerce_datetime_with_template, format_iso_with
+from core.item_classification import guess_statement_item_type as classify_item_type
 from core.textract_statement import run_textraction
 from core.transform import equal
 from core.models_comparison import CellComparison
@@ -248,13 +248,6 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
         } if c else None
 
         total = getattr(inv, "total", None)
-        amount_paid = getattr(inv, "amount_paid", None)
-        amount_credited = getattr(inv, "amount_credited", None)
-        amount_due = getattr(inv, "amount_due", None)
-        if amount_due is None and None not in (total, amount_paid, amount_credited):
-            amount_due_calc = (total or 0) - (amount_paid or 0) - (amount_credited or 0)
-        else:
-            amount_due_calc = amount_due
 
         return {
             "invoice_id": getattr(inv, "invoice_id", None),
@@ -266,8 +259,7 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
             "reference": getattr(inv, "reference", None),
             "subtotal": getattr(inv, "sub_total", None),
             "total_tax": getattr(inv, "total_tax", None),
-            "total": amount_due_calc,
-            "amount_credited": amount_credited,
+            "total": total,
             "contact": contact,
         }
 
@@ -369,15 +361,6 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
                 # Monetary fields
                 total = getattr(inv, "total", None)
-                amount_paid = getattr(inv, "amount_paid", None)
-                amount_credited = getattr(inv, "amount_credited", None)
-                amount_due = getattr(inv, "amount_due", None)
-
-                # Compute a consistent "amount_remaining" (use API field if present; fall back to calc)
-                if amount_due is None and None not in (total, amount_paid, amount_credited):
-                    amount_due_calc = (total or 0) - (amount_paid or 0) - (amount_credited or 0)
-                else:
-                    amount_due_calc = amount_due
 
                 invoices.append({
                     "invoice_id": getattr(inv, "invoice_id", None),
@@ -392,8 +375,7 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
                     "subtotal": getattr(inv, "sub_total", None),
                     "total_tax": getattr(inv, "total_tax", None),
-                    "total": amount_due_calc,
-                    "amount_credited": amount_credited,
+                    "total": total,
                     "contact": contact,
                 })
 
@@ -486,6 +468,69 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
     except Exception as e:
         _raise_for_unauthorized(e)
         logger.exception("Failed to fetch credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
+        return []
+
+
+def get_payments_by_contact(contact_id: str) -> List[Dict[str, Any]]:
+    tenant_id = session["xero_tenant_id"]
+    if not tenant_id:
+        return []
+
+    PAGE_SIZE = 100
+
+    try:
+        logger.info("Fetching payments for contact", tenant_id=tenant_id, contact_id=contact_id)
+        payments: List[Dict[str, Any]] = []
+        page = 1
+
+        while True:
+            result = api.get_payments(
+                tenant_id,
+                where=f'Invoice.Contact.ContactID==Guid("{contact_id}")',
+                order="Date ASC",
+                page=page,
+            )
+
+            pymts = result.payments or []
+            logger.debug("Fetched payments page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(pymts))
+            for payment in pymts:
+                invoice_obj = getattr(payment, "invoice", None)
+                contact = None
+                if invoice_obj is not None:
+                    contact_obj = getattr(invoice_obj, "contact", None)
+                    if contact_obj:
+                        contact = {
+                            "contact_id": getattr(contact_obj, "contact_id", None),
+                            "name": getattr(contact_obj, "name", None),
+                        }
+
+                payments.append(
+                    {
+                        "payment_id": getattr(payment, "payment_id", None),
+                        "invoice_id": getattr(invoice_obj, "invoice_id", None) if invoice_obj else None,
+                        "reference": getattr(payment, "reference", None),
+                        "amount": getattr(payment, "amount", None),
+                        "date": _fmt_date(getattr(payment, "date", None)),
+                        "status": getattr(payment, "status", None),
+                        "contact": contact,
+                    }
+                )
+
+            if len(pymts) < PAGE_SIZE:
+                break
+
+            page += 1
+
+        logger.info("Fetched payments for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(payments))
+        return payments
+
+    except AccountingBadRequestException as e:
+        _raise_for_unauthorized(e)
+        logger.exception("Failed to fetch payments for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
+        return []
+    except Exception as e:
+        _raise_for_unauthorized(e)
+        logger.exception("Failed to fetch payments for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
         return []
 
 
@@ -851,7 +896,7 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     header_to_field_norm: Dict[str, str] = {}
     # Simple (string) mappings first
     for canonical_field, mapped in (items_template or {}).items():
-        if canonical_field in {"raw", "date_format"}:
+        if canonical_field in {"raw", "date_format", "item_type"}:
             continue
         if canonical_field == "reference":
             continue
@@ -1124,73 +1169,6 @@ def build_row_comparisons(
 
 
 
-# ---------------------------------
-# Type inference
-# ---------------------------------
-
 def guess_statement_item_type(raw_row: Dict[str, Any]) -> str:
-    """Heuristically classify a row as ``invoice`` or ``credit_note``.
-
-    We gather alphanumeric tokens from the raw row and fuzzy-match them against
-    common aliases (INV, INVOICE, CRN, CREDIT NOTE, etc.). The algorithm
-    prioritises detecting credit notes but falls back to ``invoice`` when the
-    signal is weak or ambiguous.
-    """
-
-    values = (raw_row or {}).values()
-    joined_text = " ".join(str(v) for v in values if v)
-    if not joined_text.strip():
-        return "invoice"
-
-    def _compact(s: str) -> str:
-        return "".join(ch for ch in str(s or "").upper() if ch.isalnum())
-
-    tokens = [_compact(tok) for tok in re.findall(r"[A-Za-z0-9]+", joined_text.upper())]
-    tokens = [t for t in tokens if t]
-    if not tokens:
-        return "invoice"
-
-    TYPE_SYNONYMS: Dict[str, List[str]] = {
-        "invoice": ["invoice", "inv", "taxinvoice"],
-        "credit_note": ["creditnote", "credit", "creditmemo", "crn", "cr", "cn"],
-    }
-
-    joined_compact = _compact(joined_text)
-
-    best_type = "invoice"
-    best_score = 0.0
-
-    for doc_type, synonyms in TYPE_SYNONYMS.items():
-        type_best = 0.0
-        for syn in synonyms:
-            syn_norm = _compact(syn)
-            if not syn_norm:
-                continue
-
-            if syn_norm in joined_compact:
-                type_best = max(type_best, 1.0)
-                continue
-
-            for token in tokens:
-                score: float
-                if token == syn_norm:
-                    score = 1.0
-                elif token.startswith(syn_norm) or syn_norm.startswith(token):
-                    score = 0.9
-                else:
-                    score = difflib.SequenceMatcher(None, token, syn_norm).ratio()
-
-                if len(syn_norm) <= 2 and score > 0.8:
-                    score = 0.8  # keep short aliases from overwhelming the score
-
-                if score > type_best:
-                    type_best = score
-
-        if type_best > best_score:
-            best_score = type_best
-            best_type = doc_type
-
-    if best_type == "credit_note" and best_score < 0.65:
-        return "invoice"
-
-    return best_type
+    """Wrapper for compatibility; delegates to the shared classifier."""
+    return classify_item_type(raw_row)

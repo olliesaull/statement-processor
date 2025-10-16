@@ -11,23 +11,33 @@
           <div class="btn-group statement-filter-group" role="group" aria-label="Filter statement items">
             <a
               class="btn btn-sm {% if items_view == 'incomplete' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-              href="{{ url_for('statement', statement_id=statement_id, items_view='incomplete') }}"
+              href="{{ url_for('statement', statement_id=statement_id, items_view='incomplete', show_payments='true' if show_payments else 'false') }}"
             >Incomplete ({{ incomplete_count }})</a>
             <a
               class="btn btn-sm {% if items_view == 'completed' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-              href="{{ url_for('statement', statement_id=statement_id, items_view='completed') }}"
+              href="{{ url_for('statement', statement_id=statement_id, items_view='completed', show_payments='true' if show_payments else 'false') }}"
             >Completed ({{ completed_count }})</a>
             <a
               class="btn btn-sm {% if items_view == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-              href="{{ url_for('statement', statement_id=statement_id, items_view='all') }}"
+              href="{{ url_for('statement', statement_id=statement_id, items_view='all', show_payments='true' if show_payments else 'false') }}"
             >All ({{ all_statement_rows|length }})</a>
           </div>
+          {% if has_payment_rows %}
+            <div class="mt-2">
+              <a
+                class="btn btn-sm {% if show_payments %}btn-primary{% else %}btn-outline-primary{% endif %}"
+                href="{{ url_for('statement', statement_id=statement_id, items_view=items_view, show_payments='false' if show_payments else 'true') }}"
+              >
+                {% if show_payments %}Hide payments{% else %}Show payments{% endif %}
+              </a>
+            </div>
+          {% endif %}
         {% endif %}
       </div>
       {% if not is_processing %}
         <a
           class="btn btn-outline-primary"
-          href="{{ url_for('statement', statement_id=statement_id, download='csv', items_view=items_view) }}"
+          href="{{ url_for('statement', statement_id=statement_id, download='csv', items_view=items_view, show_payments='true' if show_payments else 'false') }}"
         >Download CSV</a>
       {% endif %}
     </div>
@@ -118,6 +128,7 @@
                           <input type="hidden" name="action" value="incomplete_item">
                           <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
                           <input type="hidden" name="items_view" value="{{ items_view }}">
+                          <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
                           <button type="submit" class="btn btn-sm btn-outline-warning text-nowrap px-2 py-0">Mark incomplete</button>
                         </form>
                       {% else %}
@@ -125,6 +136,7 @@
                           <input type="hidden" name="action" value="complete_item">
                           <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
                           <input type="hidden" name="items_view" value="{{ items_view }}">
+                          <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
                           <button type="submit" class="btn btn-sm btn-outline-success text-nowrap px-2 py-0">Mark complete</button>
                         </form>
                       {% endif %}
@@ -158,11 +170,13 @@
             <span class="badge bg-success fs-6">Completed</span>
             <form method="post" class="mb-0">
               <input type="hidden" name="action" value="mark_incomplete">
+              <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
               <button type="submit" class="btn btn-outline-warning text-nowrap px-3 py-1">Mark incomplete</button>
             </form>
           {% else %}
             <form method="post" class="mb-0">
               <input type="hidden" name="action" value="mark_complete">
+              <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
               <button type="submit" class="btn btn-success text-nowrap px-3 py-1">Complete statement</button>
             </form>
           {% endif %}
