@@ -393,10 +393,7 @@ def statement(statement_id: str):
         display_headers=display_headers,
         header_to_field=header_to_field,
     )
-    row_matches = [
-        all(cell.matches or cell.canonical_field == "reference" for cell in row)
-        for row in row_comparisons
-    ]
+    row_matches = [all(cell.matches for cell in row) for row in row_comparisons]
 
     if request.args.get("download") == "csv":
         header_labels = []
@@ -647,10 +644,11 @@ def configs():
                 if k in StatementItem.model_fields and k not in {"raw", "statement_item_id"}:
                     flat[k] = v
 
+        flat.pop("reference", None)
+
         # Canonical field order from the Pydantic model, prioritising config UI alignment
         preferred_order = [
             "number",
-            "reference",
             "total",
             "date",
             "due_date",
@@ -662,6 +660,8 @@ def configs():
 
         rows: List[Dict[str, Any]] = []
         for f in canonical_order:
+            if f == "reference":
+                continue
             val = flat.get(f)
             if f == "total":
                 values = [str(v) for v in val] if isinstance(val, list) else ([str(val)] if isinstance(val, str) else [""])
@@ -714,7 +714,11 @@ def configs():
 
                     # Preserve any root keys not shown in the mapping editor.
                     # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
-                    preserved = {k: v for k, v in existing.items() if k not in posted_fields + ["statement_items"]}
+                    preserved = {
+                        k: v
+                        for k, v in existing.items()
+                        if k not in posted_fields + ["statement_items"] and k != "reference"
+                    }
 
                     # Rebuild mapping from form
                     new_map: Dict[str, Any] = {}

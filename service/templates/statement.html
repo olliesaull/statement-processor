@@ -96,11 +96,7 @@
                   {% for cell in cells %}
                     <td class="{% if loop.last %}split-right{% endif %}{% if not cell.matches %} cell-mismatch{% endif %}">
                       {% set stmt_text = cell.statement_value %}
-                      {% if cell.canonical_field == 'reference' and stmt_text %}
-                        <span class="cell-value-truncate" title="{{ stmt_text }}">{{ stmt_text }}</span>
-                      {% else %}
-                        {{ stmt_text }}
-                      {% endif %}
+                      {{ stmt_text }}
                       {% if not cell.matches %}
                         <span class="cell-indicator" title="Does not match Xero value">!</span>
                       {% endif %}
@@ -109,11 +105,7 @@
                   {% for cell in cells %}
                     <td class="{% if not cell.matches %}cell-mismatch{% endif %}">
                       {% set xero_text = cell.xero_value %}
-                      {% if cell.canonical_field == 'reference' and xero_text %}
-                        <span class="cell-value-truncate" title="{{ xero_text }}">{{ xero_text }}</span>
-                      {% else %}
-                        {{ xero_text }}
-                      {% endif %}
+                      {{ xero_text }}
                       {% if not cell.matches %}
                         <span class="cell-indicator" title="Does not match statement value">!</span>
                       {% endif %}

@@ -853,6 +853,8 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     for canonical_field, mapped in (items_template or {}).items():
         if canonical_field in {"raw", "date_format"}:
             continue
+        if canonical_field == "reference":
+            continue
         if isinstance(mapped, str) and mapped.strip():
             header_to_field_norm[_n(mapped)] = canonical_field
     # Special case: total can be a list of possible headers; include all candidates.

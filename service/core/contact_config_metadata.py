@@ -11,9 +11,6 @@ FIELD_DESCRIPTIONS: Dict[str, str] = {
         "Document number on the statement (e.g. invoice number). This is the primary key used when matching to Xero. "
         "If the column contains items that are not a direct match to the number in Xero, that's okay as seen in the example."
     ),
-    "reference": (
-        "Any descriptive text that helps identify the transaction (project, memo, etc.)."
-    ),
     "date_format": (
         "Date pattern (e.g., 'D MMMM YYYY', 'MM/DD/YY'). See the guide below for full token descriptions and examples."
     ),
@@ -27,7 +24,6 @@ EXAMPLE_CONFIG: Dict[str, str | List[str]] = {
     "date": "date",
     "due_date": "",
     "number": "reference",
-    "reference": "description",
     "date_format": "YYYY-MM-DD",
     "total": ["debit", "credit"],
 }
