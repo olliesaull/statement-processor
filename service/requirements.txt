@@ -27,3 +27,4 @@ pytest
 pandas
 pydantic
 dotenv
+openpyxl

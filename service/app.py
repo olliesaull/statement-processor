@@ -1,10 +1,9 @@
-import csv
 import os
 import secrets
 import urllib.parse
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from io import StringIO
+from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -18,6 +17,7 @@ from flask import (
     session,
     url_for,
 )
+from openpyxl import Workbook
 
 from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger
 from core.contact_config_metadata import FIELD_DESCRIPTIONS, EXAMPLE_CONFIG
@@ -275,7 +275,7 @@ def statement(statement_id: str):
     items_view = (request.values.get("items_view") or "incomplete").strip().lower()
     if items_view not in {"incomplete", "completed", "all"}:
         items_view = "incomplete"
-    show_payments_raw = (request.values.get("show_payments") or "false").strip().lower()
+    show_payments_raw = (request.values.get("show_payments") or "true").strip().lower()
     show_payments = show_payments_raw in {"true", "1", "yes", "on"}
     logger.info("Statement detail requested", tenant_id=tenant_id, statement_id=statement_id, items_view=items_view, show_payments=show_payments, method=request.method)
 
@@ -375,7 +375,7 @@ def statement(statement_id: str):
         else:
             t = existing_type
         statement_item_id = it.get("statement_item_id") if isinstance(it, dict) else None
-        print(f"[statement:{statement_id}] item#{idx:03d} ({statement_item_id or 'unknown'}) classified as {t}")
+        logger.info("Statement type classified", statement_id=statement_id, statement_item_id=statement_item_id, item_type=t)
         item_types.append(t)
         if t == "credit_note":
             has_credit_note = True
@@ -430,7 +430,7 @@ def statement(statement_id: str):
     )
     row_matches = [all(cell.matches for cell in row) for row in row_comparisons]
 
-    if request.args.get("download") == "csv":
+    if request.args.get("download") == "xlsx":
         header_labels = []
         statement_headers: List[str] = []
         xero_headers: List[str] = []
@@ -445,38 +445,43 @@ def statement(statement_id: str):
             statement_headers.append(f"Statement {label}")
             xero_headers.append(f"Xero {label}")
 
-        csv_headers = ["Item Type"] + statement_headers + xero_headers
+        excel_headers = ["Item Type"] + statement_headers + xero_headers
 
-        output = StringIO()
-        writer = csv.DictWriter(output, fieldnames=csv_headers)
-        writer.writeheader()
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Statement"
+        worksheet.append(excel_headers)
 
         row_count = max(len(rows_by_header), len(right_rows_by_header))
         for idx in range(row_count):
             left_row = rows_by_header[idx] if idx < len(rows_by_header) else {}
             right_row = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
 
-            csv_row: Dict[str, Any] = {
-                "Item Type": item_types[idx] if idx < len(item_types) else ""
-            }
+            row_values: List[Any] = [
+                item_types[idx] if idx < len(item_types) else ""
+            ]
             for src_header, label in header_labels:
-                statement_key = f"Statement {label}"
                 left_value = left_row.get(src_header, "") if isinstance(left_row, dict) else ""
-                csv_row[statement_key] = "" if left_value is None else left_value
+                row_values.append("" if left_value is None else left_value)
 
             for src_header, label in header_labels:
-                xero_key = f"Xero {label}"
                 right_value = right_row.get(src_header, "") if isinstance(right_row, dict) else ""
-                csv_row[xero_key] = "" if right_value is None else right_value
+                row_values.append("" if right_value is None else right_value)
 
-            writer.writerow(csv_row)
+            worksheet.append(row_values)
 
-        csv_payload = output.getvalue()
+        output = BytesIO()
+        workbook.save(output)
+        output.seek(0)
+        excel_payload = output.getvalue()
         output.close()
 
-        response = app.response_class(csv_payload, mimetype="text/csv")
-        response.headers["Content-Disposition"] = f"attachment; filename=statement_{statement_id}.csv"
-        logger.info("Statement CSV generated", tenant_id=tenant_id, statement_id=statement_id, rows=row_count)
+        response = app.response_class(
+            excel_payload,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response.headers["Content-Disposition"] = f"attachment; filename=statement_{statement_id}.xlsx"
+        logger.info("Statement Excel generated", tenant_id=tenant_id, statement_id=statement_id, rows=row_count)
         return response
 
     item_status_map = get_statement_item_status_map(tenant_id, statement_id)

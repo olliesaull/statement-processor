@@ -37,8 +37,8 @@
       {% if not is_processing %}
         <a
           class="btn btn-outline-primary"
-          href="{{ url_for('statement', statement_id=statement_id, download='csv', items_view=items_view, show_payments='true' if show_payments else 'false') }}"
-        >Download CSV</a>
+          href="{{ url_for('statement', statement_id=statement_id, download='xlsx', items_view=items_view, show_payments='true' if show_payments else 'false') }}"
+        >Download Excel</a>
       {% endif %}
     </div>
 
