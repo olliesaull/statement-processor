@@ -121,6 +121,38 @@ contact_cache = ContactCache(
     )
 )
 
+
+def require_contacts_ready(view_func: Callable) -> Callable:
+    """Decorator blocking access while the active tenant's contacts sync.
+
+    Redirects the user back to the index with an informational message when
+    the current tenant is still synchronising contacts (statuses other than
+    ``ready``).
+    """
+
+    @wraps(view_func)
+    def wrapper(*args: Any, **kwargs: Any):
+        tenant_id = session.get("xero_tenant_id")
+        if not tenant_id:
+            return view_func(*args, **kwargs)
+
+        status = contact_sync_service.get_status(tenant_id)
+        if status.status != "ready":
+            logger.info("Blocking request while contacts synchronise", tenant_id=tenant_id, path=request.path, status=status.status)
+
+            if status.status == "error":
+                session.pop("tenant_message", None)
+                session["tenant_error"] = ("Contact synchronisation encountered an error. We're retrying; please wait and try again.")
+            else:
+                session.pop("tenant_error", None)
+                session["tenant_message"] = ("Synchronising contacts for this tenant. Please wait until the sync completes.")
+
+            return redirect(url_for("index"))
+
+        return view_func(*args, **kwargs)
+
+    return wrapper
+
 def _get_token_for_sync(_: str) -> Optional[Dict[str, Any]]:
     token = session.get("xero_oauth2_token")
     if not isinstance(token, dict):

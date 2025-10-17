@@ -45,6 +45,7 @@ from utils import (
     mark_statement_completed,
     match_invoices_to_statement_items,
     prepare_display_mappings,
+    require_contacts_ready,
     route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
@@ -91,6 +92,7 @@ def ignore_favicon():
 
 @app.route("/contacts", methods=["GET", "POST"])
 @xero_token_required
+@require_contacts_ready
 @route_handler_logging
 def view_contacts():
     """List tenant contacts; on POST, echo the selected contact ID to logs."""
@@ -137,6 +139,7 @@ def contact_sync_status_api():
 
 @app.route("/upload-statements", methods=["GET", "POST"])
 @xero_token_required
+@require_contacts_ready
 @route_handler_logging
 def upload_statements():
     """Upload one or more PDF statements and register them for processing."""
@@ -243,6 +246,7 @@ def upload_statements():
 
 @app.route("/statements")
 @xero_token_required
+@require_contacts_ready
 @route_handler_logging
 def statements():
     tenant_id = session.get("xero_tenant_id")
@@ -260,6 +264,7 @@ def statements():
 
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @xero_token_required
+@require_contacts_ready
 @route_handler_logging
 def statement(statement_id: str):
     tenant_id = session.get("xero_tenant_id")
@@ -652,6 +657,7 @@ def disconnect_tenant():
 
 @app.route("/configs", methods=["GET", "POST"])
 @xero_token_required
+@require_contacts_ready
 @route_handler_logging
 def configs():
     """View and edit contact-specific mapping configuration."""

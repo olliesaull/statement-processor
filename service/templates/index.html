@@ -86,7 +86,22 @@
                 <td>{{ tenant.tenantName or tenant.tenantId }}</td>
                 <td class="text-center">
                   {% if is_active %}
-                    <span class="badge bg-success">Current Tenant</span>
+                    <div class="d-flex flex-column align-items-center gap-1">
+                      <span class="badge bg-success">Current Tenant</span>
+                      {% set sync = contact_sync_status %}
+                      {% if sync %}
+                        {% if sync.status == 'ready' %}
+                          <span class="text-muted small">Tenant Synchronised</span>
+                        {% elif sync.status in ['syncing', 'empty'] %}
+                          <span class="text-info small d-flex align-items-center gap-2">
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                            <span>Synchronising contacts...</span>
+                          </span>
+                        {% elif sync.status == 'error' %}
+                          <span class="text-warning small">Contact sync error</span>
+                        {% endif %}
+                      {% endif %}
+                    </div>
                   {% else %}
                     <span class="text-muted">Not in use</span>
                   {% endif %}
