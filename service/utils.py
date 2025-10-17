@@ -31,13 +31,21 @@ from config import (
     s3_client,
     tenant_statements_table,
 )
-from core.contact_cache import ContactCache, S3ContactCacheBackend
-from core.contact_sync_service import ContactSyncService
 from core.date_utils import coerce_datetime_with_template, format_iso_with
 from core.item_classification import guess_statement_item_type as classify_item_type
 from core.textract_statement import run_textraction
 from core.transform import equal
 from core.models_comparison import CellComparison
+from xero_repository.contact_cache import ContactCache
+from xero_repository.invoice_cache import InvoiceCache
+from xero_repository.contact_sync_service import ContactSyncService
+from xero_repository.invoice_sync_service import InvoiceSyncService
+from xero_repository.credit_note_cache import CreditNoteCache
+from xero_repository.credit_note_sync_service import CreditNoteSyncService
+from xero_repository.payment_cache import PaymentCache
+from xero_repository.payment_sync_service import PaymentSyncService
+from xero_repository.resource_cache import S3JSONResourceStore
+from xero_repository.tenant_data_sync import TenantDataSyncCoordinator
 
 
 # MIME/extension guards for uploads
@@ -115,20 +123,40 @@ api_client = ApiClient(
 api = AccountingApi(api_client)
 
 contact_cache = ContactCache(
-    S3ContactCacheBackend(
+    S3JSONResourceStore(
         bucket=S3_BUCKET_NAME,
         s3_client=s3_client,
+        filename="contacts.json",
+    )
+)
+
+invoice_cache = InvoiceCache(
+    S3JSONResourceStore(
+        bucket=S3_BUCKET_NAME,
+        s3_client=s3_client,
+        filename="invoices.json",
+    )
+)
+
+credit_note_cache = CreditNoteCache(
+    S3JSONResourceStore(
+        bucket=S3_BUCKET_NAME,
+        s3_client=s3_client,
+        filename="credit_notes.json",
+    )
+)
+
+payment_cache = PaymentCache(
+    S3JSONResourceStore(
+        bucket=S3_BUCKET_NAME,
+        s3_client=s3_client,
+        filename="payments.json",
     )
 )
 
 
-def require_contacts_ready(view_func: Callable) -> Callable:
-    """Decorator blocking access while the active tenant's contacts sync.
-
-    Redirects the user back to the index with an informational message when
-    the current tenant is still synchronising contacts (statuses other than
-    ``ready``).
-    """
+def require_tenant_data_ready(view_func: Callable) -> Callable:
+    """Prevent navigation while tenant-level data synchronisation is underway."""
 
     @wraps(view_func)
     def wrapper(*args: Any, **kwargs: Any):
@@ -136,20 +164,34 @@ def require_contacts_ready(view_func: Callable) -> Callable:
         if not tenant_id:
             return view_func(*args, **kwargs)
 
-        status = contact_sync_service.get_status(tenant_id)
-        if status.status != "ready":
-            logger.info("Blocking request while contacts synchronise", tenant_id=tenant_id, path=request.path, status=status.status)
+        state = tenant_data_sync.get_status(tenant_id)
+        if state.status == "ready":
+            return view_func(*args, **kwargs)
 
-            if status.status == "error":
-                session.pop("tenant_message", None)
-                session["tenant_error"] = ("Contact synchronisation encountered an error. We're retrying; please wait and try again.")
-            else:
-                session.pop("tenant_error", None)
-                session["tenant_message"] = ("Synchronising contacts for this tenant. Please wait until the sync completes.")
+        state_dict = state.to_dict()
+        logger.info(
+            "Blocking request while tenant data synchronises",
+            tenant_id=tenant_id,
+            path=request.path,
+            status=state.status,
+            resources=state_dict.get("resources"),
+        )
 
-            return redirect(url_for("index"))
+        if state.status == "error":
+            session.pop("tenant_message", None)
+            errored = [name for name, res in state_dict.get("resources", {}).items() if res.get("status") == "error"]
+            resource_list = ", ".join(sorted(errored)) if errored else "tenant data"
+            session["tenant_error"] = (
+                f"Data synchronisation encountered an error for {resource_list}. Please wait and try again."
+            )
+        else:
+            session.pop("tenant_error", None)
+            waiting = ", ".join(sorted(state_dict.get("resources", {}).keys())) or "tenant data"
+            session["tenant_message"] = (
+                f"Synchronising {waiting}. Please wait until the sync completes."
+            )
 
-        return view_func(*args, **kwargs)
+        return redirect(url_for("index"))
 
     return wrapper
 
@@ -180,6 +222,33 @@ contact_sync_service = ContactSyncService(
     cache=contact_cache,
     token_provider=_get_token_for_sync,
     api_factory=_build_accounting_api_for_token,
+)
+
+invoice_sync_service = InvoiceSyncService(
+    cache=invoice_cache,
+    token_provider=_get_token_for_sync,
+    api_factory=_build_accounting_api_for_token,
+)
+
+credit_note_sync_service = CreditNoteSyncService(
+    cache=credit_note_cache,
+    token_provider=_get_token_for_sync,
+    api_factory=_build_accounting_api_for_token,
+)
+
+payment_sync_service = PaymentSyncService(
+    cache=payment_cache,
+    token_provider=_get_token_for_sync,
+    api_factory=_build_accounting_api_for_token,
+)
+
+tenant_data_sync = TenantDataSyncCoordinator(
+    {
+        "contacts": contact_sync_service,
+        "invoices": invoice_sync_service,
+        "credit_notes": credit_note_sync_service,
+        "payments": payment_sync_service,
+    }
 )
 
 
@@ -433,140 +502,37 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
 
 def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
-    tenant_id = session["xero_tenant_id"]
-    PAGE_SIZE = 100  # Xero cap is 100; fetch full pages to reduce calls
-
-    try:
-        logger.info("Fetching credit notes for contact", tenant_id=tenant_id, contact_id=contact_id)
-        credit_notes: List[Dict[str, Any]] = []
-        page = 1
-
-        while True:
-            result = api.get_credit_notes(
-                tenant_id,
-                where=f'Contact.ContactID==Guid("{contact_id}")',
-                order="CreditNoteNumber ASC",
-                page=page,
-                unitdp=2,
-                page_size=PAGE_SIZE,
-            )
-
-            cnotes = result.credit_notes or []
-            logger.debug("Fetched credit note page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(cnotes))
-            for cn in cnotes:
-                c = getattr(cn, "contact", None)
-                contact = {
-                    "contact_id": getattr(c, "contact_id", None),
-                    "name": getattr(c, "name", None),
-                    "email": getattr(c, "email_address", None),
-                    "is_customer": getattr(c, "is_customer", None),
-                    "is_supplier": getattr(c, "is_supplier", None),
-                    "status": getattr(c, "contact_status", None),
-                } if c else None
-
-                total = getattr(cn, "total", None)
-                amount_credited = getattr(cn, "amount_credited", None)
-                remaining_credit = getattr(cn, "remaining_credit", None)
-
-                credit_notes.append({
-                    "credit_note_id": getattr(cn, "credit_note_id", None),
-                    "number": getattr(cn, "credit_note_number", None),
-                    "type": getattr(cn, "type", None),                 # e.g., ACCRECCREDIT
-                    "status": getattr(cn, "status", None),
-
-                    "date": _fmt_date(getattr(cn, "date", None)),
-                    "due_date": _fmt_date(getattr(cn, "due_date", None)),
-
-                    "reference": getattr(cn, "reference", None),
-
-                    "subtotal": getattr(cn, "sub_total", None),
-                    "total_tax": getattr(cn, "total_tax", None),
-                    "total": remaining_credit if remaining_credit is not None else total,
-                    "amount_credited": amount_credited,
-                    "remaining_credit": remaining_credit,
-
-                    "contact": contact,
-                })
-
-            if len(cnotes) < PAGE_SIZE:
-                break
-
-            page += 1
-
-        logger.info("Fetched credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(credit_notes))
-        return credit_notes
-
-    except AccountingBadRequestException as e:
-        _raise_for_unauthorized(e)
-        logger.exception("Failed to fetch credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
-        return []
-    except Exception as e:
-        _raise_for_unauthorized(e)
-        logger.exception("Failed to fetch credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
-        return []
-
-
-def get_payments_by_contact(contact_id: str) -> List[Dict[str, Any]]:
-    tenant_id = session["xero_tenant_id"]
+    tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
         return []
 
-    PAGE_SIZE = 100
+    all_credit_notes = credit_note_sync_service.get_credit_notes(tenant_id)
+    filtered = [cn for cn in all_credit_notes if (cn.get("contact") or {}).get("contact_id") == contact_id]
+    logger.info(
+        "Returning cached credit notes",
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        available=len(filtered),
+        cached_total=len(all_credit_notes),
+    )
+    return filtered
 
-    try:
-        logger.info("Fetching payments for contact", tenant_id=tenant_id, contact_id=contact_id)
-        payments: List[Dict[str, Any]] = []
-        page = 1
 
-        while True:
-            result = api.get_payments(
-                tenant_id,
-                where=f'Invoice.Contact.ContactID==Guid("{contact_id}")',
-                order="Date ASC",
-                page=page,
-            )
-
-            pymts = result.payments or []
-            logger.debug("Fetched payments page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(pymts))
-            for payment in pymts:
-                invoice_obj = getattr(payment, "invoice", None)
-                contact = None
-                if invoice_obj is not None:
-                    contact_obj = getattr(invoice_obj, "contact", None)
-                    if contact_obj:
-                        contact = {
-                            "contact_id": getattr(contact_obj, "contact_id", None),
-                            "name": getattr(contact_obj, "name", None),
-                        }
-
-                payments.append(
-                    {
-                        "payment_id": getattr(payment, "payment_id", None),
-                        "invoice_id": getattr(invoice_obj, "invoice_id", None) if invoice_obj else None,
-                        "reference": getattr(payment, "reference", None),
-                        "amount": getattr(payment, "amount", None),
-                        "date": _fmt_date(getattr(payment, "date", None)),
-                        "status": getattr(payment, "status", None),
-                        "contact": contact,
-                    }
-                )
-
-            if len(pymts) < PAGE_SIZE:
-                break
-
-            page += 1
-
-        logger.info("Fetched payments for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(payments))
-        return payments
-
-    except AccountingBadRequestException as e:
-        _raise_for_unauthorized(e)
-        logger.exception("Failed to fetch payments for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
+def get_payments_by_contact(contact_id: str) -> List[Dict[str, Any]]:
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
         return []
-    except Exception as e:
-        _raise_for_unauthorized(e)
-        logger.exception("Failed to fetch payments for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
-        return []
+
+    all_payments = payment_sync_service.get_payments(tenant_id)
+    filtered = [p for p in all_payments if (p.get("contact") or {}).get("contact_id") == contact_id]
+    logger.info(
+        "Returning cached payments",
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        available=len(filtered),
+        cached_total=len(all_payments),
+    )
+    return filtered
 
 
 def get_contacts() -> List[Dict[str, Any]]:
@@ -576,37 +542,43 @@ def get_contacts() -> List[Dict[str, Any]]:
         return []
 
     status = contact_sync_service.get_status(tenant_id)
-    if status.status in {"empty", "error"}:
-        force = status.status == "error"
-        contact_sync_service.ensure_background_sync(tenant_id, force_full=force)
-    elif status.status == "ready":
-        contact_sync_service.ensure_background_sync(tenant_id)
-    else:
-        contact_sync_service.ensure_background_sync(tenant_id)
-
     contacts = contact_sync_service.get_contacts(tenant_id)
+    aggregate_state = tenant_data_sync.get_status(tenant_id)
     logger.info(
         "Returning cached contacts",
         tenant_id=tenant_id,
         available=len(contacts),
-        sync_status=status.status,
+        contact_sync_status=status.status,
+        aggregate_sync_status=aggregate_state.status,
     )
     return contacts
 
 
-def trigger_contact_sync(force_full: bool = False) -> None:
-    tenant_id = session.get("xero_tenant_id")
-    contact_sync_service.ensure_background_sync(tenant_id, force_full=force_full)
+def trigger_contact_sync(
+    force_full: bool = False,
+    *,
+    mark_initialized: bool = False,
+    tenant_id: Optional[str] = None,
+) -> None:
+    target = tenant_id or session.get("xero_tenant_id")
+    if not target:
+        return
+    tenant_data_sync.ensure_background_sync(target, force_full=force_full)
+    if mark_initialized:
+        set_tenant_sync_initialized(target, True)
 
 
 def get_contact_sync_status_for_current_tenant() -> Dict[str, Any]:
     tenant_id = session.get("xero_tenant_id")
-    state = contact_sync_service.get_status(tenant_id)
+    state = tenant_data_sync.get_status(tenant_id)
     return state.to_dict()
 
 
 def clear_contact_cache(tenant_id: Optional[str]) -> None:
-    contact_sync_service.clear(tenant_id)
+    """Clear all cached tenant data (contacts, invoices, and future resources)."""
+    tenant_data_sync.clear(tenant_id)
+    if tenant_id:
+        set_tenant_sync_initialized(tenant_id, False)
 
 
 def get_contact_for_statement(tenant_id: str, statement_id: str) -> Optional[str]:
@@ -1205,3 +1177,24 @@ def build_row_comparisons(
 def guess_statement_item_type(raw_row: Dict[str, Any]) -> str:
     """Wrapper for compatibility; delegates to the shared classifier."""
     return classify_item_type(raw_row)
+def set_tenant_sync_initialized(tenant_id: str, value: bool) -> None:
+    tracker = session.get("tenant_sync_initialized")
+    if not isinstance(tracker, dict):
+        tracker = {}
+    else:
+        tracker = dict(tracker)
+    if value:
+        tracker[tenant_id] = True
+    else:
+        tracker.pop(tenant_id, None)
+    session["tenant_sync_initialized"] = tracker
+    session.modified = True
+
+
+def is_tenant_sync_initialized(tenant_id: Optional[str]) -> bool:
+    if not tenant_id:
+        return False
+    tracker = session.get("tenant_sync_initialized")
+    if not isinstance(tracker, dict):
+        return False
+    return bool(tracker.get(tenant_id))

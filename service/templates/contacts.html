@@ -6,14 +6,10 @@
     <h1>Contacts</h1>
     {% set sync = contact_sync_status or {} %}
     {% set contacts_ready = sync.status == 'ready' %}
-    {% if sync.status == 'error' %}
-      <div class="alert alert-warning mt-3" role="alert" style="max-width: 340px;">
-        Contacts are temporarily unavailable. Please try again shortly.
-      </div>
-    {% elif not contacts_ready %}
+    {% if not contacts_ready %}
       <div class="alert alert-info d-flex align-items-center gap-2 mt-3" role="alert" style="max-width: 340px;">
         <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-        <span>Synchronising contacts{% if sync.synced_count %}: {{ sync.synced_count }} loaded{% endif %}.</span>
+        <span>Synchronising tenant data. We'll enable this view once syncing completes.</span>
       </div>
     {% endif %}
 
@@ -40,7 +36,7 @@
       .then((resp) => resp.ok ? resp.json() : null)
       .then((data) => {
         if (!data) {
-          console.warn('Contact sync poll returned no data');
+          console.warn('Tenant data sync poll returned no data');
           return retry(10000);
         }
         if (data.status === 'ready') {
@@ -48,12 +44,12 @@
           return;
         }
         if (data.status === 'error') {
-          console.warn('Contact sync still reporting error');
+          console.warn('Tenant data sync still reporting error');
         }
         retry(5000);
       })
       .catch((err) => {
-        console.error('Contact sync poll failed', err);
+        console.error('Tenant data sync poll failed', err);
         retry(10000);
       });
   })();

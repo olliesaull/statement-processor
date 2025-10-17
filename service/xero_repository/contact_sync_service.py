@@ -2,38 +2,19 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 from xero_python.accounting import AccountingApi
 
 from config import logger
-from core.contact_cache import ContactCache, ContactCachePayload
+from .contact_cache import ContactCache, ContactCachePayload
+from .sync_models import ResourceSyncState
 
 
 PAGE_SIZE = 100
 DELTA_REFRESH_SECONDS = 300
-
-
-@dataclass
-class ContactSyncState:
-    status: str
-    synced_count: int = 0
-    total_count: Optional[int] = None
-    last_synced_at: Optional[str] = None
-    last_updated_utc: Optional[str] = None
-    error: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "status": self.status,
-            "synced_count": self.synced_count,
-            "total_count": self.total_count,
-            "last_synced_at": self.last_synced_at,
-            "last_updated_utc": self.last_updated_utc,
-            "error": self.error,
-        }
 
 
 class ContactSyncService:
@@ -51,14 +32,14 @@ class ContactSyncService:
         self._api_factory = api_factory
         self._executor = executor or ThreadPoolExecutor(max_workers=2)
         self._status_lock = threading.Lock()
-        self._status: Dict[str, ContactSyncState] = {}
+        self._status: Dict[str, ResourceSyncState] = {}
         self._futures: Dict[str, Future] = {}
         self._token_snapshots: Dict[str, Dict[str, Any]] = {}
         self._refresh_interval = timedelta(seconds=DELTA_REFRESH_SECONDS)
 
-    def get_status(self, tenant_id: Optional[str]) -> ContactSyncState:
+    def get_status(self, tenant_id: Optional[str]) -> ResourceSyncState:
         if not tenant_id:
-            return ContactSyncState(status="empty")
+            return ResourceSyncState(resource="contacts", status="empty")
 
         with self._status_lock:
             state = self._status.get(tenant_id)
@@ -67,13 +48,15 @@ class ContactSyncService:
                     payload = self._cache.load(tenant_id)
                     if not payload:
                         logger.info("Contact cache missing; resetting sync state", tenant_id=tenant_id)
-                        self._status[tenant_id] = ContactSyncState(status="empty")
-                        return ContactSyncState(status="empty")
+                        empty_state = ResourceSyncState(resource="contacts", status="empty")
+                        self._status[tenant_id] = empty_state
+                        return empty_state
                 return replace(state)
 
         payload = self._cache.load(tenant_id)
         if payload:
-            derived = ContactSyncState(
+            derived = ResourceSyncState(
+                resource="contacts",
                 status="ready",
                 synced_count=len(payload.contacts),
                 total_count=len(payload.contacts),
@@ -84,7 +67,7 @@ class ContactSyncService:
                 self._status[tenant_id] = derived
             return replace(derived)
 
-        return ContactSyncState(status="empty")
+        return ResourceSyncState(resource="contacts", status="empty")
 
     def get_contacts(self, tenant_id: Optional[str]) -> List[Dict[str, str]]:
         if not tenant_id:
@@ -141,7 +124,7 @@ class ContactSyncService:
 
     def _update_status(self, tenant_id: str, **kwargs) -> None:
         with self._status_lock:
-            current = self._status.get(tenant_id, ContactSyncState(status="empty"))
+            current = self._status.get(tenant_id, ResourceSyncState(resource="contacts", status="empty"))
             updated = replace(current, **kwargs)
             self._status[tenant_id] = updated
 
@@ -398,3 +381,4 @@ class ContactSyncService:
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.exception("Contact delta sync failed", tenant_id=tenant_id, error=str(exc))
             self._update_status(tenant_id, status="error", error=str(exc))
+

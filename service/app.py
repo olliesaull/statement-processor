@@ -42,10 +42,12 @@ from utils import (
     get_statement_item_status_map,
     get_statement_record,
     is_allowed_pdf,
+    is_tenant_sync_initialized,
+    set_tenant_sync_initialized,
     mark_statement_completed,
     match_invoices_to_statement_items,
     prepare_display_mappings,
-    require_contacts_ready,
+    require_tenant_data_ready,
     route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
@@ -92,7 +94,7 @@ def ignore_favicon():
 
 @app.route("/contacts", methods=["GET", "POST"])
 @xero_token_required
-@require_contacts_ready
+@require_tenant_data_ready
 @route_handler_logging
 def view_contacts():
     """List tenant contacts; on POST, echo the selected contact ID to logs."""
@@ -139,7 +141,7 @@ def contact_sync_status_api():
 
 @app.route("/upload-statements", methods=["GET", "POST"])
 @xero_token_required
-@require_contacts_ready
+@require_tenant_data_ready
 @route_handler_logging
 def upload_statements():
     """Upload one or more PDF statements and register them for processing."""
@@ -246,7 +248,7 @@ def upload_statements():
 
 @app.route("/statements")
 @xero_token_required
-@require_contacts_ready
+@require_tenant_data_ready
 @route_handler_logging
 def statements():
     tenant_id = session.get("xero_tenant_id")
@@ -264,7 +266,7 @@ def statements():
 
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @xero_token_required
-@require_contacts_ready
+@require_tenant_data_ready
 @route_handler_logging
 def statement(statement_id: str):
     tenant_id = session.get("xero_tenant_id")
@@ -564,11 +566,17 @@ def index():
     message = session.pop("tenant_message", None)
     error = session.pop("tenant_error", None)
 
+    contact_sync_status: Dict[str, Any] = {}
     if active_tenant_id:
-        trigger_contact_sync()
+        contact_sync_status = get_contact_sync_status_for_current_tenant()
+        if not is_tenant_sync_initialized(active_tenant_id):
+            if contact_sync_status.get("status") == "ready":
+                set_tenant_sync_initialized(active_tenant_id, True)
+            else:
+                trigger_contact_sync(mark_initialized=True, tenant_id=active_tenant_id)
+                contact_sync_status = get_contact_sync_status_for_current_tenant()
 
     active_tenant = next((t for t in tenants if t.get("tenantId") == active_tenant_id), None)
-    contact_sync_status = get_contact_sync_status_for_current_tenant()
     logger.info("Rendering index", active_tenant_id=active_tenant_id, tenants=len(tenants), has_message=bool(message), has_error=bool(error), authenticated=bool(session.get("access_token")))
 
     return render_template(
@@ -593,18 +601,40 @@ def select_tenant():
 
     if tenant_id and any(t.get("tenantId") == tenant_id for t in tenants):
         _set_active_tenant(tenant_id)
-        trigger_contact_sync()
         tenant_name = session.get("xero_tenant_name") or tenant_id
         status = get_contact_sync_status_for_current_tenant()
+        if not is_tenant_sync_initialized(tenant_id):
+            if status.get("status") == "ready":
+                set_tenant_sync_initialized(tenant_id, True)
+            else:
+                trigger_contact_sync(mark_initialized=True, tenant_id=tenant_id)
+                status = get_contact_sync_status_for_current_tenant()
         if status.get("status") == "ready":
             session["tenant_message"] = f"Switched to tenant: {tenant_name}."
         else:
-            session["tenant_message"] = f"Switched to tenant: {tenant_name}. Synchronising contacts..."
+            resources = status.get("resources", {}) if isinstance(status, dict) else {}
+            waiting = ", ".join(sorted(resources.keys())) if resources else "tenant data"
+            session["tenant_message"] = f"Switched to tenant: {tenant_name}. Synchronising {waiting}..."
         logger.info("Tenant switched", tenant_id=tenant_id, tenant_name=tenant_name)
     else:
         session["tenant_error"] = "Unable to select tenant. Please try again."
         logger.info("Tenant selection failed", tenant_id=tenant_id)
 
+    return redirect(url_for("index"))
+
+
+@app.route("/tenants/sync", methods=["POST"])
+@xero_token_required
+@route_handler_logging
+def sync_tenant():
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        session["tenant_message"] = "Please select a tenant before synchronising."
+        return redirect(url_for("index"))
+
+    trigger_contact_sync(force_full=True, mark_initialized=True, tenant_id=tenant_id)
+    session["tenant_message"] = "Tenant data synchronisation has started."
+    logger.info("Manual tenant sync requested", tenant_id=tenant_id)
     return redirect(url_for("index"))
 
 
@@ -648,8 +678,12 @@ def disconnect_tenant():
     if session.get("xero_tenant_id") == tenant_id:
         next_tenant_id = updated[0]["tenantId"] if updated else None
         _set_active_tenant(next_tenant_id)
-        if next_tenant_id:
-            trigger_contact_sync()
+        if next_tenant_id and not is_tenant_sync_initialized(next_tenant_id):
+            status = get_contact_sync_status_for_current_tenant()
+            if status.get("status") == "ready":
+                set_tenant_sync_initialized(next_tenant_id, True)
+            else:
+                trigger_contact_sync(mark_initialized=True, tenant_id=next_tenant_id)
 
     session["tenant_message"] = "Tenant disconnected."
     logger.info("Tenant disconnected", tenant_id=tenant_id, remaining=len(updated))
@@ -657,7 +691,7 @@ def disconnect_tenant():
 
 @app.route("/configs", methods=["GET", "POST"])
 @xero_token_required
-@require_contacts_ready
+@require_tenant_data_ready
 @route_handler_logging
 def configs():
     """View and edit contact-specific mapping configuration."""
@@ -928,8 +962,12 @@ def callback():
         _set_active_tenant(None)
         new_active_id = None
 
-    if new_active_id:
-        trigger_contact_sync()
+    if new_active_id and not is_tenant_sync_initialized(new_active_id):
+        status = get_contact_sync_status_for_current_tenant()
+        if status.get("status") == "ready":
+            set_tenant_sync_initialized(new_active_id, True)
+        else:
+            trigger_contact_sync(mark_initialized=True, tenant_id=new_active_id)
 
     # Clear state after successful exchange
     session.pop("oauth_state", None)

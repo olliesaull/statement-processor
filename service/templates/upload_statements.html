@@ -4,34 +4,16 @@
 {% block content %}
 <div class="d-flex flex-column align-items-center" style="margin-top: 10vh;">
   <h1>Upload Statements</h1>
-  {% if error_messages %}
-    <div class="alert alert-danger w-100" style="max-width: 720px;">
-      {% if error_messages|length == 1 %}
-        {{ error_messages[0] }}
-      {% else %}
-        <ul class="mb-0">
-          {% for err in error_messages %}
-          <li>{{ err }}</li>
-          {% endfor %}
-        </ul>
-      {% endif %}
-    </div>
-  {% endif %}
-
   {% if success_count %}
     <div class="alert alert-success w-100" style="max-width: 720px;">
       Uploaded {{ success_count }} statement{% if success_count != 1 %}s{% endif %} successfully.
     </div>
   {% endif %}
   {% set sync = contact_sync_status or {} %}
-  {% if sync.status == 'error' %}
-    <div class="alert alert-warning w-100" style="max-width: 720px;" role="alert">
-      Contacts are temporarily unavailable. Please try again once the sync resumes.
-    </div>
-  {% elif not contacts_ready %}
+  {% if not contacts_ready %}
     <div class="alert alert-info w-100 d-flex align-items-center gap-2" style="max-width: 720px;" role="alert">
       <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-      <span>Synchronising contacts{% if sync.synced_count %}: {{ sync.synced_count }} loaded{% endif %}. Uploads will be enabled once this completes.</span>
+      <span>Synchronising tenant data. Uploads will be enabled once this completes.</span>
     </div>
   {% endif %}
 
@@ -75,10 +57,8 @@
         <button type="submit" class="btn btn-primary">Upload</button>
       </div>
     </fieldset>
-    {% if sync.status == 'error' %}
-      <p class="text-muted small mt-2">We cannot load contacts right now. Please refresh in a moment.</p>
-    {% elif not contacts_ready %}
-      <p class="text-muted small mt-2">We will enable uploads as soon as the contact sync finishes.</p>
+    {% if not contacts_ready %}
+      <p class="text-muted small mt-2">We will enable uploads as soon as synchronisation finishes.</p>
     {% endif %}
   </form>
 </div>
@@ -136,7 +116,7 @@
       .then((resp) => resp.ok ? resp.json() : null)
       .then((data) => {
         if (!data) {
-          console.warn('Contact sync poll returned no data');
+          console.warn('Tenant data sync poll returned no data');
           return retry(10000);
         }
         if (data.status === 'ready') {
@@ -144,12 +124,12 @@
           return;
         }
         if (data.status === 'error') {
-          console.warn('Contact sync still reporting error');
+          console.warn('Tenant data sync still reporting error');
         }
         retry(5000);
       })
       .catch((err) => {
-        console.error('Contact sync poll failed', err);
+        console.error('Tenant data sync poll failed', err);
         retry(10000);
       });
   })();

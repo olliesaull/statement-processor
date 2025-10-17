@@ -79,21 +79,14 @@
     </div>
   </div>
 
-  {% if error %}
-  <div class="alert alert-danger" role="alert">{{ error }}</div>
-  {% endif %}
   {% if message %}
   <div class="alert alert-success" role="alert">{{ message }}</div>
   {% endif %}
   {% set sync = contact_sync_status or {} %}
-  {% if sync.status == 'error' %}
-  <div class="alert alert-warning" role="alert">
-    Contacts are temporarily unavailable. Please try again once the sync resumes.
-  </div>
-  {% elif not contacts_ready %}
+  {% if not contacts_ready %}
   <div class="alert alert-info d-flex align-items-center gap-2" role="alert">
     <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-    <span>Synchronising contacts{% if sync.synced_count %}: {{ sync.synced_count }} loaded{% endif %}. Editing will be available shortly.</span>
+    <span>Synchronising tenant data. Editing will be available shortly.</span>
   </div>
   {% endif %}
 
@@ -192,16 +185,11 @@
         <li><code>Fri, 01 Aug 2025</code> → <code>[dddd, ]D MMM YYYY</code></li>
         <li><code>01.08.2025</code> → <code>DD.MM.YYYY</code></li>
       </ul>
-      <div class="alert alert-warning" role="alert">
-        Numeric-only formats can be ambiguous (e.g., <code>1/2/2025</code>). Make sure you choose the correct ordering, such as <code>DD/MM/YYYY</code> or <code>MM/DD/YYYY</code>.
-      </div>
     </div>
 
     <button type="submit" class="btn btn-success mb-5">Save</button>
     </fieldset>
-    {% if sync.status == 'error' %}
-    <p class="text-muted small">Saving is disabled until contacts become available again.</p>
-    {% elif not contacts_ready %}
+    {% if not contacts_ready %}
     <p class="text-muted small">Saving is disabled until the contact sync completes.</p>
     {% endif %}
   </form>

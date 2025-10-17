@@ -9,24 +9,19 @@
   {% if message %}
     <div class="alert alert-success" role="alert">{{ message }}</div>
   {% endif %}
-  {% if error %}
-    <div class="alert alert-danger" role="alert">{{ error }}</div>
-  {% endif %}
   {% if is_authenticated and active_tenant and contact_sync_status %}
     {% set sync = contact_sync_status %}
-    {% if sync.status == 'syncing' %}
-      <div class="alert alert-info d-flex align-items-center gap-2" role="alert">
-        <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-        <span>Synchronising contacts{% if sync.synced_count %}: {{ sync.synced_count }} loaded{% endif %}.</span>
-      </div>
-    {% elif sync.status == 'empty' %}
-      <div class="alert alert-info d-flex align-items-center gap-2" role="alert">
-        <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-        <span>Preparing contacts for this tenant...</span>
-      </div>
-    {% elif sync.status == 'error' %}
-      <div class="alert alert-warning" role="alert">
-        Contacts are temporarily unavailable. We'll keep trying in the background.
+    {% if sync.status != 'ready' %}
+      <div class="alert alert-info" role="alert">
+        <div class="d-flex align-items-center gap-2">
+          <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
+          <span>Synchronising tenant data. We'll refresh automatically once everything is ready.</span>
+        </div>
+        <ul class="mb-0 ps-3 mt-2 small">
+          {% for name, state in sync.resources.items() %}
+            <li>{{ name|replace('_', ' ')|title }}: {{ state.status }}{% if state.synced_count %} ({{ state.synced_count }} items){% endif %}</li>
+          {% endfor %}
+        </ul>
       </div>
     {% endif %}
     {% if sync.status != 'ready' %}
@@ -37,7 +32,7 @@
           .then((resp) => resp.ok ? resp.json() : null)
           .then((data) => {
             if (!data) {
-              console.warn('Contact sync poll returned no data');
+              console.warn('Tenant data sync poll returned no data');
               return retry(10000);
             }
             if (data.status === 'ready') {
@@ -45,12 +40,12 @@
               return;
             }
             if (data.status === 'error') {
-              console.warn('Contact sync still reporting error');
+              console.warn('Tenant data sync still reporting error');
             }
             retry(5000);
           })
           .catch((err) => {
-            console.error('Contact sync poll failed', err);
+            console.error('Tenant data sync poll failed', err);
             retry(10000);
           });
       })();
@@ -90,16 +85,17 @@
                       <span class="badge bg-success">Current Tenant</span>
                       {% set sync = contact_sync_status %}
                       {% if sync %}
-                        {% if sync.status == 'ready' %}
-                          <span class="text-muted small">Tenant Synchronised</span>
-                        {% elif sync.status in ['syncing', 'empty'] %}
-                          <span class="text-info small d-flex align-items-center gap-2">
-                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-                            <span>Synchronising contacts...</span>
-                          </span>
-                        {% elif sync.status == 'error' %}
-                          <span class="text-warning small">Contact sync error</span>
-                        {% endif %}
+                        <ul class="list-unstyled mb-0 small text-start">
+                          {% for name, state in sync.resources.items() %}
+                            {% set cls = 'text-muted' %}
+                            {% if state.status == 'error' %}
+                              {% set cls = 'text-warning' %}
+                            {% elif state.status != 'ready' %}
+                              {% set cls = 'text-info' %}
+                            {% endif %}
+                            <li class="{{ cls }}">{{ name|replace('_', ' ')|title }}: {{ state.status }}</li>
+                          {% endfor %}
+                        </ul>
                       {% endif %}
                     </div>
                   {% else %}
@@ -108,7 +104,11 @@
                 </td>
                 <td class="text-center">
                   <div class="d-flex justify-content-center gap-2">
-                    {% if not is_active %}
+                    {% if is_active %}
+                      <form method="post" action="{{ url_for('sync_tenant') }}">
+                        <button class="btn btn-outline-primary btn-sm" type="submit">Sync Tenant Data</button>
+                      </form>
+                    {% else %}
                       <form method="post" action="{{ url_for('select_tenant') }}">
                         <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
                         <button class="btn btn-outline-primary btn-sm" type="submit">Switch to Tenant</button>
