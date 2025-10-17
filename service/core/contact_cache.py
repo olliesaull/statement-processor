@@ -4,7 +4,9 @@ import json
 import os
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+from botocore.exceptions import ClientError
 
 
 @dataclass
@@ -69,6 +71,72 @@ class FileContactCacheBackend(ContactCacheBackend):
         path = self._path_for(tenant_id)
         if path.exists():
             path.unlink()
+
+
+class S3ContactCacheBackend(ContactCacheBackend):
+    """S3 backend storing contact caches as JSON blobs per tenant."""
+
+    def __init__(self, bucket: str, s3_client: Any, base_prefix: str = "") -> None:
+        self.bucket = bucket
+        self._s3 = s3_client
+        self.base_prefix = base_prefix.strip("/ ")
+
+    def _key_for(self, tenant_id: str) -> str:
+        tenant_key = (tenant_id or "").strip("/ ")
+        if not tenant_key:
+            raise ValueError("tenant_id must be a non-empty string")
+
+        key = f"{tenant_key}/data/contacts.json"
+        if self.base_prefix:
+            return f"{self.base_prefix}/{key}"
+        return key
+
+    def load(self, tenant_id: str) -> Optional[ContactCachePayload]:
+        key = self._key_for(tenant_id)
+        try:
+            obj = self._s3.get_object(Bucket=self.bucket, Key=key)
+        except ClientError as exc:
+            error_code = exc.response["Error"].get("Code")
+            if error_code in {"NoSuchKey", "404"}:
+                return None
+            raise
+
+        body = obj.get("Body")
+        if body is None:
+            return None
+        raw = body.read()
+        if not raw:
+            return None
+
+        data = json.loads(raw.decode("utf-8"))
+        contacts = data.get("contacts") or []
+        last_synced_at = data.get("last_synced_at")
+        last_updated_utc = data.get("last_updated_utc")
+        return ContactCachePayload(
+            contacts=[dict(item) for item in contacts],
+            last_synced_at=last_synced_at,
+            last_updated_utc=last_updated_utc,
+        )
+
+    def save(self, tenant_id: str, payload: ContactCachePayload) -> None:
+        key = self._key_for(tenant_id)
+        body = json.dumps(payload.to_dict(), indent=2, sort_keys=True).encode("utf-8")
+        self._s3.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+        )
+
+    def delete(self, tenant_id: str) -> None:
+        key = self._key_for(tenant_id)
+        try:
+            self._s3.delete_object(Bucket=self.bucket, Key=key)
+        except ClientError as exc:
+            error_code = exc.response["Error"].get("Code")
+            if error_code in {"NoSuchKey", "404"}:
+                return
+            raise
 
 
 class ContactCache:

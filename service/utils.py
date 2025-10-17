@@ -31,7 +31,7 @@ from config import (
     s3_client,
     tenant_statements_table,
 )
-from core.contact_cache import ContactCache, FileContactCacheBackend
+from core.contact_cache import ContactCache, S3ContactCacheBackend
 from core.contact_sync_service import ContactSyncService
 from core.date_utils import coerce_datetime_with_template, format_iso_with
 from core.item_classification import guess_statement_item_type as classify_item_type
@@ -114,9 +114,12 @@ api_client = ApiClient(
 )
 api = AccountingApi(api_client)
 
-BASE_DIR = Path(__file__).resolve().parent
-CONTACT_CACHE_DIR = BASE_DIR / "instance" / "contact_cache"
-contact_cache = ContactCache(FileContactCacheBackend(CONTACT_CACHE_DIR))
+contact_cache = ContactCache(
+    S3ContactCacheBackend(
+        bucket=S3_BUCKET_NAME,
+        s3_client=s3_client,
+    )
+)
 
 def _get_token_for_sync(_: str) -> Optional[Dict[str, Any]]:
     token = session.get("xero_oauth2_token")
