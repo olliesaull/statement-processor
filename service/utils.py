@@ -1167,8 +1167,6 @@ def build_row_comparisons(
     return comparisons
 
 
-
-
 def guess_statement_item_type(raw_row: Dict[str, Any]) -> str:
     """Wrapper for compatibility; delegates to the shared classifier."""
     return classify_item_type(raw_row)

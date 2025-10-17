@@ -210,7 +210,7 @@ def upload_statements():
                     }
 
                     # Upload pdf statement to S3
-                    pdf_statement_key = f"{tenant_id}/{statement_id}.pdf"
+                    pdf_statement_key = f"{tenant_id}/statements/{statement_id}.pdf"
                     upload_statement_to_s3(fs_like=f, key=pdf_statement_key)
                     logger.info("Uploaded statement PDF", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, s3_key=pdf_statement_key)
 
@@ -221,7 +221,7 @@ def upload_statements():
                     logger.info("Statement submitted", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id)
 
                     # Kick off background textraction so it's ready by the time the user views it
-                    json_statement_key = f"{tenant_id}/{statement_id}.json"
+                    json_statement_key = f"{tenant_id}/statements/{statement_id}.json"
                     _executor.submit(textract_in_background, tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
                     logger.info("Queued Textract background job", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
 
@@ -324,7 +324,7 @@ def statement(statement_id: str):
                 )
             )
 
-    route_key = f"{tenant_id}/{statement_id}"
+    route_key = f"{tenant_id}/statements/{statement_id}"
     json_statement_key = f"{route_key}.json"
 
     contact_id = record.get("ContactID")
