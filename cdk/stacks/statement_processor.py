@@ -26,6 +26,7 @@ class StatementProcessorStack(Stack):
 
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
+        TENANT_DATA_TABLE_NAME = "TenantDataTable"
         STATEMENTS_S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
 
         #region ---------- ParameterStore ----------
@@ -78,6 +79,14 @@ class StatementProcessorStack(Stack):
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
 
+        tenant_data_table = dynamodb.Table(
+            self, TENANT_DATA_TABLE_NAME,
+            table_name=TENANT_DATA_TABLE_NAME,
+            partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
+        )
+
         #endregion ---------- DynamoDB ----------
 
         #region ---------- S3 ----------
@@ -112,6 +121,7 @@ class StatementProcessorStack(Stack):
 
         tenant_statements_table.grant_read_write_data(statement_processor_instance_role)
         tenant_contacts_config_table.grant_read_write_data(statement_processor_instance_role)
+        tenant_data_table.grant_read_write_data(statement_processor_instance_role)
         statements_bucket.grant_read_write(statement_processor_instance_role)
 
         apprunner_asset = DockerImageAsset(self, "AppRunnerImage", directory="../service/")
