@@ -876,17 +876,13 @@ def callback():
 
     current = session.get("xero_tenant_id")
     tenant_ids = [t["tenantId"] for t in tenants]
-    new_active_id: Optional[str]
     if current in tenant_ids:
         _set_active_tenant(current)
-        new_active_id = current
     elif tenant_ids:
         first_tenant = tenant_ids[0]
         _set_active_tenant(first_tenant)
-        new_active_id = first_tenant
     else:
         _set_active_tenant(None)
-        new_active_id = None
 
     # Clear state after successful exchange
     session.pop("oauth_state", None)

@@ -195,6 +195,21 @@ def _fmt_date(d: Any) -> Optional[str]:
         return d.strftime("%Y-%m-%d")
     return None
 
+def _fmt_invoice_data(inv):
+    contact = getattr(inv, "contact", None)
+
+    return {
+        "invoice_id": getattr(inv, "invoice_id", None),
+        "number": getattr(inv, "invoice_number", None),
+        "type": getattr(inv, "type", None),
+        "status": getattr(inv, "status", None),
+        "date": _fmt_date(getattr(inv, "date", None)),
+        "due_date": _fmt_date(getattr(inv, "due_date", None)),
+        "reference": getattr(inv, "reference", None),
+        "total": getattr(inv, "total", None),
+        "contact_id": getattr(contact, "contact_id", None),
+        "contact_name": getattr(contact, "name", None),
+    }
 
 def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
     """
@@ -209,33 +224,6 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
     tenant_id = session["xero_tenant_id"]
     if not invoice_numbers:
         return {}
-
-    def _fmt(inv):
-        c = getattr(inv, "contact", None)
-        contact = {
-            "contact_id": getattr(c, "contact_id", None),
-            "name": getattr(c, "name", None),
-            "email": getattr(c, "email_address", None),
-            "is_customer": getattr(c, "is_customer", None),
-            "is_supplier": getattr(c, "is_supplier", None),
-            "status": getattr(c, "contact_status", None),
-        } if c else None
-
-        total = getattr(inv, "total", None)
-
-        return {
-            "invoice_id": getattr(inv, "invoice_id", None),
-            "number": getattr(inv, "invoice_number", None),
-            "type": getattr(inv, "type", None),
-            "status": getattr(inv, "status", None),
-            "date": _fmt_date(getattr(inv, "date", None)),
-            "due_date": _fmt_date(getattr(inv, "due_date", None)),
-            "reference": getattr(inv, "reference", None),
-            "subtotal": getattr(inv, "sub_total", None),
-            "total_tax": getattr(inv, "total_tax", None),
-            "total": total,
-            "contact": contact,
-        }
 
     # normalize & de-dupe while preserving order (helps batching)
     normalized = []
@@ -273,7 +261,7 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
                 invs = result.invoices or []
                 logger.debug("Fetched invoice page", tenant_id=tenant_id, batch=len(batch), page=page, returned=len(invs))
                 for inv in invs:
-                    rec = _fmt(inv)
+                    rec = _fmt_invoice_data(inv)
                     n = rec.get("number")
                     if n:
                         # last one wins if duplicates appear
@@ -321,37 +309,7 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
             invs = result.invoices or []
             logger.debug("Fetched invoice contact page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(invs))
-            for inv in invs:
-                # Minimal contact summary (safe getattr)
-                c = getattr(inv, "contact", None)
-                contact = {
-                    "contact_id": getattr(c, "contact_id", None),
-                    "name": getattr(c, "name", None),
-                    "email": getattr(c, "email_address", None),
-                    "is_customer": getattr(c, "is_customer", None),
-                    "is_supplier": getattr(c, "is_supplier", None),
-                    "status": getattr(c, "contact_status", None),
-                } if c else None
-
-                # Monetary fields
-                total = getattr(inv, "total", None)
-
-                invoices.append({
-                    "invoice_id": getattr(inv, "invoice_id", None),
-                    "number": getattr(inv, "invoice_number", None),
-                    "type": getattr(inv, "type", None),                 # e.g., ACCREC / ACCPAY
-                    "status": getattr(inv, "status", None),
-
-                    "date": _fmt_date(getattr(inv, "date", None)),
-                    "due_date": _fmt_date(getattr(inv, "due_date", None)),
-
-                    "reference": getattr(inv, "reference", None),
-
-                    "subtotal": getattr(inv, "sub_total", None),
-                    "total_tax": getattr(inv, "total_tax", None),
-                    "total": total,
-                    "contact": contact,
-                })
+            invoices.append(_fmt_invoice_data(inv) for inv in invs)
 
             if len(invs) < PAGE_SIZE:
                 break
@@ -416,20 +374,11 @@ def get_contacts() -> List[Dict[str, Any]]:
                     {
                         "contact_id": key,
                         "name": getattr(item, "name", None),
-                        "email": getattr(item, "email_address", None),
-                        "is_customer": getattr(item, "is_customer", None),
-                        "is_supplier": getattr(item, "is_supplier", None),
-                        "status": getattr(item, "contact_status", None),
                         "updated_at": updated_iso,
                     }
                 )
 
-            logger.debug(
-                "Fetched contact page",
-                tenant_id=tenant_id,
-                page=page,
-                returned=len(batch),
-            )
+            logger.debug("Fetched contact page", tenant_id=tenant_id, page=page, returned=len(batch))
 
             if len(batch) < page_size:
                 break
@@ -472,22 +421,16 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
                 break
 
             for note in batch:
-                contact_obj = getattr(note, "contact", None)
-                contact = (
-                    {
-                        "contact_id": getattr(contact_obj, "contact_id", None),
-                        "name": getattr(contact_obj, "name", None),
-                        "email": getattr(contact_obj, "email_address", None),
-                        "is_customer": getattr(contact_obj, "is_customer", None),
-                        "is_supplier": getattr(contact_obj, "is_supplier", None),
-                        "status": getattr(contact_obj, "contact_status", None),
-                    }
-                    if contact_obj
-                    else None
-                )
+                contact = getattr(note, "contact", None)
 
                 total = getattr(note, "total", None)
                 remaining_credit = getattr(note, "remaining_credit", None)
+
+                if contact:
+                    contact_id = getattr(contact, "contact_id", None)
+                    contact_name = getattr(contact, "name", None)
+                else:
+                    contact_id = contact_name = None
 
                 credit_notes.append(
                     {
@@ -498,33 +441,21 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
                         "date": _fmt_date(getattr(note, "date", None)),
                         "due_date": _fmt_date(getattr(note, "due_date", None)),
                         "reference": getattr(note, "reference", None),
-                        "subtotal": getattr(note, "sub_total", None),
-                        "total_tax": getattr(note, "total_tax", None),
-                        "total": remaining_credit if remaining_credit is not None else total,
+                        "total": remaining_credit if remaining_credit is not None else total, # TODO: Confirm this is correct
                         "amount_credited": getattr(note, "amount_credited", None),
                         "remaining_credit": remaining_credit,
-                        "contact": contact,
+                        "contact_id": contact_id,
+                        "contact_name": contact_name,
                     }
                 )
 
-            logger.debug(
-                "Fetched credit note page",
-                tenant_id=tenant_id,
-                contact_id=contact_id,
-                page=page,
-                returned=len(batch),
-            )
+            logger.debug("Fetched credit note page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(batch))
 
             if len(batch) < page_size:
                 break
             page += 1
 
-        logger.info(
-            "Fetched credit notes for contact",
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            returned=len(credit_notes),
-        )
+        logger.info("Fetched credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(credit_notes))
         return credit_notes
 
     except AccountingBadRequestException as e:
@@ -559,17 +490,11 @@ def get_payments_by_contact(contact_id: str) -> List[Dict[str, Any]]:
                 break
 
             for payment in batch:
-                invoice_obj = getattr(payment, "invoice", None)
-                invoice_id = getattr(invoice_obj, "invoice_id", None) if invoice_obj else None
-                contact_obj = getattr(invoice_obj, "contact", None) if invoice_obj else None
-                contact = (
-                    {
-                        "contact_id": getattr(contact_obj, "contact_id", None),
-                        "name": getattr(contact_obj, "name", None),
-                    }
-                    if contact_obj
-                    else None
-                )
+                if (invoice_obj := getattr(payment, "invoice", None)):
+                    invoice_id = getattr(invoice_obj, "invoice_id", None)
+                    contact = getattr(invoice_obj, "contact", None)
+                else:
+                    invoice_id = contact = None
 
                 payments.append(
                     {
@@ -579,28 +504,18 @@ def get_payments_by_contact(contact_id: str) -> List[Dict[str, Any]]:
                         "amount": getattr(payment, "amount", None),
                         "date": _fmt_date(getattr(payment, "date", None)),
                         "status": getattr(payment, "status", None),
-                        "contact": contact,
+                        "contact_id": getattr(contact, "contact_id", None),
+                        "contact_name": getattr(contact, "name", None),
                     }
                 )
 
-            logger.debug(
-                "Fetched payment page",
-                tenant_id=tenant_id,
-                contact_id=contact_id,
-                page=page,
-                returned=len(batch),
-            )
+            logger.debug("Fetched payment page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(batch))
 
             if len(batch) < page_size:
                 break
             page += 1
 
-        logger.info(
-            "Fetched payments for contact",
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            returned=len(payments),
-        )
+        logger.info("Fetched payments for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(payments))
         return payments
 
     except AccountingBadRequestException as e:
