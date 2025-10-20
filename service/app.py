@@ -10,7 +10,6 @@ import requests
 from flask import (
     Flask,
     abort,
-    jsonify,
     redirect,
     render_template,
     request,
@@ -33,7 +32,6 @@ from utils import (
     fetch_json_statement,
     get_completed_statements,
     get_contacts,
-    get_contact_sync_status_for_current_tenant,
     get_credit_notes_by_contact,
     get_incomplete_statements,
     get_invoices_by_contact,
@@ -42,8 +40,6 @@ from utils import (
     get_statement_item_status_map,
     get_statement_record,
     is_allowed_pdf,
-    is_tenant_sync_initialized,
-    set_tenant_sync_initialized,
     mark_statement_completed,
     match_invoices_to_statement_items,
     prepare_display_mappings,
@@ -54,8 +50,6 @@ from utils import (
     set_all_statement_items_completed,
     set_statement_item_completed,
     textract_in_background,
-    trigger_contact_sync,
-    clear_contact_cache,
     upload_statement_to_s3,
     xero_token_required,
 )
@@ -98,46 +92,28 @@ def ignore_favicon():
 @route_handler_logging
 def view_contacts():
     """List tenant contacts; on POST, echo the selected contact ID to logs."""
-    sync_status = get_contact_sync_status_for_current_tenant()
     contacts_raw = get_contacts()
     contacts_list = sorted(
         contacts_raw,
         key=lambda c: (c.get("name") or "").casefold(),
     )
-    sync_status = get_contact_sync_status_for_current_tenant()
 
     if request.method == "POST":
-        contact_name = request.form.get("contact_name")
-        print("*"*88)
-        print(f"TenantID: {session.get('xero_tenant_id')}")
-        print("*"*88)
-        for c in contacts_list:
-            if c["name"] == contact_name:
-                print("*"*88)
-                print(f"{contact_name}, {c['contact_id']}")
-                print("*"*88)
+        contact_name = (request.form.get("contact_name") or "").strip()
+        if contact_name:
+            print("*" * 88)
+            print(f"TenantID: {session.get('xero_tenant_id')}")
+            print("*" * 88)
+            for contact in contacts_list:
+                if contact.get("name") == contact_name:
+                    print("*" * 88)
+                    print(f"{contact_name}, {contact.get('contact_id')}")
+                    print("*" * 88)
 
     return render_template(
         "contacts.html",
         contacts=contacts_list,
-        contact_sync_status=sync_status,
     )
-
-
-@app.route("/api/contact-sync-status")
-@xero_token_required
-def contact_sync_status_api():
-    tenant_id = session.get("xero_tenant_id")
-    status = get_contact_sync_status_for_current_tenant()
-    logger.info(
-        "Contact sync status polled",
-        tenant_id=tenant_id,
-        status=status.get("status"),
-        synced=status.get("synced_count"),
-        total=status.get("total_count"),
-        last_synced=status.get("last_synced_at"),
-    )
-    return jsonify(status)
 
 @app.route("/upload-statements", methods=["GET", "POST"])
 @xero_token_required
@@ -150,13 +126,11 @@ def upload_statements():
         session["tenant_error"] = "Please select a tenant before uploading statements."
         return redirect(url_for("index"))
 
-    sync_status = get_contact_sync_status_for_current_tenant()
     contacts_raw = get_contacts()
     contacts_list = sorted(
         contacts_raw,
         key=lambda c: (c.get("name") or "").casefold(),
     )
-    sync_status = get_contact_sync_status_for_current_tenant()
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     success_count: Optional[int] = None
     error_messages: List[str] = []
@@ -164,86 +138,79 @@ def upload_statements():
 
     uploads_ok = 0
     if request.method == "POST":
-        if sync_status.get("status") != "ready":
-            logger.info("Upload statements blocked; contacts still syncing", tenant_id=tenant_id)
-            error_messages.append("Contacts are synchronising. Please wait until the sync completes before uploading statements.")
+        files = [f for f in request.files.getlist("statements") if f and f.filename]
+        names = request.form.getlist("contact_names")
+        uploads_ok = 0
+        logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
+        if not files:
+            logger.info("Please add at least one statement (PDF).")
+        elif len(files) != len(names):
+            logger.info("Each statement must have a contact selected.")
         else:
-            files = [f for f in request.files.getlist("statements") if f and f.filename]
-            names = request.form.getlist("contact_names")
-            uploads_ok = 0
-            logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
-            if not files:
-                logger.info("Please add at least one statement (PDF).")
-            elif len(files) != len(names):
-                logger.info("Each statement must have a contact selected.")
-            else:
-                for f, contact in zip(files, names):
-                    file_bytes = getattr(f, "content_length", None)
-                    if not contact.strip():
-                        logger.info("Missing contact", statement_filename=f.filename)
-                        continue
-                    if not is_allowed_pdf(f.filename, f.mimetype):
-                        logger.info("Rejected non-PDF upload", statement_filename=f.filename)
-                        continue
+            for f, contact in zip(files, names):
+                file_bytes = getattr(f, "content_length", None)
+                if not contact.strip():
+                    logger.info("Missing contact", statement_filename=f.filename)
+                    continue
+                if not is_allowed_pdf(f.filename, f.mimetype):
+                    logger.info("Rejected non-PDF upload", statement_filename=f.filename)
+                    continue
 
-                    contact_name = contact.strip()
-                    contact_id: Optional[str] = contact_lookup.get(contact_name)
-                    if not contact_id:
-                        logger.warning("Upload blocked; contact not found", tenant_id=tenant_id, contact_name=contact_name, statement_filename=f.filename)
-                        error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")
-                        continue
+                contact_name = contact.strip()
+                contact_id: Optional[str] = contact_lookup.get(contact_name)
+                if not contact_id:
+                    logger.warning("Upload blocked; contact not found", tenant_id=tenant_id, contact_name=contact_name, statement_filename=f.filename)
+                    error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")
+                    continue
 
-                    try:
-                        get_contact_config(tenant_id, contact_id)
-                    except KeyError:
-                        logger.exception("Upload blocked; contact config missing", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=f.filename)
-                        error_messages.append(f"Contact '{contact_name}' does not have a statement config yet. Please configure it before uploading.")
-                        continue
-                    except Exception as exc:
-                        logger.exception("Upload blocked; config lookup failed", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=f.filename, error=exc)
-                        error_messages.append(f"Could not load the config for '{contact_name}'. Please try again later.")
-                        continue
+                try:
+                    get_contact_config(tenant_id, contact_id)
+                except KeyError:
+                    logger.exception("Upload blocked; contact config missing", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=f.filename)
+                    error_messages.append(f"Contact '{contact_name}' does not have a statement config yet. Please configure it before uploading.")
+                    continue
+                except Exception as exc:
+                    logger.exception("Upload blocked; config lookup failed", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=f.filename, error=exc)
+                    error_messages.append(f"Could not load the config for '{contact_name}'. Please try again later.")
+                    continue
 
-                    statement_id = str(uuid.uuid4())
-                    logger.info("Preparing statement upload", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_id=statement_id, statement_filename=f.filename, bytes=file_bytes)
+                statement_id = str(uuid.uuid4())
+                logger.info("Preparing statement upload", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_id=statement_id, statement_filename=f.filename, bytes=file_bytes)
 
-                    entry = {
-                        "statement_id": statement_id,
-                        "statement_name": f.filename,
-                        "contact_name": contact_name,
-                        "contact_id": contact_id,
-                    }
+                entry = {
+                    "statement_id": statement_id,
+                    "statement_name": f.filename,
+                    "contact_name": contact_name,
+                    "contact_id": contact_id,
+                }
 
-                    # Upload pdf statement to S3
-                    pdf_statement_key = f"{tenant_id}/statements/{statement_id}.pdf"
-                    upload_statement_to_s3(fs_like=f, key=pdf_statement_key)
-                    logger.info("Uploaded statement PDF", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, s3_key=pdf_statement_key)
+                # Upload pdf statement to S3
+                pdf_statement_key = f"{tenant_id}/statements/{statement_id}.pdf"
+                upload_statement_to_s3(fs_like=f, key=pdf_statement_key)
+                logger.info("Uploaded statement PDF", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, s3_key=pdf_statement_key)
 
-                    # Upload statement to ddb
-                    add_statement_to_table(tenant_id, entry)
-                    logger.info("Registered statement metadata", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, table_entry=entry)
+                # Upload statement to ddb
+                add_statement_to_table(tenant_id, entry)
+                logger.info("Registered statement metadata", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, table_entry=entry)
 
-                    logger.info("Statement submitted", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id)
+                logger.info("Statement submitted", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id)
 
-                    # Kick off background textraction so it's ready by the time the user views it
-                    json_statement_key = f"{tenant_id}/statements/{statement_id}.json"
-                    _executor.submit(textract_in_background, tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
-                    logger.info("Queued Textract background job", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
+                # Kick off background textraction so it's ready by the time the user views it
+                json_statement_key = f"{tenant_id}/statements/{statement_id}.json"
+                _executor.submit(textract_in_background, tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
+                logger.info("Queued Textract background job", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
 
-                    uploads_ok += 1
+                uploads_ok += 1
 
-            if uploads_ok:
-                success_count = uploads_ok
+        if uploads_ok:
+            success_count = uploads_ok
         logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=len(error_messages))
 
-    contacts_ready = sync_status.get("status") == "ready"
     return render_template(
         "upload_statements.html",
         contacts=contacts_list,
         success_count=success_count,
         error_messages=error_messages,
-        contact_sync_status=sync_status,
-        contacts_ready=contacts_ready,
     )
 
 @app.route("/statements")
@@ -566,16 +533,6 @@ def index():
     message = session.pop("tenant_message", None)
     error = session.pop("tenant_error", None)
 
-    contact_sync_status: Dict[str, Any] = {}
-    if active_tenant_id:
-        contact_sync_status = get_contact_sync_status_for_current_tenant()
-        if not is_tenant_sync_initialized(active_tenant_id):
-            if contact_sync_status.get("status") == "ready":
-                set_tenant_sync_initialized(active_tenant_id, True)
-            else:
-                trigger_contact_sync(mark_initialized=True, tenant_id=active_tenant_id)
-                contact_sync_status = get_contact_sync_status_for_current_tenant()
-
     active_tenant = next((t for t in tenants if t.get("tenantId") == active_tenant_id), None)
     logger.info("Rendering index", active_tenant_id=active_tenant_id, tenants=len(tenants), has_message=bool(message), has_error=bool(error), authenticated=bool(session.get("access_token")))
 
@@ -587,7 +544,6 @@ def index():
         message=message,
         error=error,
         is_authenticated=bool(session.get("access_token")),
-        contact_sync_status=contact_sync_status,
     )
 
 
@@ -602,19 +558,7 @@ def select_tenant():
     if tenant_id and any(t.get("tenantId") == tenant_id for t in tenants):
         _set_active_tenant(tenant_id)
         tenant_name = session.get("xero_tenant_name") or tenant_id
-        status = get_contact_sync_status_for_current_tenant()
-        if not is_tenant_sync_initialized(tenant_id):
-            if status.get("status") == "ready":
-                set_tenant_sync_initialized(tenant_id, True)
-            else:
-                trigger_contact_sync(mark_initialized=True, tenant_id=tenant_id)
-                status = get_contact_sync_status_for_current_tenant()
-        if status.get("status") == "ready":
-            session["tenant_message"] = f"Switched to tenant: {tenant_name}."
-        else:
-            resources = status.get("resources", {}) if isinstance(status, dict) else {}
-            waiting = ", ".join(sorted(resources.keys())) if resources else "tenant data"
-            session["tenant_message"] = f"Switched to tenant: {tenant_name}. Synchronising {waiting}..."
+        session["tenant_message"] = f"Switched to tenant: {tenant_name}."
         logger.info("Tenant switched", tenant_id=tenant_id, tenant_name=tenant_name)
     else:
         session["tenant_error"] = "Unable to select tenant. Please try again."
@@ -632,9 +576,8 @@ def sync_tenant():
         session["tenant_message"] = "Please select a tenant before synchronising."
         return redirect(url_for("index"))
 
-    trigger_contact_sync(force_full=True, mark_initialized=True, tenant_id=tenant_id)
-    session["tenant_message"] = "Tenant data synchronisation has started."
-    logger.info("Manual tenant sync requested", tenant_id=tenant_id)
+    session["tenant_message"] = "Tenant data is refreshed on demand; no manual sync is required."
+    logger.info("Manual tenant sync requested (noop)", tenant_id=tenant_id)
     return redirect(url_for("index"))
 
 
@@ -673,17 +616,10 @@ def disconnect_tenant():
     # Remove tenant locally regardless (in case it was already disconnected)
     updated = [t for t in tenants if t.get("tenantId") != tenant_id]
     session["xero_tenants"] = updated
-    clear_contact_cache(tenant_id)
 
     if session.get("xero_tenant_id") == tenant_id:
         next_tenant_id = updated[0]["tenantId"] if updated else None
         _set_active_tenant(next_tenant_id)
-        if next_tenant_id and not is_tenant_sync_initialized(next_tenant_id):
-            status = get_contact_sync_status_for_current_tenant()
-            if status.get("status") == "ready":
-                set_tenant_sync_initialized(next_tenant_id, True)
-            else:
-                trigger_contact_sync(mark_initialized=True, tenant_id=next_tenant_id)
 
     session["tenant_message"] = "Tenant disconnected."
     logger.info("Tenant disconnected", tenant_id=tenant_id, remaining=len(updated))
@@ -700,21 +636,16 @@ def configs():
         session["tenant_error"] = "Please select a tenant before configuring mappings."
         return redirect(url_for("index"))
 
-    # List contacts for dropdown
-    sync_status = get_contact_sync_status_for_current_tenant()
     contacts_raw = get_contacts()
     contacts_list = sorted(
         contacts_raw,
         key=lambda c: (c.get("name") or "").casefold(),
     )
-    sync_status = get_contact_sync_status_for_current_tenant()
-    contacts_ready = sync_status.get("status") == "ready"
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     logger.info(
         "Rendering configs",
         tenant_id=tenant_id,
         contacts=len(contacts_list),
-        contacts_sync_status=sync_status.get("status"),
     )
 
 
@@ -769,79 +700,76 @@ def configs():
         return rows
 
     if request.method == "POST":
-        if not contacts_ready:
-            error = "Contacts are still synchronising. Please wait before editing configurations."
-        else:
-            action = request.form.get("action")
-            if action == "load":
-                # Load existing config for the chosen contact name
-                selected_contact_name = (request.form.get("contact_name") or "").strip()
-                selected_contact_id = contact_lookup.get(selected_contact_name)
-                logger.info("Config load submitted", tenant_id=tenant_id, contact_name=selected_contact_name, contact_id=selected_contact_id)
-                if not selected_contact_id:
-                    error = "Please select a valid contact."
-                    logger.info("Config load failed", tenant_id=tenant_id, contact_name=selected_contact_name)
-                else:
-                    try:
-                        cfg = get_contact_config(tenant_id, selected_contact_id)
-                        # Build rows including canonical fields; do not error if keys are missing
-                        mapping_rows = _build_rows(cfg)
-                        logger.info("Config loaded", tenant_id=tenant_id, contact_id=selected_contact_id, keys=len(cfg) if isinstance(cfg, dict) else 0)
-                    except KeyError:
-                        # No existing config: show canonical fields with empty mapping values
-                        mapping_rows = _build_rows({})
-                        message = "No existing config found. You can create one below."
-                        logger.info("Config not found", tenant_id=tenant_id, contact_id=selected_contact_id)
-                    except Exception as e:
-                        error = f"Failed to load config: {e}"
-                        logger.info("Config load error", tenant_id=tenant_id, contact_id=selected_contact_id, error=e)
-
-            elif action == "save_map":
-                # Save edited mapping
-                selected_contact_id = request.form.get("contact_id")
-                selected_contact_name = request.form.get("contact_name")
-                logger.info("Config save submitted", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name)
+        action = request.form.get("action")
+        if action == "load":
+            # Load existing config for the chosen contact name
+            selected_contact_name = (request.form.get("contact_name") or "").strip()
+            selected_contact_id = contact_lookup.get(selected_contact_name)
+            logger.info("Config load submitted", tenant_id=tenant_id, contact_name=selected_contact_name, contact_id=selected_contact_id)
+            if not selected_contact_id:
+                error = "Please select a valid contact."
+                logger.info("Config load failed", tenant_id=tenant_id, contact_name=selected_contact_name)
+            else:
                 try:
-                    try:
-                        existing = get_contact_config(tenant_id, selected_contact_id)
-                    except KeyError:
-                        existing = {}
-                    # Determine which fields were displayed/edited
-                    posted_fields = [f for f in request.form.getlist("fields[]") if f]
-
-                    # Preserve any root keys not shown in the mapping editor.
-                    # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
-                    preserved = {
-                        k: v
-                        for k, v in existing.items()
-                        if k not in posted_fields + ["statement_items"] and k not in {"reference", "item_type"}
-                    }
-
-                    # Rebuild mapping from form
-                    new_map: Dict[str, Any] = {}
-                    for f in posted_fields:
-                        if f == "total":
-                            total_vals = [v.strip() for v in request.form.getlist("map[total][]") if v.strip()]
-                            new_map["total"] = total_vals
-                        else:
-                            val = request.form.get(f"map[{f}]")
-                            new_map[f] = (val or "").strip()
-                    number_value = (new_map.get("number") or "").strip()
-                    if not number_value:
-                        error = "The 'Number' field is mandatory. Please map the statement column that contains invoice numbers."
-                        message = None
-                        combined = {**preserved, **new_map}
-                        mapping_rows = _build_rows(combined)
-                    else:
-                        # Merge and save (root-level only; no nested 'statement_items')
-                        to_save = {**preserved, **new_map}
-                        set_contact_config(tenant_id, selected_contact_id, to_save)
-                        logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name, config=to_save)
-                        message = "Config updated successfully."
-                        mapping_rows = _build_rows(to_save)
+                    cfg = get_contact_config(tenant_id, selected_contact_id)
+                    # Build rows including canonical fields; do not error if keys are missing
+                    mapping_rows = _build_rows(cfg)
+                    logger.info("Config loaded", tenant_id=tenant_id, contact_id=selected_contact_id, keys=len(cfg) if isinstance(cfg, dict) else 0)
+                except KeyError:
+                    # No existing config: show canonical fields with empty mapping values
+                    mapping_rows = _build_rows({})
+                    message = "No existing config found. You can create one below."
+                    logger.info("Config not found", tenant_id=tenant_id, contact_id=selected_contact_id)
                 except Exception as e:
-                    error = f"Failed to save config: {e}"
-                    logger.info("Config save failed", tenant_id=tenant_id, contact_id=selected_contact_id, error=e)
+                    error = f"Failed to load config: {e}"
+                    logger.info("Config load error", tenant_id=tenant_id, contact_id=selected_contact_id, error=e)
+
+        elif action == "save_map":
+            # Save edited mapping
+            selected_contact_id = request.form.get("contact_id")
+            selected_contact_name = request.form.get("contact_name")
+            logger.info("Config save submitted", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name)
+            try:
+                try:
+                    existing = get_contact_config(tenant_id, selected_contact_id)
+                except KeyError:
+                    existing = {}
+                # Determine which fields were displayed/edited
+                posted_fields = [f for f in request.form.getlist("fields[]") if f]
+
+                # Preserve any root keys not shown in the mapping editor.
+                # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
+                preserved = {
+                    k: v
+                    for k, v in existing.items()
+                    if k not in posted_fields + ["statement_items"] and k not in {"reference", "item_type"}
+                }
+
+                # Rebuild mapping from form
+                new_map: Dict[str, Any] = {}
+                for f in posted_fields:
+                    if f == "total":
+                        total_vals = [v.strip() for v in request.form.getlist("map[total][]") if v.strip()]
+                        new_map["total"] = total_vals
+                    else:
+                        val = request.form.get(f"map[{f}]")
+                        new_map[f] = (val or "").strip()
+                number_value = (new_map.get("number") or "").strip()
+                if not number_value:
+                    error = "The 'Number' field is mandatory. Please map the statement column that contains invoice numbers."
+                    message = None
+                    combined = {**preserved, **new_map}
+                    mapping_rows = _build_rows(combined)
+                else:
+                    # Merge and save (root-level only; no nested 'statement_items')
+                    to_save = {**preserved, **new_map}
+                    set_contact_config(tenant_id, selected_contact_id, to_save)
+                    logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name, config=to_save)
+                    message = "Config updated successfully."
+                    mapping_rows = _build_rows(to_save)
+            except Exception as e:
+                error = f"Failed to save config: {e}"
+                logger.info("Config save failed", tenant_id=tenant_id, contact_id=selected_contact_id, error=e)
 
     example_rows = _build_rows(EXAMPLE_CONFIG)
 
@@ -855,8 +783,6 @@ def configs():
         message=message,
         error=error,
         field_descriptions=FIELD_DESCRIPTIONS,
-        contact_sync_status=sync_status,
-        contacts_ready=contacts_ready,
     )
 
 @app.route("/login")
@@ -961,13 +887,6 @@ def callback():
     else:
         _set_active_tenant(None)
         new_active_id = None
-
-    if new_active_id and not is_tenant_sync_initialized(new_active_id):
-        status = get_contact_sync_status_for_current_tenant()
-        if status.get("status") == "ready":
-            set_tenant_sync_initialized(new_active_id, True)
-        else:
-            trigger_contact_sync(mark_initialized=True, tenant_id=new_active_id)
 
     # Clear state after successful exchange
     session.pop("oauth_state", None)

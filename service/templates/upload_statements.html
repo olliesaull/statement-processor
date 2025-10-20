@@ -9,17 +9,19 @@
       Uploaded {{ success_count }} statement{% if success_count != 1 %}s{% endif %} successfully.
     </div>
   {% endif %}
-  {% set sync = contact_sync_status or {} %}
-  {% if not contacts_ready %}
-    <div class="alert alert-info w-100 d-flex align-items-center gap-2" style="max-width: 720px;" role="alert">
-      <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-      <span>Synchronising tenant data. Uploads will be enabled once this completes.</span>
+  {% if error_messages %}
+    <div class="alert alert-danger w-100" style="max-width: 720px;">
+      <ul class="mb-0">
+        {% for message in error_messages %}
+          <li>{{ message }}</li>
+        {% endfor %}
+      </ul>
     </div>
   {% endif %}
 
   <form method="POST" action="{{ url_for('upload_statements') }}" enctype="multipart/form-data" class="mt-3"
     style="max-width: 720px; width: 100%;">
-    <fieldset {% if not contacts_ready %}disabled{% endif %}>
+    <fieldset>
       <table class="table table-sm align-middle">
         <thead>
           <tr>
@@ -57,9 +59,6 @@
         <button type="submit" class="btn btn-primary">Upload</button>
       </div>
     </fieldset>
-    {% if not contacts_ready %}
-      <p class="text-muted small mt-2">We will enable uploads as soon as synchronisation finishes.</p>
-    {% endif %}
   </form>
 </div>
 
@@ -108,31 +107,4 @@
     rows.addEventListener('click', onTableClick);
   }
 </script>
-{% if sync.status != 'ready' %}
-<script>
-  (function pollContactSync() {
-    const retry = (delayMs) => setTimeout(pollContactSync, delayMs);
-    fetch("{{ url_for('contact_sync_status_api') }}", { headers: { 'Accept': 'application/json' } })
-      .then((resp) => resp.ok ? resp.json() : null)
-      .then((data) => {
-        if (!data) {
-          console.warn('Tenant data sync poll returned no data');
-          return retry(10000);
-        }
-        if (data.status === 'ready') {
-          window.location.reload();
-          return;
-        }
-        if (data.status === 'error') {
-          console.warn('Tenant data sync still reporting error');
-        }
-        retry(5000);
-      })
-      .catch((err) => {
-        console.error('Tenant data sync poll failed', err);
-        retry(10000);
-      });
-  })();
-</script>
-{% endif %}
 {% endblock %}

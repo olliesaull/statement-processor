@@ -82,17 +82,13 @@
   {% if message %}
   <div class="alert alert-success" role="alert">{{ message }}</div>
   {% endif %}
-  {% set sync = contact_sync_status or {} %}
-  {% if not contacts_ready %}
-  <div class="alert alert-info d-flex align-items-center gap-2" role="alert">
-    <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-    <span>Synchronising tenant data. Editing will be available shortly.</span>
-  </div>
+  {% if error %}
+  <div class="alert alert-danger" role="alert">{{ error }}</div>
   {% endif %}
 
   <!-- Contact selector -->
   <form method="POST" action="{{ url_for('configs') }}" class="mb-4">
-    <fieldset class="row gy-2 gx-3 align-items-center" {% if not contacts_ready %}disabled{% endif %}>
+    <fieldset class="row gy-2 gx-3 align-items-center">
       <input type="hidden" name="action" value="load">
       <div class="col-auto">
         <label class="visually-hidden" for="contactInput">Contact</label>
@@ -113,7 +109,7 @@
 
   {% if selected_contact_id %}
   <form method="POST" action="{{ url_for('configs') }}">
-    <fieldset {% if not contacts_ready %}disabled{% endif %}>
+    <fieldset>
     <input type="hidden" name="action" value="save_map">
     <input type="hidden" name="contact_id" value="{{ selected_contact_id }}">
     <input type="hidden" name="contact_name" value="{{ selected_contact_name }}">
@@ -189,9 +185,6 @@
 
     <button type="submit" class="btn btn-success mb-5">Save</button>
     </fieldset>
-    {% if not contacts_ready %}
-    <p class="text-muted small">Saving is disabled until the contact sync completes.</p>
-    {% endif %}
   </form>
   {% endif %}
 
@@ -210,31 +203,4 @@ function addInput(field) {
   container.appendChild(wrapper);
 }
 </script>
-{% if sync.status != 'ready' %}
-<script>
-  (function pollContactSync() {
-    const retry = (delayMs) => setTimeout(pollContactSync, delayMs);
-    fetch("{{ url_for('contact_sync_status_api') }}", { headers: { 'Accept': 'application/json' } })
-      .then((resp) => resp.ok ? resp.json() : null)
-      .then((data) => {
-        if (!data) {
-          console.warn('Contact sync poll returned no data');
-          return retry(10000);
-        }
-        if (data.status === 'ready') {
-          window.location.reload();
-          return;
-        }
-        if (data.status === 'error') {
-          console.warn('Contact sync still reporting error');
-        }
-        retry(5000);
-      })
-      .catch((err) => {
-        console.error('Contact sync poll failed', err);
-        retry(10000);
-      });
-  })();
-</script>
-{% endif %}
 {% endblock %}

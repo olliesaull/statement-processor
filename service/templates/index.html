@@ -9,50 +9,9 @@
   {% if message %}
     <div class="alert alert-success" role="alert">{{ message }}</div>
   {% endif %}
-  {% if is_authenticated and active_tenant and contact_sync_status %}
-    {% set sync = contact_sync_status %}
-    {% if sync.status != 'ready' %}
-      <div class="alert alert-info" role="alert">
-        <div class="d-flex align-items-center gap-2">
-          <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-          <span>Synchronising tenant data. We'll refresh automatically once everything is ready.</span>
-        </div>
-        <ul class="mb-0 ps-3 mt-2 small">
-          {% for name, state in sync.resources.items() %}
-            <li>{{ name|replace('_', ' ')|title }}: {{ state.status }}{% if state.synced_count %} ({{ state.synced_count }} items){% endif %}</li>
-          {% endfor %}
-        </ul>
-      </div>
-    {% endif %}
-    {% if sync.status != 'ready' %}
-    <script>
-      (function pollContactSync() {
-        const retry = (delayMs) => setTimeout(pollContactSync, delayMs);
-        fetch("{{ url_for('contact_sync_status_api') }}", { headers: { 'Accept': 'application/json' } })
-          .then((resp) => resp.ok ? resp.json() : null)
-          .then((data) => {
-            if (!data) {
-              console.warn('Tenant data sync poll returned no data');
-              return retry(10000);
-            }
-            if (data.status === 'ready') {
-              window.location.reload();
-              return;
-            }
-            if (data.status === 'error') {
-              console.warn('Tenant data sync still reporting error');
-            }
-            retry(5000);
-          })
-          .catch((err) => {
-            console.error('Tenant data sync poll failed', err);
-            retry(10000);
-          });
-      })();
-    </script>
-    {% endif %}
+  {% if error %}
+    <div class="alert alert-danger" role="alert">{{ error }}</div>
   {% endif %}
-
   {% if not is_authenticated %}
     <p class="mb-3">Login with Xero to start processing statements.</p>
     <a class="btn btn-primary" href="{{ url_for('login') }}">Login with Xero</a>
@@ -81,34 +40,14 @@
                 <td>{{ tenant.tenantName or tenant.tenantId }}</td>
                 <td class="text-center">
                   {% if is_active %}
-                    <div class="d-flex flex-column align-items-center gap-1">
-                      <span class="badge bg-success">Current Tenant</span>
-                      {% set sync = contact_sync_status %}
-                      {% if sync %}
-                        <ul class="list-unstyled mb-0 small text-start">
-                          {% for name, state in sync.resources.items() %}
-                            {% set cls = 'text-muted' %}
-                            {% if state.status == 'error' %}
-                              {% set cls = 'text-warning' %}
-                            {% elif state.status != 'ready' %}
-                              {% set cls = 'text-info' %}
-                            {% endif %}
-                            <li class="{{ cls }}">{{ name|replace('_', ' ')|title }}: {{ state.status }}</li>
-                          {% endfor %}
-                        </ul>
-                      {% endif %}
-                    </div>
+                    <span class="badge bg-success">Current Tenant</span>
                   {% else %}
                     <span class="text-muted">Not in use</span>
                   {% endif %}
                 </td>
                 <td class="text-center">
                   <div class="d-flex justify-content-center gap-2">
-                    {% if is_active %}
-                      <form method="post" action="{{ url_for('sync_tenant') }}">
-                        <button class="btn btn-outline-primary btn-sm" type="submit">Sync Tenant Data</button>
-                      </form>
-                    {% else %}
+                    {% if not is_active %}
                       <form method="post" action="{{ url_for('select_tenant') }}">
                         <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
                         <button class="btn btn-outline-primary btn-sm" type="submit">Switch to Tenant</button>

@@ -4,19 +4,11 @@
 {% block content %}
 <div class="d-flex flex-column align-items-center" style="margin-top: 25vh;">
     <h1>Contacts</h1>
-    {% set sync = contact_sync_status or {} %}
-    {% set contacts_ready = sync.status == 'ready' %}
-    {% if not contacts_ready %}
-      <div class="alert alert-info d-flex align-items-center gap-2 mt-3" role="alert" style="max-width: 340px;">
-        <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-        <span>Synchronising tenant data. We'll enable this view once syncing completes.</span>
-      </div>
-    {% endif %}
 
     <form method="POST" action="{{ url_for('view_contacts') }}" class="d-flex flex-column align-items-center">
         <!-- Text input with datalist for autocomplete -->
         <input type="text" name="contact_name" class="form-control mt-3" style="max-width: 300px;"
-            placeholder="Enter contact name" list="contacts-list" autocomplete="off" {% if not contacts_ready %}disabled{% endif %}>
+            placeholder="Enter contact name" list="contacts-list" autocomplete="off">
 
         <!-- The suggestions -->
         <datalist id="contacts-list">
@@ -25,34 +17,7 @@
             {% endfor %}
         </datalist>
 
-        <button type="submit" class="btn btn-primary mt-3" {% if not contacts_ready %}disabled{% endif %}>Submit</button>
+        <button type="submit" class="btn btn-primary mt-3">Submit</button>
     </form>
 </div>
-{% if sync.status != 'ready' %}
-<script>
-  (function pollContactSync() {
-    const retry = (delayMs) => setTimeout(pollContactSync, delayMs);
-    fetch("{{ url_for('contact_sync_status_api') }}", { headers: { 'Accept': 'application/json' } })
-      .then((resp) => resp.ok ? resp.json() : null)
-      .then((data) => {
-        if (!data) {
-          console.warn('Tenant data sync poll returned no data');
-          return retry(10000);
-        }
-        if (data.status === 'ready') {
-          window.location.reload();
-          return;
-        }
-        if (data.status === 'error') {
-          console.warn('Tenant data sync still reporting error');
-        }
-        retry(5000);
-      })
-      .catch((err) => {
-        console.error('Tenant data sync poll failed', err);
-        retry(10000);
-      });
-  })();
-</script>
-{% endif %}
 {% endblock %}
