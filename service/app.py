@@ -19,24 +19,19 @@ from flask import (
 from openpyxl import Workbook
 
 from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger
-from core.contact_config_metadata import FIELD_DESCRIPTIONS, EXAMPLE_CONFIG
+from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
-from core.models import StatementItem
 from core.item_classification import guess_statement_item_type
+from core.models import StatementItem
 from utils import (
     StatementJSONNotFoundError,
     add_statement_to_table,
-    api_client,
     build_right_rows,
     build_row_comparisons,
     fetch_json_statement,
     get_completed_statements,
-    get_contacts,
-    get_credit_notes_by_contact,
-    get_incomplete_statements,
-    get_invoices_by_contact,
-    get_payments_by_contact,
     get_date_format_from_config,
+    get_incomplete_statements,
     get_statement_item_status_map,
     get_statement_record,
     is_allowed_pdf,
@@ -45,13 +40,20 @@ from utils import (
     prepare_display_mappings,
     require_tenant_data_ready,
     route_handler_logging,
-    save_xero_oauth2_token,
     scope_str,
     set_all_statement_items_completed,
     set_statement_item_completed,
     textract_in_background,
     upload_statement_to_s3,
     xero_token_required,
+)
+from xero_repository import (
+    api_client,
+    get_contacts,
+    get_credit_notes_by_contact,
+    get_invoices_by_contact,
+    get_payments_by_contact,
+    save_xero_oauth2_token,
 )
 
 app = Flask(__name__)
@@ -93,16 +95,14 @@ def ignore_favicon():
 def view_contacts():
     """List tenant contacts; on POST, echo the selected contact ID to logs."""
     contacts_raw = get_contacts()
-    contacts_list = sorted(
-        contacts_raw,
-        key=lambda c: (c.get("name") or "").casefold(),
-    )
+    contacts_list = sorted(contacts_raw, key=lambda c: (c.get("name") or "").casefold())
+    tenant_id = session.get('xero_tenant_id')
 
     if request.method == "POST":
         contact_name = (request.form.get("contact_name") or "").strip()
         if contact_name:
             print("*" * 88)
-            print(f"TenantID: {session.get('xero_tenant_id')}")
+            print(f"TenantID: {tenant_id}")
             print("*" * 88)
             for contact in contacts_list:
                 if contact.get("name") == contact_name:
@@ -110,10 +110,10 @@ def view_contacts():
                     print(f"{contact_name}, {contact.get('contact_id')}")
                     print("*" * 88)
 
-    return render_template(
-        "contacts.html",
-        contacts=contacts_list,
-    )
+    # from sync import sync_contacts
+    # sync_contacts(tenant_id)
+
+    return render_template("contacts.html", contacts=contacts_list)
 
 @app.route("/upload-statements", methods=["GET", "POST"])
 @xero_token_required

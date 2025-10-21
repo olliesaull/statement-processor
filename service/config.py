@@ -17,6 +17,7 @@ STAGE = os.getenv("STAGE")
 
 TENANT_CONTACTS_CONFIG_TABLE_NAME=os.getenv("TENANT_CONTACTS_CONFIG_TABLE_NAME")
 TENANT_STATEMENTS_TABLE_NAME=os.getenv("TENANT_STATEMENTS_TABLE_NAME")
+TENANT_DATA_TABLE_NAME=os.getenv("TENANT_DATA_TABLE_NAME")
 
 if STAGE == "dev":
     session = boto3.session.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
@@ -28,6 +29,7 @@ s3_client = session.client("s3")
 ddb = session.resource("dynamodb")
 tenant_statements_table = ddb.Table(TENANT_STATEMENTS_TABLE_NAME)
 tenant_contacts_config_table = ddb.Table(TENANT_CONTACTS_CONFIG_TABLE_NAME)
+tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME)
 
 logger: Logger = Logger()
 
