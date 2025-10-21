@@ -4,44 +4,23 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from flask import session
-from xero_python.accounting import AccountingApi
-from xero_python.api_client import ApiClient  # type: ignore
-from xero_python.api_client.configuration import Configuration  # type: ignore
-from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 from xero_python.exceptions import AccountingBadRequestException
+from xero_python.accounting import AccountingApi
 
-from config import CLIENT_ID, CLIENT_SECRET, logger
-from utils import fmt_date, fmt_invoice_data, raise_for_unauthorized
+from config import logger
+from utils import fmt_date, fmt_invoice_data, raise_for_unauthorized, get_xero_api_client
 
 PAGE_SIZE = 100  # Xero max
 
-def get_xero_oauth2_token() -> Optional[dict]:
-    """Return the token dict the SDK expects, or None if not set."""
-    return session.get("xero_oauth2_token")
 
-def save_xero_oauth2_token(token: dict) -> None:
-    """Persist the whole token dict in the session (or your DB)."""
-    session["xero_oauth2_token"] = token
-
-api_client = ApiClient(
-    Configuration(
-        # debug=app.config["DEBUG"],
-        oauth2_token=OAuth2Token(
-            client_id=CLIENT_ID, client_secret=CLIENT_SECRET
-        ),
-    ),
-    pool_threads=1,
-    oauth2_token_getter=get_xero_oauth2_token,
-    oauth2_token_saver=save_xero_oauth2_token,
-)
-api = AccountingApi(api_client)
-
-def get_contacts(modified_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
+def get_contacts(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
     """Fetch contacts directly from Xero ordered by name."""
-    tenant_id = session.get("xero_tenant_id")
+    tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id:
         logger.info("Skipping contact lookup; tenant not selected")
         return []
+
+    client = api or get_xero_api_client()
 
     page = 1
     contacts: List[Dict[str, Any]] = []
@@ -51,7 +30,11 @@ def get_contacts(modified_since: Optional[datetime] = None) -> List[Dict[str, An
         logger.info("Fetching contacts", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
 
         while True:
-            result = api.get_contacts(xero_tenant_id=tenant_id, page=page, include_archived=False, page_size=PAGE_SIZE, if_modified_since=modified_since)
+            kwargs = {"xero_tenant_id": tenant_id, "page": page, "include_archived": False, "page_size": PAGE_SIZE}
+            if modified_since:
+                kwargs["if_modified_since"] = modified_since
+
+            result = client.get_contacts(**kwargs)
             batch = result.contacts or []
             if not batch:
                 break
@@ -100,7 +83,7 @@ def get_contacts(modified_since: Optional[datetime] = None) -> List[Dict[str, An
     return []
 
 
-def get_invoices(modified_since: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
+def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> Dict[str, Dict[str, Any]]:
     """Get all invoices from Xero, across all pages.
 
     Args:
@@ -111,7 +94,13 @@ def get_invoices(modified_since: Optional[datetime] = None) -> Dict[str, Dict[st
     Returns:
         Dict keyed by invoice number with normalized invoice records.
     """
-    tenant_id = session["xero_tenant_id"]
+
+    tenant_id = tenant_id or session.get("xero_tenant_id")
+    if not tenant_id:
+        logger.info("Skipping invoice lookup; tenant not selected")
+        return {}
+
+    client = api or get_xero_api_client()
 
     page = 1
     total_returned = 0
@@ -120,20 +109,19 @@ def get_invoices(modified_since: Optional[datetime] = None) -> Dict[str, Dict[st
     try:
         logger.info("Fetching all invoices (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
 
+        kwargs = {
+            "xero_tenant_id": tenant_id,
+            "order": "UpdatedDateUTC ASC",
+            "page_size": PAGE_SIZE,
+            "statuses": ["DRAFT", "SUBMITTED", "AUTHORISED", "PAID", "VOIDED"], # Excludes DELETED
+        }
+
+        if modified_since:
+            kwargs["if_modified_since"] = modified_since
+
         while True:
-            result = api.get_invoices(
-                tenant_id,
-                order="UpdatedDateUTC ASC",
-                page=page,
-                include_archived=False,
-                created_by_my_app=False,
-                unitdp=2,
-                summary_only=False,
-                page_size=PAGE_SIZE,
-                statuses=["DRAFT", "SUBMITTED", "AUTHORISED", "PAID", "VOIDED"], # Excludes DELETED
-                modified_since=modified_since,   # safe to pass None
-                types=["ACCREC", "ACCPAY"], # NOTE: Removing the one we don't want is more efficient
-            )
+            kwargs["page"] = page
+            result = client.get_invoices(**kwargs)
 
             invs = (result.invoices or [])
             batch_count = len(invs)
@@ -167,7 +155,7 @@ def get_invoices(modified_since: Optional[datetime] = None) -> Dict[str, Dict[st
         return {}
 
 
-def get_credit_notes(modified_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
+def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
     """
     Get all credit notes across all pages (no contact filter).
 
@@ -178,9 +166,11 @@ def get_credit_notes(modified_since: Optional[datetime] = None) -> List[Dict[str
     Returns:
         A list of credit note dicts (same shape as previous per-contact function).
     """
-    tenant_id = session.get("xero_tenant_id")
+    tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id:
         return []
+
+    client = api or get_xero_api_client()
 
     page = 1
     credit_notes: List[Dict[str, Any]] = []
@@ -188,15 +178,14 @@ def get_credit_notes(modified_since: Optional[datetime] = None) -> List[Dict[str
     try:
         logger.info("Fetching all credit notes (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
 
+        kwargs = {"xero_tenant_id": tenant_id, "order": "UpdatedDateUTC ASC", "page_size": PAGE_SIZE}
+
+        if modified_since:
+            kwargs["if_modified_since"] = modified_since
+
         while True:
-            result = api.get_credit_notes(
-                tenant_id,
-                order="UpdatedDateUTC ASC",
-                page=page,
-                unitdp=2,
-                page_size=PAGE_SIZE,
-                modified_since=modified_since,
-            )
+            kwargs["page"] = page
+            result = client.get_credit_notes(**kwargs)
             batch = result.credit_notes or []
             if not batch:
                 break
@@ -248,7 +237,7 @@ def get_credit_notes(modified_since: Optional[datetime] = None) -> List[Dict[str
     return []
 
 
-def get_payments(modified_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
+def get_payments(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
     """
     Get all payments across all pages (no contact filter).
 
@@ -260,9 +249,11 @@ def get_payments(modified_since: Optional[datetime] = None) -> List[Dict[str, An
     Returns:
         A list of payment dicts (same shape as previous per-contact function).
     """
-    tenant_id = session.get("xero_tenant_id")
+    tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id:
         return []
+
+    client = api or get_xero_api_client()
 
     page = 1
     payments: List[Dict[str, Any]] = []
@@ -270,14 +261,14 @@ def get_payments(modified_since: Optional[datetime] = None) -> List[Dict[str, An
     try:
         logger.info("Fetching all payments (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
 
+        kwargs = {"xero_tenant_id": tenant_id, "order": "UpdatedDateUTC ASC", "page_size": PAGE_SIZE}
+
+        if modified_since:
+            kwargs["if_modified_since"] = modified_since
+
         while True:
-            result = api.get_payments(
-                tenant_id,
-                order="UpdatedDateUTC ASC",
-                page=page,
-                page_size=PAGE_SIZE,
-                modified_since=modified_since,
-            )
+            kwargs["page"] = page
+            result = client.get_payments(**kwargs)
             batch = result.payments or []
             if not batch:
                 break
@@ -322,7 +313,7 @@ def get_payments(modified_since: Optional[datetime] = None) -> List[Dict[str, An
     return []
 
 
-def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
+def get_invoices_by_numbers(invoice_numbers: Iterable[Any], api: Optional[AccountingApi] = None) -> Dict[str, Dict[str, Any]]:
     """
     Fetch invoices for a list of invoice numbers.
     Returns a dict keyed by invoice number: { "INV-001": {...}, ... }
@@ -332,7 +323,12 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
     - Normalizes invoice numbers to strings and strips whitespace
     - If duplicates arrive from the API, the *last* one wins (simple + predictable)
     """
-    tenant_id = session["xero_tenant_id"]
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        logger.info("Skipping invoice number lookup; tenant not selected")
+        return {}
+
+    client = api or get_xero_api_client()
     if not invoice_numbers:
         return {}
 
@@ -357,7 +353,7 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
             total_requested += len(batch)
             while True:
                 # Exclude deleted invoices explicitly via Status filter
-                result = api.get_invoices(
+                result = client.get_invoices(
                     tenant_id,
                     invoice_numbers=batch,
                     order="InvoiceNumber ASC",
@@ -395,9 +391,14 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
         return {}
 
 
-def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
-    tenant_id = session["xero_tenant_id"]
+def get_invoices_by_contact(contact_id: str, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
+    tenant_id = session.get("xero_tenant_id")
     PAGE_SIZE = 100  # Xero cap is 100; fetch full pages to reduce calls
+    if not tenant_id:
+        logger.info("Skipping invoice lookup; tenant not selected", contact_id=contact_id)
+        return []
+
+    client = api or get_xero_api_client()
 
     try:
         logger.info("Fetching invoices for contact", tenant_id=tenant_id, contact_id=contact_id)
@@ -406,7 +407,7 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
         while True:
             # Restrict to the contact and exclude deleted invoices
-            result = api.get_invoices(
+            result = client.get_invoices(
                 tenant_id,
                 where=f'Contact.ContactID==Guid("{contact_id}") AND Status!="DELETED"',
                 order="InvoiceNumber ASC",
@@ -440,10 +441,12 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
         return []
 
 
-def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
+def get_credit_notes_by_contact(contact_id: str, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id or not contact_id:
         return []
+
+    client = api or get_xero_api_client()
 
     page = 1
     page_size = 100
@@ -451,7 +454,7 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
     try:
         while True:
-            result = api.get_credit_notes(
+            result = client.get_credit_notes(
                 tenant_id,
                 where=f'Contact.ContactID==Guid("{contact_id}")',
                 order="CreditNoteNumber ASC",
@@ -510,10 +513,12 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
     return []
 
 
-def get_payments_by_contact(contact_id: str) -> List[Dict[str, Any]]:
+def get_payments_by_contact(contact_id: str, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id or not contact_id:
         return []
+
+    client = api or get_xero_api_client()
 
     page = 1
     page_size = 100
@@ -521,7 +526,7 @@ def get_payments_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
     try:
         while True:
-            result = api.get_payments(
+            result = client.get_payments(
                 tenant_id,
                 where=f'Invoice.Contact.ContactID==Guid("{contact_id}")',
                 order="Date DESC",

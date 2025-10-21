@@ -17,8 +17,14 @@ from flask import (
 )
 from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import HTTPException
+from xero_python.accounting import AccountingApi
+from xero_python.api_client import ApiClient  # type: ignore
+from xero_python.api_client.configuration import Configuration  # type: ignore
+from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 
 from config import (
+    CLIENT_ID,
+    CLIENT_SECRET,
     S3_BUCKET_NAME,
     logger,
     s3_client,
@@ -36,6 +42,41 @@ SCOPES = [
     "offline_access", "openid", "profile", "email", "accounting.transactions", "accounting.reports.read", "accounting.journals.read",
     "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
 ]
+
+def get_xero_oauth2_token() -> Optional[dict]:
+    """Return the token dict the SDK expects, or None if not set."""
+    return session.get("xero_oauth2_token")
+
+def save_xero_oauth2_token(token: dict) -> None:
+    """Persist the whole token dict in the session (or your DB)."""
+    session["xero_oauth2_token"] = token
+
+
+def get_xero_api_client(oauth_token: Optional[dict] = None) -> AccountingApi:
+    """Create a thread-safe AccountingApi client, optionally seeded with a specific token."""
+    if oauth_token is None:
+        token_getter = get_xero_oauth2_token
+        token_saver = save_xero_oauth2_token
+    else:
+        def token_getter() -> Optional[dict]:
+            return oauth_token
+
+        def token_saver(new_token: dict) -> None:
+            oauth_token.update(new_token)
+
+    api_client = ApiClient(
+        Configuration(
+            oauth2_token=OAuth2Token(client_id=CLIENT_ID, client_secret=CLIENT_SECRET),
+        ),
+        pool_threads=1,
+        oauth2_token_getter=token_getter,
+        oauth2_token_saver=token_saver,
+    )
+
+    if oauth_token:
+        api_client.set_oauth2_token(oauth_token)
+
+    return AccountingApi(api_client)
 
 
 def _query_statements_by_completed(tenant_id: Optional[str], completed_value: str) -> List[Dict[str, Any]]:

@@ -23,7 +23,7 @@ from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
 from core.models import StatementItem
-from sync import sync_data
+from sync import check_sync_required, sync_data
 from utils import (
     StatementJSONNotFoundError,
     add_statement_to_table,
@@ -41,6 +41,7 @@ from utils import (
     prepare_display_mappings,
     require_tenant_data_ready,
     route_handler_logging,
+    save_xero_oauth2_token,
     scope_str,
     set_all_statement_items_completed,
     set_statement_item_completed,
@@ -49,12 +50,10 @@ from utils import (
     xero_token_required,
 )
 from xero_repository import (
-    api_client,
     get_contacts,
     get_credit_notes_by_contact,
     get_invoices_by_contact,
     get_payments_by_contact,
-    save_xero_oauth2_token,
 )
 
 app = Flask(__name__)
@@ -80,6 +79,12 @@ def _set_active_tenant(tenant_id: Optional[str]) -> None:
     if tenant_id and tenant_id in tenant_map:
         session["xero_tenant_id"] = tenant_id
         session["xero_tenant_name"] = tenant_map[tenant_id].get("tenantName")
+        if check_sync_required(tenant_id):
+            oauth_token = session.get("xero_oauth2_token")
+            if not oauth_token:
+                logger.warning("Skipping background sync; missing OAuth token", tenant_id=tenant_id)
+            else:
+                _executor.submit(sync_data, tenant_id, oauth_token)
     else:
         session.pop("xero_tenant_id", None)
         session.pop("xero_tenant_name", None)
@@ -846,7 +851,6 @@ def callback():
 
     tokens = token_res.json()
     save_xero_oauth2_token(tokens)
-    api_client.set_oauth2_token(tokens)
 
     session["access_token"] = tokens.get("access_token")
 
