@@ -23,6 +23,7 @@ from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
 from core.models import StatementItem
+from sync import sync_data
 from utils import (
     StatementJSONNotFoundError,
     add_statement_to_table,

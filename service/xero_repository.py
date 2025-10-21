@@ -36,7 +36,7 @@ api_client = ApiClient(
 )
 api = AccountingApi(api_client)
 
-def get_contacts() -> List[Dict[str, Any]]:
+def get_contacts(modified_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """Fetch contacts directly from Xero ordered by name."""
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
@@ -44,18 +44,14 @@ def get_contacts() -> List[Dict[str, Any]]:
         return []
 
     page = 1
-    page_size = 100
     contacts: List[Dict[str, Any]] = []
     seen_ids: set[str] = set()
 
     try:
+        logger.info("Fetching contacts", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
+
         while True:
-            result = api.get_contacts(
-                xero_tenant_id=tenant_id,
-                page=page,
-                include_archived=False,
-                page_size=page_size,
-            )
+            result = api.get_contacts(xero_tenant_id=tenant_id, page=page, include_archived=False, page_size=PAGE_SIZE, if_modified_since=modified_since)
             batch = result.contacts or []
             if not batch:
                 break
@@ -87,7 +83,7 @@ def get_contacts() -> List[Dict[str, Any]]:
 
             logger.debug("Fetched contact page", tenant_id=tenant_id, page=page, returned=len(batch))
 
-            if len(batch) < page_size:
+            if len(batch) < PAGE_SIZE:
                 break
             page += 1
 
@@ -104,7 +100,7 @@ def get_contacts() -> List[Dict[str, Any]]:
     return []
 
 
-def get_invoices(*, modified_since: Optional[datetime] = None, statuses: Optional[List[str]] = None, include_archived: bool = False) -> Dict[str, Dict[str, Any]]:
+def get_invoices(modified_since: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
     """Get all invoices from Xero, across all pages.
 
     Args:
@@ -121,30 +117,20 @@ def get_invoices(*, modified_since: Optional[datetime] = None, statuses: Optiona
     total_returned = 0
     by_number: Dict[str, Dict[str, Any]] = {}
 
-    # Default statuses (excludes DELETED)
-    statuses = statuses or ["DRAFT", "SUBMITTED", "AUTHORISED", "PAID", "VOIDED"]
-
     try:
-        logger.info(
-            "Fetching all invoices (paged)",
-            tenant_id=tenant_id,
-            page_size=PAGE_SIZE,
-            include_archived=include_archived,
-            modified_since=str(modified_since) if modified_since else None,
-            statuses=statuses,
-        )
+        logger.info("Fetching all invoices (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
 
         while True:
             result = api.get_invoices(
                 tenant_id,
                 order="UpdatedDateUTC ASC",
                 page=page,
-                include_archived=include_archived,
+                include_archived=False,
                 created_by_my_app=False,
                 unitdp=2,
                 summary_only=False,
                 page_size=PAGE_SIZE,
-                statuses=statuses,
+                statuses=["DRAFT", "SUBMITTED", "AUTHORISED", "PAID", "VOIDED"], # Excludes DELETED
                 modified_since=modified_since,   # safe to pass None
                 types=["ACCREC", "ACCPAY"], # NOTE: Removing the one we don't want is more efficient
             )
@@ -181,7 +167,7 @@ def get_invoices(*, modified_since: Optional[datetime] = None, statuses: Optiona
         return {}
 
 
-def get_credit_notes(*, modified_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
+def get_credit_notes(modified_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """
     Get all credit notes across all pages (no contact filter).
 
@@ -200,12 +186,7 @@ def get_credit_notes(*, modified_since: Optional[datetime] = None) -> List[Dict[
     credit_notes: List[Dict[str, Any]] = []
 
     try:
-        logger.info(
-            "Fetching all credit notes (paged)",
-            tenant_id=tenant_id,
-            page_size=PAGE_SIZE,
-            modified_since=str(modified_since) if modified_since else None,
-        )
+        logger.info("Fetching all credit notes (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
 
         while True:
             result = api.get_credit_notes(
@@ -267,7 +248,7 @@ def get_credit_notes(*, modified_since: Optional[datetime] = None) -> List[Dict[
     return []
 
 
-def get_payments(*, modified_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
+def get_payments(modified_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """
     Get all payments across all pages (no contact filter).
 
@@ -287,12 +268,7 @@ def get_payments(*, modified_since: Optional[datetime] = None) -> List[Dict[str,
     payments: List[Dict[str, Any]] = []
 
     try:
-        logger.info(
-            "Fetching all payments (paged)",
-            tenant_id=tenant_id,
-            page_size=PAGE_SIZE,
-            modified_since=str(modified_since) if modified_since else None,
-        )
+        logger.info("Fetching all payments (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
 
         while True:
             result = api.get_payments(
