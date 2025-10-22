@@ -7,16 +7,7 @@ from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 import requests
-from flask import (
-    Flask,
-    abort,
-    jsonify,
-    redirect,
-    render_template,
-    request,
-    session,
-    url_for,
-)
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from openpyxl import Workbook
 
 from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger
@@ -106,6 +97,63 @@ def tenant_sync_status():
     return jsonify({"syncingTenants": syncing_ids}), 200
 
 
+@app.route("/api/tenants/<tenant_id>/sync", methods=["POST"])
+@xero_token_required
+def trigger_tenant_sync(tenant_id: str):
+    """Trigger a background sync for the specified tenant."""
+    tenant_id = (tenant_id or "").strip()
+    if not tenant_id:
+        return jsonify({"error": "TenantID is required"}), 400
+
+    tenant_records = session.get("xero_tenants", []) or []
+    tenant_ids = {t.get("tenantId") for t in tenant_records if isinstance(t, dict)}
+    if tenant_id not in tenant_ids:
+        logger.info("Manual sync denied; tenant not authorized", tenant_id=tenant_id)
+        return jsonify({"error": "Tenant not authorized"}), 403
+
+    oauth_token = session.get("xero_oauth2_token")
+    if not oauth_token:
+        logger.warning("Manual sync denied; missing OAuth token", tenant_id=tenant_id)
+        return jsonify({"error": "Missing OAuth token"}), 400
+
+    try:
+        _executor.submit(sync_data, tenant_id, oauth_token)
+        logger.info("Manual tenant sync triggered", tenant_id=tenant_id)
+        return jsonify({"started": True}), 202
+    except Exception as exc:
+        logger.exception("Failed to trigger manual sync", tenant_id=tenant_id, error=exc)
+        return jsonify({"error": "Failed to trigger sync"}), 500
+
+
+@app.route("/")
+@route_handler_logging
+def index():
+    logger.info("Rendering index")
+    return render_template("index.html")
+
+
+@app.route("/home")
+@route_handler_logging
+@xero_token_required
+def home():
+    tenants = session.get("xero_tenants") or []
+    active_tenant_id = session.get("xero_tenant_id")
+    message = session.pop("tenant_message", None)
+    error = session.pop("tenant_error", None)
+
+    active_tenant = next((t for t in tenants if t.get("tenantId") == active_tenant_id), None)
+    logger.info("Rendering homepage", active_tenant_id=active_tenant_id, tenants=len(tenants), has_message=bool(message), has_error=bool(error), authenticated=bool(session.get("access_token")))
+
+    return render_template(
+        "home.html",
+        tenants=tenants,
+        active_tenant_id=active_tenant_id,
+        active_tenant=active_tenant,
+        message=message,
+        error=error,
+    )
+
+
 @app.route("/favicon.ico")
 def ignore_favicon():
     """Return empty 204 for favicon requests."""
@@ -120,7 +168,7 @@ def upload_statements():
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
         session["tenant_error"] = "Please select a tenant before uploading statements."
-        return redirect(url_for("index"))
+        return redirect(url_for("home"))
 
     contacts_raw = get_contacts()
     contacts_list = sorted(contacts_raw, key=lambda c: (c.get("name") or "").casefold())
@@ -213,7 +261,7 @@ def statements():
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
         session["tenant_error"] = "Please select a tenant to view statements."
-        return redirect(url_for("index"))
+        return redirect(url_for("home"))
 
     view = request.args.get("view", "incomplete").lower()
     show_completed = view == "completed"
@@ -230,7 +278,7 @@ def statement(statement_id: str):
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
         session["tenant_error"] = "Please select a tenant to view statements."
-        return redirect(url_for("index"))
+        return redirect(url_for("home"))
 
     record = get_statement_record(tenant_id, statement_id)
     if not record:
@@ -516,27 +564,6 @@ def statement(statement_id: str):
         has_payment_rows=has_payment_rows,
     )
 
-@app.route("/")
-@route_handler_logging
-def index():
-    tenants = session.get("xero_tenants") or []
-    active_tenant_id = session.get("xero_tenant_id")
-    message = session.pop("tenant_message", None)
-    error = session.pop("tenant_error", None)
-
-    active_tenant = next((t for t in tenants if t.get("tenantId") == active_tenant_id), None)
-    logger.info("Rendering index", active_tenant_id=active_tenant_id, tenants=len(tenants), has_message=bool(message), has_error=bool(error), authenticated=bool(session.get("access_token")))
-
-    return render_template(
-        "index.html",
-        tenants=tenants,
-        active_tenant_id=active_tenant_id,
-        active_tenant=active_tenant,
-        message=message,
-        error=error,
-        is_authenticated=bool(session.get("access_token")),
-    )
-
 
 @app.route("/tenants/select", methods=["POST"])
 @xero_token_required
@@ -555,7 +582,7 @@ def select_tenant():
         session["tenant_error"] = "Unable to select tenant. Please try again."
         logger.info("Tenant selection failed", tenant_id=tenant_id)
 
-    return redirect(url_for("index"))
+    return redirect(url_for("home"))
 
 
 @app.route("/tenants/sync", methods=["POST"])
@@ -565,11 +592,11 @@ def sync_tenant():
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
         session["tenant_message"] = "Please select a tenant before synchronising."
-        return redirect(url_for("index"))
+        return redirect(url_for("home"))
 
     session["tenant_message"] = "Tenant data is refreshed on demand; no manual sync is required."
     logger.info("Manual tenant sync requested (noop)", tenant_id=tenant_id)
-    return redirect(url_for("index"))
+    return redirect(url_for("home"))
 
 
 @app.route("/tenants/disconnect", methods=["POST"])
@@ -582,7 +609,7 @@ def disconnect_tenant():
 
     if not tenant:
         session["tenant_error"] = "Tenant not found in session."
-        return redirect(url_for("index"))
+        return redirect(url_for("home"))
 
     connection_id = tenant.get("connectionId")
     access_token = session.get("access_token")
@@ -598,11 +625,11 @@ def disconnect_tenant():
             if resp.status_code not in (200, 204):
                 logger.error("Failed to disconnect tenant", tenant_id=tenant_id, status_code=resp.status_code, body=resp.text)
                 session["tenant_error"] = "Unable to disconnect tenant from Xero."
-                return redirect(url_for("index"))
+                return redirect(url_for("home"))
         except Exception as exc:
             logger.exception("Exception disconnecting tenant", tenant_id=tenant_id, error=exc)
             session["tenant_error"] = "An error occurred while disconnecting the tenant."
-            return redirect(url_for("index"))
+            return redirect(url_for("home"))
 
     # Remove tenant locally regardless (in case it was already disconnected)
     updated = [t for t in tenants if t.get("tenantId") != tenant_id]
@@ -614,7 +641,7 @@ def disconnect_tenant():
 
     session["tenant_message"] = "Tenant disconnected."
     logger.info("Tenant disconnected", tenant_id=tenant_id, remaining=len(updated))
-    return redirect(url_for("index"))
+    return redirect(url_for("home"))
 
 @app.route("/configs", methods=["GET", "POST"])
 @xero_token_required
@@ -624,7 +651,7 @@ def configs():
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
         session["tenant_error"] = "Please select a tenant before configuring mappings."
-        return redirect(url_for("index"))
+        return redirect(url_for("home"))
 
     contacts_raw = get_contacts()
     contacts_list = sorted(
@@ -874,7 +901,7 @@ def callback():
     session.pop("oauth_nonce", None)
 
     logger.info("OAuth callback processed", tenants=len(tenants))
-    return redirect(url_for("index"))
+    return redirect(url_for("home"))
 
 @app.route("/logout")
 @route_handler_logging

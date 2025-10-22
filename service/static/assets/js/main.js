@@ -1,7 +1,17 @@
 window.addEventListener("load", () => {
-  if (window.location.pathname === "/") {
+  if (window.location.pathname === "/home") {
+			// Event listeners to check for inactivity 
+			document.addEventListener("mousemove", throttle(resetActivityTimer, 1000)); // 1000ms delay between events
+			document.addEventListener("keydown", throttle(resetActivityTimer, 1000));
+			document.addEventListener("mousedown", throttle(resetActivityTimer, 1000));
+			document.addEventListener("scroll", throttle(resetActivityTimer, 1000));
+
     handleCheckSync();
     setInterval(handleCheckSync, 30000);
+
+    document.querySelectorAll(".sync-btn").forEach((btn) => {
+      btn.addEventListener("click", () => handleSyncClick(btn));
+    });
   }
 });
 
@@ -20,16 +30,59 @@ function handleCheckSync() {
 }
 
 function updateSyncStatuses(data) {
-	const syncingTenants = Array.isArray(data?.syncingTenants) ? data.syncingTenants : [];
-	console.log("Syncing tenant IDs:", syncingTenants);
+  const syncingTenants = Array.isArray(data?.syncingTenants) ? data.syncingTenants : [];
+  const syncingSet = new Set(syncingTenants);
 
-	syncingTenants.forEach((tenantId) => {
-		if (!tenantId) return;
-		const row = document.getElementById(`row-${tenantId}`);
-		if (row) {
-			console.log("Syncing row element:", row);
-		}
-	});
+  document.querySelectorAll(".tenant-sync-status").forEach((statusEl) => {
+    const tenantId = statusEl.dataset.tenantId;
+    const isSyncing = tenantId && syncingSet.has(tenantId);
+
+    statusEl.classList.toggle("d-none", !isSyncing);
+    statusEl.setAttribute("data-syncing", isSyncing ? "true" : "false");
+
+    const row = tenantId ? document.getElementById(`row-${tenantId}`) : null;
+    if (row) {
+      const syncButton = row.querySelector(".sync-btn");
+      if (syncButton) {
+        syncButton.disabled = !!isSyncing;
+        syncButton.classList.toggle("disabled", !!isSyncing);
+      }
+    }
+  });
+}
+
+async function handleSyncClick(button) {
+  const tenantId = button.dataset.tenantId;
+  if (!tenantId) return;
+
+  button.disabled = true;
+  button.classList.add("disabled");
+  toggleTenantSyncStatus(tenantId, true);
+
+  try {
+    const response = await fetch(`/api/tenants/${encodeURIComponent(tenantId)}/sync`, {
+      method: "POST",
+      headers: { "Accept": "application/json" },
+      credentials: "same-origin",
+    });
+
+    if (!response.ok && response.status !== 202) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+  } catch (error) {
+    button.disabled = false;
+    button.classList.remove("disabled");
+    toggleTenantSyncStatus(tenantId, false);
+  }
+}
+
+function toggleTenantSyncStatus(tenantId, syncing) {
+  const statusEl = document.querySelector(`.tenant-sync-status[data-tenant-id="${tenantId}"]`);
+  if (statusEl) {
+    statusEl.classList.toggle("d-none", !syncing);
+    statusEl.setAttribute("data-syncing", syncing ? "true" : "false");
+  }
 }
 
 // Throttle events to reduce loads of unnecessary resetActivityTimer function calls
