@@ -94,32 +94,6 @@ def ignore_favicon():
     """Return empty 204 for favicon requests."""
     return "", 204
 
-@app.route("/contacts", methods=["GET", "POST"])
-@xero_token_required
-@require_tenant_data_ready
-@route_handler_logging
-def view_contacts():
-    """List tenant contacts; on POST, echo the selected contact ID to logs."""
-    contacts_raw = get_contacts()
-    contacts_list = sorted(contacts_raw, key=lambda c: (c.get("name") or "").casefold())
-    tenant_id = session.get('xero_tenant_id')
-
-    if request.method == "POST":
-        contact_name = (request.form.get("contact_name") or "").strip()
-        if contact_name:
-            print("*" * 88)
-            print(f"TenantID: {tenant_id}")
-            print("*" * 88)
-            for contact in contacts_list:
-                if contact.get("name") == contact_name:
-                    print("*" * 88)
-                    print(f"{contact_name}, {contact.get('contact_id')}")
-                    print("*" * 88)
-
-    # from sync import sync_contacts
-    # sync_contacts(tenant_id)
-
-    return render_template("contacts.html", contacts=contacts_list)
 
 @app.route("/upload-statements", methods=["GET", "POST"])
 @xero_token_required
@@ -133,10 +107,7 @@ def upload_statements():
         return redirect(url_for("index"))
 
     contacts_raw = get_contacts()
-    contacts_list = sorted(
-        contacts_raw,
-        key=lambda c: (c.get("name") or "").casefold(),
-    )
+    contacts_list = sorted(contacts_raw, key=lambda c: (c.get("name") or "").casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     success_count: Optional[int] = None
     error_messages: List[str] = []
@@ -648,11 +619,7 @@ def configs():
         key=lambda c: (c.get("name") or "").casefold(),
     )
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
-    logger.info(
-        "Rendering configs",
-        tenant_id=tenant_id,
-        contacts=len(contacts_list),
-    )
+    logger.info("Rendering configs", tenant_id=tenant_id, contacts=len(contacts_list))
 
 
     selected_contact_name: Optional[str] = None

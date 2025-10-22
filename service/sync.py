@@ -8,7 +8,7 @@ from typing import Callable, Optional
 from botocore.exceptions import ClientError
 
 from config import S3_BUCKET_NAME, logger, s3_client, tenant_data_table
-from xero_repository import get_contacts, get_credit_notes, get_invoices, get_payments
+from xero_repository import XeroType, get_contacts_from_xero, get_credit_notes, get_invoices, get_payments
 from utils import get_xero_api_client
 from xero_python.accounting import AccountingApi
 
@@ -16,11 +16,13 @@ STAGE = os.getenv("STAGE")
 LOCAL_DATA_DIR = "./tmp/data" if STAGE == "dev" else "/tmp/data"
 
 
-def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, filename: str, start_message: str, done_message: str):
+def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, resource: XeroType, start_message: str, done_message: str):
     if not tenant_id:
         logger.error("Missing TenantID")
 
     logger.info(start_message, tenant_id=tenant_id)
+
+    filename = f"{resource.value}.json"
 
     try:
         data = fetcher(tenant_id, api=api)
@@ -42,19 +44,19 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, filena
 
 
 def sync_contacts(api: AccountingApi ,tenant_id: str):
-    _sync_resource(api, tenant_id, get_contacts, "contacts.json", "Syncing contacts", "Synced contacts")
+    _sync_resource(api, tenant_id, get_contacts_from_xero, XeroType.CONTACTS, "Syncing contacts", "Synced contacts")
 
 
 def sync_credit_notes(api: AccountingApi, tenant_id: str):
-    _sync_resource(api, tenant_id, get_credit_notes, "credit_notes.json", "Syncing credit notes", "Synced credit notes")
+    _sync_resource(api, tenant_id, get_credit_notes, XeroType.CREDIT_NOTES, "Syncing credit notes", "Synced credit notes")
 
 
 def sync_invoices(api: AccountingApi, tenant_id: str):
-    _sync_resource(api, tenant_id, get_invoices, "invoices.json", "Syncing invoices", "Synced invoices")
+    _sync_resource(api, tenant_id, get_invoices, XeroType.INVOICES, "Syncing invoices", "Synced invoices")
 
 
 def sync_payments(api: AccountingApi, tenant_id: str):
-    _sync_resource(api, tenant_id, get_payments, "payments.json", "Syncing payments", "Synced payments")
+    _sync_resource(api, tenant_id, get_payments, XeroType.PAYMENTS, "Syncing payments", "Synced payments")
 
 
 def check_sync_required(tenant_id: str) -> bool:

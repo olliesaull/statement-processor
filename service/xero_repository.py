@@ -1,6 +1,9 @@
 """Module for all Xero data API calls"""
 
+import json
+import os
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional
 
 from flask import session
@@ -11,9 +14,49 @@ from config import logger
 from utils import fmt_date, fmt_invoice_data, raise_for_unauthorized, get_xero_api_client
 
 PAGE_SIZE = 100  # Xero max
+STAGE = os.getenv("STAGE")
+LOCAL_DATA_DIR = "./tmp/data" if STAGE == "dev" else "/tmp/data"
 
 
-def get_contacts(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
+class XeroType(Enum):
+    INVOICES = "invoices"
+    CREDIT_NOTES = "credit_notes"
+    PAYMENTS = "payments"
+    CONTACTS = "contacts"
+
+
+def load_local_dataset(resource: XeroType, tenant_id: Optional[str] = None) -> Optional[Any]:
+    """
+    Load a locally cached dataset produced by the sync job.
+
+    Args:
+        resource: `XeroType` dataset identifier.
+        tenant_id: Optional explicit tenant ID; defaults to the active session tenant.
+
+    Returns:
+        Parsed JSON payload (list or dict) or None if unavailable.
+    """
+    tenant_id = tenant_id or session.get("xero_tenant_id")
+    if not tenant_id:
+        logger.info("Skipping local dataset load; tenant not selected", resource=resource)
+        return None
+
+    data_path = os.path.join(LOCAL_DATA_DIR, tenant_id, f"{resource.value}.json")
+
+    try:
+        with open(data_path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        logger.info("Local dataset not found", tenant_id=tenant_id, resource=resource, path=data_path)
+    except json.JSONDecodeError:
+        logger.exception("Failed to parse local dataset", tenant_id=tenant_id, resource=resource, path=data_path)
+    except Exception:
+        logger.exception("Failed to load local dataset", tenant_id=tenant_id, resource=resource, path=data_path)
+
+    return None
+
+
+def get_contacts_from_xero(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
     """Fetch contacts directly from Xero ordered by name."""
     tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id:
@@ -313,22 +356,39 @@ def get_payments(tenant_id: Optional[str] = None, modified_since: Optional[datet
     return []
 
 
-def get_invoices_by_numbers(invoice_numbers: Iterable[Any], api: Optional[AccountingApi] = None) -> Dict[str, Dict[str, Any]]:
-    """
-    Fetch invoices for a list of invoice numbers.
-    Returns a dict keyed by invoice number: { "INV-001": {...}, ... }
+def get_contacts(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return cached contacts for the active tenant."""
+    tenant_id = tenant_id or session.get("xero_tenant_id")
+    if not tenant_id:
+        logger.info("Skipping contact lookup; tenant not selected")
+        return []
 
-    - Batches requests to avoid URL length limits
-    - Handles paging
-    - Normalizes invoice numbers to strings and strips whitespace
-    - If duplicates arrive from the API, the *last* one wins (simple + predictable)
+    try:
+        cached = load_local_dataset(XeroType.CONTACTS, tenant_id=tenant_id) or []
+        if not cached:
+            logger.info("No cached contacts available", tenant_id=tenant_id)
+            return []
+
+        contacts = list(cached)
+        contacts.sort(key=lambda c: (c.get("name") or "").casefold())
+        logger.info("Loaded contacts from cache", tenant_id=tenant_id, returned=len(contacts))
+        return contacts
+
+    except Exception:
+        logger.exception("Failed to load contacts from cache", tenant_id=tenant_id)
+        return []
+
+
+def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
+    """
+    Fetch invoices for a list of invoice numbers from the locally cached dataset.
+    Returns a dict keyed by invoice number: { "INV-001": {...}, ... }
     """
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
         logger.info("Skipping invoice number lookup; tenant not selected")
         return {}
 
-    client = api or get_xero_api_client()
     if not invoice_numbers:
         return {}
 
@@ -340,236 +400,84 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any], api: Optional[Accoun
             seen.add(n)
             normalized.append(n)
 
-    by_number = {}
-    BATCH = 40
-    PAGE_SIZE = 100  # Xero cap is 100; fetch full pages to reduce calls
-    total_requested = 0
-
     try:
-        logger.info("Fetching invoices by numbers", tenant_id=tenant_id, requested=len(normalized), batch_size=BATCH)
-        for i in range(0, len(normalized), BATCH):
-            batch = normalized[i:i+BATCH]
-            page = 1
-            total_requested += len(batch)
-            while True:
-                # Exclude deleted invoices explicitly via Status filter
-                result = client.get_invoices(
-                    tenant_id,
-                    invoice_numbers=batch,
-                    order="InvoiceNumber ASC",
-                    page=page,
-                    include_archived=False,
-                    created_by_my_app=False,
-                    unitdp=2,
-                    summary_only=False,
-                    page_size=PAGE_SIZE,
-                    statuses=["DRAFT", "SUBMITTED", "AUTHORISED", "PAID", "VOIDED"],
-                )
-                invs = result.invoices or []
-                logger.debug("Fetched invoice page", tenant_id=tenant_id, batch=len(batch), page=page, returned=len(invs))
-                for inv in invs:
-                    rec = fmt_invoice_data(inv)
-                    n = rec.get("number")
-                    if n:
-                        # last one wins if duplicates appear
-                        by_number[n] = rec
+        cached = load_local_dataset(XeroType.INVOICES, tenant_id=tenant_id) or {}
+        if not cached:
+            logger.info("No cached invoices available", tenant_id=tenant_id)
+            return {}
 
-                if len(invs) < PAGE_SIZE:
-                    break
-                page += 1
+        result: Dict[str, Dict[str, Any]] = {}
+        for number in normalized:
+            if (invoice := cached.get(number)):
+                result[number] = invoice
 
-        logger.info("Fetched invoices by numbers", tenant_id=tenant_id, requested=total_requested, returned=len(by_number))
-        return by_number
+        logger.info("Fetched invoices by numbers", tenant_id=tenant_id, requested=len(normalized), returned=len(result))
+        return result
 
-    except AccountingBadRequestException as e:
-        raise_for_unauthorized(e)
-        logger.exception("Failed to fetch invoices by numbers", tenant_id=tenant_id, error=e)
-        return {}
-    except Exception as e:
-        raise_for_unauthorized(e)
-        logger.exception("Failed to fetch invoices by numbers", tenant_id=tenant_id, error=e)
+    except Exception:
+        logger.exception("Failed to load invoices by numbers from cache", tenant_id=tenant_id)
         return {}
 
 
-def get_invoices_by_contact(contact_id: str, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
+def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
+    """Return cached invoices for the specified contact."""
     tenant_id = session.get("xero_tenant_id")
-    PAGE_SIZE = 100  # Xero cap is 100; fetch full pages to reduce calls
     if not tenant_id:
         logger.info("Skipping invoice lookup; tenant not selected", contact_id=contact_id)
         return []
 
-    client = api or get_xero_api_client()
-
     try:
-        logger.info("Fetching invoices for contact", tenant_id=tenant_id, contact_id=contact_id)
-        invoices: List[Dict[str, Any]] = []
-        page = 1
+        cached = load_local_dataset(XeroType.INVOICES, tenant_id=tenant_id) or {}
+        if not cached:
+            logger.info("No cached invoices available", tenant_id=tenant_id)
+            return []
 
-        while True:
-            # Restrict to the contact and exclude deleted invoices
-            result = client.get_invoices(
-                tenant_id,
-                where=f'Contact.ContactID==Guid("{contact_id}") AND Status!="DELETED"',
-                order="InvoiceNumber ASC",
-                page=page,
-                include_archived=False,
-                created_by_my_app=False,
-                unitdp=2,
-                summary_only=False,
-                page_size=PAGE_SIZE,
-            )
-
-            invs = result.invoices or []
-            logger.debug("Fetched invoice contact page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(invs))
-            invoices.append(fmt_invoice_data(inv) for inv in invs)
-
-            if len(invs) < PAGE_SIZE:
-                break
-
-            page += 1
-
+        invoices = [inv for inv in cached.values() if inv.get("contact_id") == contact_id]
         logger.info("Fetched invoices for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(invoices))
         return invoices
 
-    except AccountingBadRequestException as e:
-        raise_for_unauthorized(e)
-        logger.exception("Failed to fetch invoices for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
-        return []
-    except Exception as e:
-        raise_for_unauthorized(e)
-        logger.exception("Failed to fetch invoices for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
+    except Exception:
+        logger.exception("Failed to load invoices for contact from cache", tenant_id=tenant_id, contact_id=contact_id)
         return []
 
 
-def get_credit_notes_by_contact(contact_id: str, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
+def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
+    """Return cached credit notes for the specified contact."""
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id or not contact_id:
         return []
 
-    client = api or get_xero_api_client()
-
-    page = 1
-    page_size = 100
-    credit_notes: List[Dict[str, Any]] = []
-
     try:
-        while True:
-            result = client.get_credit_notes(
-                tenant_id,
-                where=f'Contact.ContactID==Guid("{contact_id}")',
-                order="CreditNoteNumber ASC",
-                page=page,
-                unitdp=2,
-                page_size=page_size,
-            )
-            batch = result.credit_notes or []
-            if not batch:
-                break
+        cached = load_local_dataset(XeroType.CREDIT_NOTES, tenant_id=tenant_id) or []
+        if not cached:
+            logger.info("No cached credit notes available", tenant_id=tenant_id)
+            return []
 
-            for note in batch:
-                contact = getattr(note, "contact", None)
-
-                total = getattr(note, "total", None)
-                remaining_credit = getattr(note, "remaining_credit", None)
-
-                if contact:
-                    contact_id = getattr(contact, "contact_id", None)
-                    contact_name = getattr(contact, "name", None)
-                else:
-                    contact_id = contact_name = None
-
-                credit_notes.append(
-                    {
-                        "credit_note_id": getattr(note, "credit_note_id", None),
-                        "number": getattr(note, "credit_note_number", None),
-                        "type": getattr(note, "type", None),
-                        "status": getattr(note, "status", None),
-                        "date": fmt_date(getattr(note, "date", None)),
-                        "due_date": fmt_date(getattr(note, "due_date", None)),
-                        "reference": getattr(note, "reference", None),
-                        "total": remaining_credit if remaining_credit is not None else total, # NOTE: Confirm this is correct
-                        "amount_credited": getattr(note, "amount_credited", None),
-                        "remaining_credit": remaining_credit,
-                        "contact_id": contact_id,
-                        "contact_name": contact_name,
-                    }
-                )
-
-            logger.debug("Fetched credit note page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(batch))
-
-            if len(batch) < page_size:
-                break
-            page += 1
-
+        credit_notes = [note for note in cached if note.get("contact_id") == contact_id]
         logger.info("Fetched credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(credit_notes))
         return credit_notes
 
-    except AccountingBadRequestException as e:
-        raise_for_unauthorized(e)
-        logger.exception("Failed to fetch credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
-    except Exception as e:
-        raise_for_unauthorized(e)
-        logger.exception("Unexpected error fetching credit notes", tenant_id=tenant_id, contact_id=contact_id, error=e)
-    return []
+    except Exception:
+        logger.exception("Failed to load credit notes for contact from cache", tenant_id=tenant_id, contact_id=contact_id)
+        return []
 
 
-def get_payments_by_contact(contact_id: str, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
+def get_payments_by_contact(contact_id: str) -> List[Dict[str, Any]]:
+    """Return cached payments for the specified contact."""
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id or not contact_id:
         return []
 
-    client = api or get_xero_api_client()
-
-    page = 1
-    page_size = 100
-    payments: List[Dict[str, Any]] = []
-
     try:
-        while True:
-            result = client.get_payments(
-                tenant_id,
-                where=f'Invoice.Contact.ContactID==Guid("{contact_id}")',
-                order="Date DESC",
-                page=page,
-                page_size=page_size,
-            )
-            batch = result.payments or []
-            if not batch:
-                break
+        cached = load_local_dataset(XeroType.PAYMENTS, tenant_id=tenant_id) or []
+        if not cached:
+            logger.info("No cached payments available", tenant_id=tenant_id)
+            return []
 
-            for payment in batch:
-                if (invoice_obj := getattr(payment, "invoice", None)):
-                    invoice_id = getattr(invoice_obj, "invoice_id", None)
-                    contact = getattr(invoice_obj, "contact", None)
-                else:
-                    invoice_id = contact = None
-
-                payments.append(
-                    {
-                        "payment_id": getattr(payment, "payment_id", None),
-                        "invoice_id": invoice_id,
-                        "reference": getattr(payment, "reference", None),
-                        "amount": getattr(payment, "amount", None),
-                        "date": fmt_date(getattr(payment, "date", None)),
-                        "status": getattr(payment, "status", None),
-                        "contact_id": getattr(contact, "contact_id", None),
-                        "contact_name": getattr(contact, "name", None),
-                    }
-                )
-
-            logger.debug("Fetched payment page", tenant_id=tenant_id, contact_id=contact_id, page=page, returned=len(batch))
-
-            if len(batch) < page_size:
-                break
-            page += 1
-
+        payments = [payment for payment in cached if payment.get("contact_id") == contact_id]
         logger.info("Fetched payments for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(payments))
         return payments
 
-    except AccountingBadRequestException as e:
-        raise_for_unauthorized(e)
-        logger.exception("Failed to fetch payments for contact", tenant_id=tenant_id, contact_id=contact_id, error=e)
-    except Exception as e:
-        raise_for_unauthorized(e)
-        logger.exception("Unexpected error fetching payments", tenant_id=tenant_id, contact_id=contact_id, error=e)
-    return []
+    except Exception:
+        logger.exception("Failed to load payments for contact from cache", tenant_id=tenant_id, contact_id=contact_id)
+        return []
