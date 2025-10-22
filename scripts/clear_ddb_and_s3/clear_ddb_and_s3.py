@@ -37,7 +37,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=default_env,
         help="Path to the .env file containing AWS_PROFILE, AWS_REGION, S3_BUCKET_NAME, "
-        "TENANT_CONTACTS_CONFIG_TABLE_NAME, and TENANT_STATEMENTS_TABLE_NAME. "
+        "TENANT_CONTACTS_CONFIG_TABLE_NAME, TENANT_STATEMENTS_TABLE_NAME, and "
+        "TENANT_DATA_TABLE_NAME. "
         f"Defaults to {default_env}",
     )
     parser.add_argument(
@@ -173,6 +174,7 @@ def main() -> None:
     table_env_values = [
         ("TENANT_CONTACTS_CONFIG_TABLE_NAME", os.getenv("TENANT_CONTACTS_CONFIG_TABLE_NAME")),
         ("TENANT_STATEMENTS_TABLE_NAME", os.getenv("TENANT_STATEMENTS_TABLE_NAME")),
+        ("TENANT_DATA_TABLE_NAME", os.getenv("TENANT_DATA_TABLE_NAME")),
     ]
     missing = [
         name

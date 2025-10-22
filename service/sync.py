@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from typing import Callable, Optional
 
 from botocore.exceptions import ClientError
@@ -82,10 +83,17 @@ def mark_tenant_syncing(tenant_id: str, syncing: bool = True):
         return False
 
     try:
+        update_expression = "SET Syncing = :syncing"
+        expression_values = {":syncing": syncing}
+
+        if syncing:
+            update_expression += ", LastSyncTime = :last_sync_time"
+            expression_values[":last_sync_time"] = int(time.time() * 1000)
+
         tenant_data_table.update_item(
             Key={"TenantID": tenant_id},
-            UpdateExpression="SET Syncing = :syncing",
-            ExpressionAttributeValues={":syncing": syncing},
+            UpdateExpression=update_expression,
+            ExpressionAttributeValues=expression_values,
         )
         logger.info("Updated tenant sync state", tenant_id=tenant_id, syncing=syncing)
         return True
