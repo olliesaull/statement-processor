@@ -36,7 +36,7 @@
           <tbody>
             {% for tenant in tenants %}
               {% set is_active = tenant.tenantId == active_tenant_id %}
-              <tr>
+              <tr id="row-{{ tenant.tenantId }}">
                 <td>{{ tenant.tenantName or tenant.tenantId }}</td>
                 <td class="text-center">
                   {% if is_active %}

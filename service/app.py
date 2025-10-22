@@ -10,6 +10,7 @@ import requests
 from flask import (
     Flask,
     abort,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -24,6 +25,7 @@ from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
 from core.models import StatementItem
 from sync import check_sync_required, sync_data
+from tenant_data_repository import TenantDataRepository
 from utils import (
     StatementJSONNotFoundError,
     add_statement_to_table,
@@ -39,7 +41,6 @@ from utils import (
     mark_statement_completed,
     match_invoices_to_statement_items,
     prepare_display_mappings,
-    require_tenant_data_ready,
     route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
@@ -89,6 +90,22 @@ def _set_active_tenant(tenant_id: Optional[str]) -> None:
         session.pop("xero_tenant_id", None)
         session.pop("xero_tenant_name", None)
 
+
+@app.route("/api/tenants/sync-status", methods=["GET"])
+@xero_token_required
+def tenant_sync_status():
+    """Return the list of tenant IDs currently syncing."""
+    tenant_records = session.get("xero_tenants", []) or []
+    tenant_ids = [t.get("tenantId") for t in tenant_records if isinstance(t, dict)]
+    try:
+        syncing_ids = TenantDataRepository.get_syncing_tenants(tenant_ids)
+    except Exception as exc:
+        logger.exception("Failed to load tenant sync status", tenant_ids=tenant_ids, error=exc)
+        return jsonify({"error": "Unable to determine sync status"}), 500
+
+    return jsonify({"syncingTenants": syncing_ids}), 200
+
+
 @app.route("/favicon.ico")
 def ignore_favicon():
     """Return empty 204 for favicon requests."""
@@ -97,7 +114,6 @@ def ignore_favicon():
 
 @app.route("/upload-statements", methods=["GET", "POST"])
 @xero_token_required
-@require_tenant_data_ready
 @route_handler_logging
 def upload_statements():
     """Upload one or more PDF statements and register them for processing."""
@@ -192,7 +208,6 @@ def upload_statements():
 
 @app.route("/statements")
 @xero_token_required
-@require_tenant_data_ready
 @route_handler_logging
 def statements():
     tenant_id = session.get("xero_tenant_id")
@@ -210,7 +225,6 @@ def statements():
 
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @xero_token_required
-@require_tenant_data_ready
 @route_handler_logging
 def statement(statement_id: str):
     tenant_id = session.get("xero_tenant_id")
@@ -604,7 +618,6 @@ def disconnect_tenant():
 
 @app.route("/configs", methods=["GET", "POST"])
 @xero_token_required
-@require_tenant_data_ready
 @route_handler_logging
 def configs():
     """View and edit contact-specific mapping configuration."""
@@ -869,6 +882,13 @@ def logout():
     logger.info("Logout requested", had_tenant=bool(session.get("xero_tenant_id")))
     session.clear()
     return redirect(url_for("index"))
+
+
+@app.route('/.well-known/<path:path>')
+def chrome_devtools_ping(path):
+    # Avoids 404 error being logged when chrome developer tools is open
+    # /.well-known/appspecific/com.chrome.devtools.json
+    return '', 204  # No content, indicates "OK but nothing here"
 
 
 if __name__ == "__main__":

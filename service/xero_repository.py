@@ -27,7 +27,7 @@ class XeroType(Enum):
 
 def load_local_dataset(resource: XeroType, tenant_id: Optional[str] = None) -> Optional[Any]:
     """
-    Load a locally cached dataset produced by the sync job.
+    Load a locally cached dataset produced by the sync job. If dataset not found locally download it from S3.
 
     Args:
         resource: `XeroType` dataset identifier.

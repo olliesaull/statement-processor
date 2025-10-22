@@ -124,15 +124,6 @@ def scope_str() -> str:
     """Return Xero OAuth scopes as a space-separated string."""
     return " ".join(SCOPES)
 
-def require_tenant_data_ready(view_func: Callable) -> Callable:
-    """Compatibility decorator retained for routes; no-op now that caching is removed."""
-
-    @wraps(view_func)
-    def wrapper(*args: Any, **kwargs: Any):
-        return view_func(*args, **kwargs)
-
-    return wrapper
-
 
 class RedirectToLogin(HTTPException):
     """HTTP exception that produces a redirect to the login route."""
