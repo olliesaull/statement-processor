@@ -10,7 +10,7 @@ from flask import session
 from xero_python.exceptions import AccountingBadRequestException
 from xero_python.accounting import AccountingApi
 
-from config import logger
+from config import S3_BUCKET_NAME, logger, s3_client
 from utils import fmt_date, fmt_invoice_data, raise_for_unauthorized, get_xero_api_client
 
 PAGE_SIZE = 100  # Xero max
@@ -48,6 +48,19 @@ def load_local_dataset(resource: XeroType, tenant_id: Optional[str] = None) -> O
             return json.load(handle)
     except FileNotFoundError:
         logger.info("Local dataset not found", tenant_id=tenant_id, resource=resource, path=data_path)
+        s3_key = f"{tenant_id}/data/{resource.value}.json"
+        try:
+            os.makedirs(os.path.dirname(data_path), exist_ok=True)
+            s3_client.download_file(S3_BUCKET_NAME, s3_key, data_path)
+            logger.info("Downloaded file from S3", tenant_id=tenant_id, resource=resource, path=data_path)
+            with open(data_path, encoding="utf-8") as handle:
+                return json.load(handle)
+        except FileNotFoundError:
+            logger.info("Dataset still missing after S3 download attempt", tenant_id=tenant_id, resource=resource, path=data_path)
+        except s3_client.exceptions.NoSuchKey:
+            logger.info("Dataset not present in S3", tenant_id=tenant_id, resource=resource, s3_key=s3_key)
+        except Exception:
+            logger.exception("Failed to download dataset from S3", tenant_id=tenant_id, resource=resource, s3_key=s3_key)
     except json.JSONDecodeError:
         logger.exception("Failed to parse local dataset", tenant_id=tenant_id, resource=resource, path=data_path)
     except Exception:
