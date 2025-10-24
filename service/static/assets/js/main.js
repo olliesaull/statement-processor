@@ -30,23 +30,26 @@ function handleCheckSync() {
 }
 
 function updateSyncStatuses(data) {
-  const syncingTenants = Array.isArray(data?.syncingTenants) ? data.syncingTenants : [];
-  const tenantStatuses = data && typeof data.tenantStatuses === "object" && data.tenantStatuses !== null ? data.tenantStatuses : {};
-  const syncingSet = new Set(syncingTenants);
+  if (!data || typeof data !== "object") {
+    return;
+  }
 
+  const statusMap = data;
   document.querySelectorAll(".tenant-sync-status").forEach((statusEl) => {
     const tenantId = statusEl.dataset.tenantId;
-    const rawStatus = tenantId ? tenantStatuses[tenantId] : undefined;
-    const isSyncing = tenantId && syncingSet.has(tenantId);
-    const isLoading = rawStatus === "LOADING";
-    const showStatus = isSyncing || isLoading;
+    const rawStatus = tenantId ? statusMap[tenantId] : undefined;
+    const normalizedStatus = typeof rawStatus === "string" ? rawStatus.toUpperCase() : "";
+    const isLoading = normalizedStatus === "LOADING";
+    const isSyncing = normalizedStatus === "SYNCING";
+    const showStatus = isLoading || isSyncing;
 
     statusEl.classList.toggle("d-none", !showStatus);
     statusEl.setAttribute("data-syncing", isSyncing ? "true" : "false");
+    statusEl.setAttribute("data-status", normalizedStatus || "");
 
     const labelEl = statusEl.querySelector("span:last-child");
     if (labelEl) {
-      labelEl.textContent = isLoading ? "Loading" : "Syncing";
+      labelEl.textContent = isLoading ? "Loading" : isSyncing ? "Syncing" : "";
     }
 
     const row = tenantId ? document.getElementById(`row-${tenantId}`) : null;
@@ -55,6 +58,13 @@ function updateSyncStatuses(data) {
       if (syncButton) {
         syncButton.disabled = !!showStatus;
         syncButton.classList.toggle("disabled", !!showStatus);
+      }
+    }
+
+    if (tenantId) {
+      const row = document.getElementById(`row-${tenantId}`);
+      if (row) {
+        row.setAttribute("data-tenant-status", normalizedStatus || "");
       }
     }
   });
@@ -143,7 +153,6 @@ async function callGetTenantStatusesAPI() {
 		throw new Error('Network response was not ok');
 	}
 	const data = await response.json();
-  console.log(data)
 	return data;
 }
 // #endregion

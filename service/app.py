@@ -77,6 +77,19 @@ REDIRECT_URI = "https://cloudcathode.com/callback" if STAGE == "prod" else "http
 _executor = ThreadPoolExecutor(max_workers=2)
 
 
+def _trigger_initial_sync_if_required(tenant_id: Optional[str]) -> None:
+    """Kick off an initial load if the tenant has no cached data yet."""
+    if not tenant_id:
+        return
+
+    if check_load_required(tenant_id):
+        oauth_token = session.get("xero_oauth2_token")
+        if not oauth_token:
+            logger.warning("Skipping background sync; missing OAuth token", tenant_id=tenant_id)
+        else:
+            _executor.submit(sync_data, tenant_id, TenantStatus.LOADING, oauth_token)
+
+
 def _set_active_tenant(tenant_id: Optional[str]) -> None:
     """Persist the selected tenant in the session."""
     tenants = session.get("xero_tenants", []) or []
@@ -84,12 +97,7 @@ def _set_active_tenant(tenant_id: Optional[str]) -> None:
     if tenant_id and tenant_id in tenant_map:
         session["xero_tenant_id"] = tenant_id
         session["xero_tenant_name"] = tenant_map[tenant_id].get("tenantName")
-        if check_load_required(tenant_id):
-            oauth_token = session.get("xero_oauth2_token")
-            if not oauth_token:
-                logger.warning("Skipping background sync; missing OAuth token", tenant_id=tenant_id)
-            else:
-                _executor.submit(sync_data, tenant_id, TenantStatus.LOADING, oauth_token)
+        _trigger_initial_sync_if_required(tenant_id)
     else:
         session.pop("xero_tenant_id", None)
         session.pop("xero_tenant_name", None)
@@ -611,7 +619,7 @@ def sync_tenant():
         return redirect(url_for("home"))
 
     session["tenant_message"] = "Tenant data is refreshed on demand; no manual sync is required."
-    logger.info("Manual tenant sync requested (noop)", tenant_id=tenant_id)
+    logger.info("Manual tenant sync requested", tenant_id=tenant_id)
     return redirect(url_for("home"))
 
 
@@ -901,10 +909,12 @@ def callback():
         if conn.get("tenantId")
     ]
 
-    session["xero_tenants"] = tenants
-
     current = session.get("xero_tenant_id")
     tenant_ids = [t["tenantId"] for t in tenants]
+
+    for tid in tenant_ids:
+        _trigger_initial_sync_if_required(tid)
+
     if current in tenant_ids:
         _set_active_tenant(current)
     elif tenant_ids:
@@ -912,6 +922,8 @@ def callback():
         _set_active_tenant(first_tenant)
     else:
         _set_active_tenant(None)
+
+    session["xero_tenants"] = tenants
 
     # Clear state after successful exchange
     session.pop("oauth_state", None)
