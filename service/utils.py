@@ -221,6 +221,7 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
             status = get_cached_tenant_status(tenant_id)
             if status == TenantStatus.LOADING:
                 logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id)
+                session["tenant_error"] = "Please wait for the initial load to finish before navigating away."
                 return redirect(url_for("home"))
 
         return f(*args, **kwargs)
