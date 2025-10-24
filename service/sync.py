@@ -20,9 +20,10 @@ STAGE = os.getenv("STAGE")
 LOCAL_DATA_DIR = "./tmp/data" if STAGE == "dev" else "/tmp/data"
 
 
-def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, resource: XeroType, start_message: str, done_message: str, modified_since: Optional[datetime] = None):
+def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, resource: XeroType, start_message: str, done_message: str, modified_since: Optional[datetime] = None) -> bool:
     if not tenant_id:
         logger.error("Missing TenantID")
+        return False
 
     logger.info(start_message, tenant_id=tenant_id)
 
@@ -59,10 +60,13 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, resour
 
         s3_client.upload_file(local_file, S3_BUCKET_NAME, s3_file)
 
-        logger.info(done_message, tenant_id=tenant_id)
+        record_count = len(payload) if isinstance(payload, list) else len(payload.keys()) if isinstance(payload, dict) else None
+        logger.info(done_message, tenant_id=tenant_id, records=record_count)
+        return True
 
     except Exception:
         logger.exception("Unexpected error syncing resource", tenant_id=tenant_id, resource=filename)
+        return False
 
 
 def _resolve_modified_since(record: Optional[dict[str, Any]]) -> Optional[datetime]:
@@ -166,20 +170,20 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
     return combined
 
 
-def sync_contacts(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None):
-    _sync_resource(api, tenant_id, get_contacts_from_xero, XeroType.CONTACTS, "Syncing contacts", "Synced contacts", modified_since=modified_since)
+def sync_contacts(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+    return _sync_resource(api, tenant_id, get_contacts_from_xero, XeroType.CONTACTS, "Syncing contacts", "Synced contacts", modified_since=modified_since)
 
 
-def sync_credit_notes(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None):
-    _sync_resource(api, tenant_id, get_credit_notes, XeroType.CREDIT_NOTES, "Syncing credit notes", "Synced credit notes", modified_since=modified_since)
+def sync_credit_notes(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+    return _sync_resource(api, tenant_id, get_credit_notes, XeroType.CREDIT_NOTES, "Syncing credit notes", "Synced credit notes", modified_since=modified_since)
 
 
-def sync_invoices(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None):
-    _sync_resource(api, tenant_id, get_invoices, XeroType.INVOICES, "Syncing invoices", "Synced invoices", modified_since=modified_since)
+def sync_invoices(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+    return _sync_resource(api, tenant_id, get_invoices, XeroType.INVOICES, "Syncing invoices", "Synced invoices", modified_since=modified_since)
 
 
-def sync_payments(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None):
-    _sync_resource(api, tenant_id, get_payments, XeroType.PAYMENTS, "Syncing payments", "Synced payments", modified_since=modified_since)
+def sync_payments(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+    return _sync_resource(api, tenant_id, get_payments, XeroType.PAYMENTS, "Syncing payments", "Synced payments", modified_since=modified_since)
 
 
 def check_load_required(tenant_id: str) -> bool:
@@ -215,8 +219,8 @@ def check_load_required(tenant_id: str) -> bool:
         return True # In case of failure, assume sync is required as a safe fallback
 
 
-def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantStatus.FREE):
-    """Mark Tenant sync state in DynamoDB"""
+def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantStatus.FREE, last_sync_time: Optional[int] = None) -> bool:
+    """Persist the tenant's status in DynamoDB and cache."""
     if not tenant_id:
         logger.error("Missing TenantID while marking sync state")
         return False
@@ -225,16 +229,16 @@ def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantSta
         update_expression = "SET TenantStatus = :tenant_status"
         expression_values = {":tenant_status": tenant_status}
 
-        if tenant_status == TenantStatus.FREE:
+        if last_sync_time is not None:
             update_expression += ", LastSyncTime = :last_sync_time"
-            expression_values[":last_sync_time"] = int(time.time() * 1000)
+            expression_values[":last_sync_time"] = last_sync_time
 
         tenant_data_table.update_item(
             Key={"TenantID": tenant_id},
             UpdateExpression=update_expression,
             ExpressionAttributeValues=expression_values,
         )
-        logger.info("Updated tenant sync state", tenant_id=tenant_id, tenant_status=tenant_status)
+        logger.info("Updated tenant sync state", tenant_id=tenant_id, tenant_status=tenant_status, last_sync_time=last_sync_time)
         cache_provider.set_tenant_status_cache(tenant_id, tenant_status)
         return True
     except ClientError:
@@ -248,9 +252,12 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: Optiona
     if operation_type != TenantStatus.LOADING and tenant_record:
         modified_since = _resolve_modified_since(tenant_record)
 
+    start_time_ms = int(time.time() * 1000)
     update_tenant_status(tenant_id, operation_type)
     api = get_xero_api_client(oauth_token)
+    all_ok = True
     for func in (sync_contacts, sync_credit_notes, sync_invoices, sync_payments):
-        func(api, tenant_id, modified_since=modified_since)
+        if not func(api, tenant_id, modified_since=modified_since):
+            all_ok = False
 
-    update_tenant_status(tenant_id, TenantStatus.FREE)
+    update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=start_time_ms if all_ok else None)

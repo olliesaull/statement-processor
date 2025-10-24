@@ -101,6 +101,10 @@ function toggleTenantSyncStatus(tenantId, syncing) {
   if (statusEl) {
     statusEl.classList.toggle("d-none", !syncing);
     statusEl.setAttribute("data-syncing", syncing ? "true" : "false");
+    const labelEl = statusEl.querySelector("span:last-child");
+    if (labelEl && !labelEl.textContent.trim()) {
+      labelEl.textContent = "Syncing";
+    }
   }
 }
 
