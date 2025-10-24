@@ -22,6 +22,7 @@ from xero_python.api_client import ApiClient  # type: ignore
 from xero_python.api_client.configuration import Configuration  # type: ignore
 from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 
+import cache_provider
 from config import (
     CLIENT_ID,
     CLIENT_SECRET,
@@ -35,6 +36,7 @@ from core.item_classification import guess_statement_item_type as classify_item_
 from core.models_comparison import CellComparison
 from core.textract_statement import run_textraction
 from core.transform import equal
+from tenant_data_repository import TenantDataRepository, TenantStatus
 
 # MIME/extension guards for uploads
 ALLOWED_EXTENSIONS = {".pdf", ".PDF"}
@@ -159,6 +161,41 @@ def raise_for_unauthorized(error: Exception) -> None:
             raise RedirectToLogin()
 
 
+def get_cached_tenant_status(tenant_id: str) -> Optional[TenantStatus]:
+    """Retrieve tenant status from cache, falling back to DynamoDB if missing."""
+    if not tenant_id:
+        return None
+
+    cached_value = cache_provider.cache.get(f"{tenant_id}_status") if cache_provider.cache else None
+    if cached_value:
+        try:
+            return TenantStatus(cached_value)
+        except ValueError:
+            return None
+
+    record = TenantDataRepository.get_item(tenant_id)
+    if not record:
+        return None
+
+    status = record.get("TenantStatus")
+    if isinstance(status, TenantStatus):
+        cache_provider.set_tenant_status_cache(tenant_id, status.value)
+        return status
+
+    if isinstance(status, str):
+        try:
+            status_enum = TenantStatus(status)
+        except ValueError:
+            logger.warning("Encountered unexpected tenant status value", tenant_id=tenant_id, status=status)
+            return None
+
+        cache_provider.set_tenant_status_cache(tenant_id, status_enum.value)
+        return status_enum
+
+    logger.warning("Tenant record missing status", tenant_id=tenant_id)
+    return None
+
+
 def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
     """Flask route decorator ensuring the user has an access token + tenant."""
     @wraps(f)
@@ -169,6 +206,25 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
             return redirect(url_for("login"))
 
         return f(*args, **kwargs)
+    return decorated_function
+
+
+def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
+    """
+    Redirect users away from routes while their active tenant is still loading.
+    Uses the in-process cache first and falls back to DynamoDB for safety.
+    """
+    @wraps(f)
+    def decorated_function(*args: Any, **kwargs: Any):
+        tenant_id = session.get("xero_tenant_id")
+        if tenant_id:
+            status = get_cached_tenant_status(tenant_id)
+            if status == TenantStatus.LOADING:
+                logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id)
+                return redirect(url_for("home"))
+
+        return f(*args, **kwargs)
+
     return decorated_function
 
 def route_handler_logging(function):

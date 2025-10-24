@@ -9,6 +9,7 @@ from typing import Any, Callable, Optional
 
 from botocore.exceptions import ClientError
 
+import cache_provider
 from config import S3_BUCKET_NAME, logger, s3_client, tenant_data_table
 from xero_repository import XeroType, get_contacts_from_xero, get_credit_notes, get_invoices, get_payments
 from utils import get_xero_api_client
@@ -148,6 +149,7 @@ def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantSta
             ExpressionAttributeValues=expression_values,
         )
         logger.info("Updated tenant sync state", tenant_id=tenant_id, tenant_status=tenant_status)
+        cache_provider.set_tenant_status_cache(tenant_id, tenant_status.value)
         return True
     except ClientError:
         logger.exception("Failed to update tenant sync state", tenant_id=tenant_id)

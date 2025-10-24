@@ -7,9 +7,20 @@ from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 import requests
-from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import (
+    Flask,
+    abort,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
+from flask_caching import Cache
 from openpyxl import Workbook
 
+import cache_provider
 from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
@@ -20,6 +31,7 @@ from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils import (
     StatementJSONNotFoundError,
     add_statement_to_table,
+    block_when_loading,
     build_right_rows,
     build_row_comparisons,
     fetch_json_statement,
@@ -50,6 +62,9 @@ from xero_repository import (
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(16))
+
+cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 0})
+cache_provider.set_cache(cache)
 
 # Mirror selected config values in Flask app config for convenience
 app.config["CLIENT_ID"] = CLIENT_ID
@@ -161,6 +176,7 @@ def ignore_favicon():
 @app.route("/upload-statements", methods=["GET", "POST"])
 @xero_token_required
 @route_handler_logging
+@block_when_loading
 def upload_statements():
     """Upload one or more PDF statements and register them for processing."""
     tenant_id = session.get("xero_tenant_id")
@@ -255,6 +271,7 @@ def upload_statements():
 @app.route("/statements")
 @xero_token_required
 @route_handler_logging
+@block_when_loading
 def statements():
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
@@ -272,6 +289,7 @@ def statements():
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @xero_token_required
 @route_handler_logging
+@block_when_loading
 def statement(statement_id: str):
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
@@ -644,6 +662,7 @@ def disconnect_tenant():
 @app.route("/configs", methods=["GET", "POST"])
 @xero_token_required
 @route_handler_logging
+@block_when_loading
 def configs():
     """View and edit contact-specific mapping configuration."""
     tenant_id = session.get("xero_tenant_id")
