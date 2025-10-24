@@ -15,8 +15,8 @@ from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
 from core.models import StatementItem
-from sync import check_sync_required, sync_data
-from tenant_data_repository import TenantDataRepository
+from sync import check_load_required, sync_data
+from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils import (
     StatementJSONNotFoundError,
     add_statement_to_table,
@@ -59,8 +59,6 @@ AUTH_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
 REDIRECT_URI = "https://cloudcathode.com/callback" if STAGE == "prod" else "http://localhost:8080/callback"
 
-# Lightweight background executor for non-blocking textraction after upload
-# Keep the pool small to avoid overwhelming Textract and our app.
 _executor = ThreadPoolExecutor(max_workers=2)
 
 
@@ -71,30 +69,30 @@ def _set_active_tenant(tenant_id: Optional[str]) -> None:
     if tenant_id and tenant_id in tenant_map:
         session["xero_tenant_id"] = tenant_id
         session["xero_tenant_name"] = tenant_map[tenant_id].get("tenantName")
-        if check_sync_required(tenant_id):
+        if check_load_required(tenant_id):
             oauth_token = session.get("xero_oauth2_token")
             if not oauth_token:
                 logger.warning("Skipping background sync; missing OAuth token", tenant_id=tenant_id)
             else:
-                _executor.submit(sync_data, tenant_id, oauth_token)
+                _executor.submit(sync_data, tenant_id, TenantStatus.LOADING, oauth_token)
     else:
         session.pop("xero_tenant_id", None)
         session.pop("xero_tenant_name", None)
 
 
-@app.route("/api/tenants/sync-status", methods=["GET"])
+@app.route("/api/tenant-statuses", methods=["GET"])
 @xero_token_required
-def tenant_sync_status():
+def tenant_status():
     """Return the list of tenant IDs currently syncing."""
     tenant_records = session.get("xero_tenants", []) or []
     tenant_ids = [t.get("tenantId") for t in tenant_records if isinstance(t, dict)]
     try:
-        syncing_ids = TenantDataRepository.get_syncing_tenants(tenant_ids)
+        tenant_statuses = TenantDataRepository.get_tenant_statuses(tenant_ids)
     except Exception as exc:
         logger.exception("Failed to load tenant sync status", tenant_ids=tenant_ids, error=exc)
         return jsonify({"error": "Unable to determine sync status"}), 500
 
-    return jsonify({"syncingTenants": syncing_ids}), 200
+    return jsonify(tenant_statuses), 200
 
 
 @app.route("/api/tenants/<tenant_id>/sync", methods=["POST"])
@@ -117,7 +115,7 @@ def trigger_tenant_sync(tenant_id: str):
         return jsonify({"error": "Missing OAuth token"}), 400
 
     try:
-        _executor.submit(sync_data, tenant_id, oauth_token)
+        _executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token) # TODO: Perhaps worth checking if there is row in DDB/files in S3
         logger.info("Manual tenant sync triggered", tenant_id=tenant_id)
         return jsonify({"started": True}), 202
     except Exception as exc:

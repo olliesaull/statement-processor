@@ -1,8 +1,15 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Dict, Iterable, Optional
+from enum import StrEnum
+from typing import Any, Dict, Iterable, Optional
 
 from config import tenant_data_table
+
+
+class TenantStatus(StrEnum):
+    FREE = "FREE"
+    SYNCING = "SYNCING"
+    LOADING = "LOADING"
 
 
 @dataclass(frozen=True)
@@ -10,6 +17,23 @@ class TenantDataRepository:
     """Repository wrapper around the TenantData DynamoDB table."""
 
     _table = tenant_data_table
+
+    @staticmethod
+    def _determine_status(item: Dict[str, Any]) -> TenantStatus:
+        """Extract a tenant status value from a DynamoDB record."""
+        raw_status = item.get("TenantStatus")
+
+        # TODO: Could be useful if _determine_status called elsewhere in code, if not delete later
+        if isinstance(raw_status, TenantStatus):
+            return raw_status
+
+        if isinstance(raw_status, str):
+            candidate = raw_status.strip().upper()
+            for status in TenantStatus:
+                if candidate == status.value:
+                    return status
+
+        return TenantStatus.FREE
 
     @classmethod
     def get_item(cls, tenant_id: str) -> Optional[Dict[str, object]]:
@@ -21,23 +45,23 @@ class TenantDataRepository:
         return response.get("Item")
 
     @classmethod
-    def get_syncing_tenants(cls, tenant_ids: Iterable[str], max_workers: int = 4) -> list[str]:
+    def get_tenant_statuses(cls, tenant_ids: Iterable[str], max_workers: int = 4) -> Dict[str, TenantStatus]:
         """
-        Fetch multiple tenant records concurrently and return those currently syncing.
+        Fetch multiple tenant records concurrently and return their status.
 
         Args:
             tenant_ids: Iterable of tenant IDs to inspect.
             max_workers: Maximum number of concurrent lookups.
 
         Returns:
-            List of tenant IDs where Syncing is truthy.
+            Mapping of tenant IDs to their current status.
         """
         unique_ids = {tid.strip() for tid in tenant_ids if tid and isinstance(tid, str)}
 
         if not unique_ids:
-            return []
+            return {}
 
-        syncing: list[str] = []
+        statuses: Dict[str, TenantStatus] = {tenant_id: TenantStatus.FREE for tenant_id in unique_ids}
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(cls.get_item, tenant_id): tenant_id for tenant_id in unique_ids}
@@ -47,10 +71,9 @@ class TenantDataRepository:
                     item = future.result()
                 except Exception:
                     # Swallow individual lookup failures; caller can retry if needed.
-                    # By not returning we assume syncing is False.
                     continue
 
-                if item and bool(item.get("Syncing")):
-                    syncing.append(tenant_id)
+                if item:
+                    statuses[tenant_id] = cls._determine_status(item)
 
-        return syncing
+        return statuses

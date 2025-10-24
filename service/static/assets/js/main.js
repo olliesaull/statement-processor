@@ -23,7 +23,7 @@ const INACTIVITY_TIME = 60000; // 60 seconds inactivity threshold
 
 function handleCheckSync() {
 	if (!isPolling) return;
-	callCheckSyncAPI()
+	callGetTenantStatusesAPI()
 	.then(data => {
 		updateSyncStatuses(data);
 	})
@@ -31,21 +31,30 @@ function handleCheckSync() {
 
 function updateSyncStatuses(data) {
   const syncingTenants = Array.isArray(data?.syncingTenants) ? data.syncingTenants : [];
+  const tenantStatuses = data && typeof data.tenantStatuses === "object" && data.tenantStatuses !== null ? data.tenantStatuses : {};
   const syncingSet = new Set(syncingTenants);
 
   document.querySelectorAll(".tenant-sync-status").forEach((statusEl) => {
     const tenantId = statusEl.dataset.tenantId;
+    const rawStatus = tenantId ? tenantStatuses[tenantId] : undefined;
     const isSyncing = tenantId && syncingSet.has(tenantId);
+    const isLoading = rawStatus === "LOADING";
+    const showStatus = isSyncing || isLoading;
 
-    statusEl.classList.toggle("d-none", !isSyncing);
+    statusEl.classList.toggle("d-none", !showStatus);
     statusEl.setAttribute("data-syncing", isSyncing ? "true" : "false");
+
+    const labelEl = statusEl.querySelector("span:last-child");
+    if (labelEl) {
+      labelEl.textContent = isLoading ? "Loading" : "Syncing";
+    }
 
     const row = tenantId ? document.getElementById(`row-${tenantId}`) : null;
     if (row) {
       const syncButton = row.querySelector(".sync-btn");
       if (syncButton) {
-        syncButton.disabled = !!isSyncing;
-        syncButton.classList.toggle("disabled", !!isSyncing);
+        syncButton.disabled = !!showStatus;
+        syncButton.classList.toggle("disabled", !!showStatus);
       }
     }
   });
@@ -116,9 +125,9 @@ const resetActivityTimer = () => {
 // #endregion
 
 // #region APIS
-async function callCheckSyncAPI() {
+async function callGetTenantStatusesAPI() {
 	const baseUrl = window.location.origin;
-    const response = await fetch(`${baseUrl}/api/tenants/sync-status`, {
+    const response = await fetch(`${baseUrl}/api/tenant-statuses`, {
 		method: 'GET', // Specify the request method
 		headers: {
 			'Content-Type': 'application/json', // Indicate that we're sending JSON data
@@ -134,6 +143,7 @@ async function callCheckSyncAPI() {
 		throw new Error('Network response was not ok');
 	}
 	const data = await response.json();
+  console.log(data)
 	return data;
 }
 // #endregion
