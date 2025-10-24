@@ -3,7 +3,7 @@
 import json
 import os
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Dict, Iterable, List, Optional
 
 from flask import session
@@ -18,7 +18,7 @@ STAGE = os.getenv("STAGE")
 LOCAL_DATA_DIR = "./tmp/data" if STAGE == "dev" else "/tmp/data"
 
 
-class XeroType(Enum):
+class XeroType(StrEnum):
     INVOICES = "invoices"
     CREDIT_NOTES = "credit_notes"
     PAYMENTS = "payments"
@@ -41,14 +41,14 @@ def load_local_dataset(resource: XeroType, tenant_id: Optional[str] = None) -> O
         logger.info("Skipping local dataset load; tenant not selected", resource=resource)
         return None
 
-    data_path = os.path.join(LOCAL_DATA_DIR, tenant_id, f"{resource.value}.json")
+    data_path = os.path.join(LOCAL_DATA_DIR, tenant_id, f"{resource}.json")
 
     try:
         with open(data_path, encoding="utf-8") as handle:
             return json.load(handle)
     except FileNotFoundError:
         logger.info("Local dataset not found", tenant_id=tenant_id, resource=resource, path=data_path)
-        s3_key = f"{tenant_id}/data/{resource.value}.json"
+        s3_key = f"{tenant_id}/data/{resource}.json"
         try:
             os.makedirs(os.path.dirname(data_path), exist_ok=True)
             s3_client.download_file(S3_BUCKET_NAME, s3_key, data_path)

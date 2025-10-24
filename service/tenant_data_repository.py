@@ -30,7 +30,7 @@ class TenantDataRepository:
         if isinstance(raw_status, str):
             candidate = raw_status.strip().upper()
             for status in TenantStatus:
-                if candidate == status.value:
+                if candidate == status:
                     return status
 
         return TenantStatus.FREE

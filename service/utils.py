@@ -179,7 +179,7 @@ def get_cached_tenant_status(tenant_id: str) -> Optional[TenantStatus]:
 
     status = record.get("TenantStatus")
     if isinstance(status, TenantStatus):
-        cache_provider.set_tenant_status_cache(tenant_id, status.value)
+        cache_provider.set_tenant_status_cache(tenant_id, status)
         return status
 
     if isinstance(status, str):
@@ -189,7 +189,7 @@ def get_cached_tenant_status(tenant_id: str) -> Optional[TenantStatus]:
             logger.warning("Encountered unexpected tenant status value", tenant_id=tenant_id, status=status)
             return None
 
-        cache_provider.set_tenant_status_cache(tenant_id, status_enum.value)
+        cache_provider.set_tenant_status_cache(tenant_id, status_enum)
         return status_enum
 
     logger.warning("Tenant record missing status", tenant_id=tenant_id)

@@ -5,7 +5,7 @@ import os
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Dict
 
 from botocore.exceptions import ClientError
 
@@ -26,18 +26,36 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, resour
 
     logger.info(start_message, tenant_id=tenant_id)
 
-    filename = f"{resource.value}.json"
+    filename = f"{resource}.json"
 
     try:
-        data = fetcher(tenant_id, api=api, modified_since=modified_since)
-
         local_file = f"{LOCAL_DATA_DIR}/{tenant_id}/{filename}"
         s3_file = f"{tenant_id}/data/{filename}"
+
+        # Fetch the latest dataset from Xero.
+        data = fetcher(tenant_id, api=api, modified_since=modified_since)
+
+        existing_payload = None
+        if os.path.exists(local_file):
+            try:
+                with open(local_file, encoding="utf-8") as existing_file:
+                    existing_payload = json.load(existing_file)
+            except (OSError, json.JSONDecodeError, TypeError) as exc:
+                logger.warning("Failed to load existing dataset", tenant_id=tenant_id, resource=resource, error=str(exc))
+
+        # Merge incremental results with any cached data so we retain the full dataset.
+        if modified_since:
+            payload = _merge_resource_payload(resource, existing_payload, data)
+        else:
+            payload = data if data is not None else existing_payload
+
+        if payload is None:
+            payload = {} if resource == XeroType.INVOICES else []
 
         os.makedirs(os.path.dirname(local_file), exist_ok=True)
 
         with open(local_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False, default=str)
+            json.dump(payload, f, indent=4, ensure_ascii=False, default=str)
 
         s3_client.upload_file(local_file, S3_BUCKET_NAME, s3_file)
 
@@ -80,6 +98,74 @@ def _resolve_modified_since(record: Optional[dict[str, Any]]) -> Optional[dateti
         return None
 
 
+def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> Any:
+    """
+    Combine newly fetched records with any previously cached dataset.
+    When we only pull a delta, this keeps the local/S3 files authoritative.
+    """
+    if delta is None: # Nothing changed
+        return existing
+    if existing is None: # Only new data exists (initial load)
+        return delta
+    if isinstance(delta, (list, dict)) and not delta:
+        return existing
+
+    if resource == XeroType.INVOICES:
+        if not isinstance(existing, dict):
+            existing = {}
+        if not isinstance(delta, dict):
+            return existing
+
+        merged = existing.copy()
+        merged.update(delta)
+        return merged
+
+    key_fields = {
+        XeroType.CONTACTS: "contact_id",
+        XeroType.CREDIT_NOTES: "credit_note_id",
+        XeroType.PAYMENTS: "payment_id",
+    }
+    key = key_fields.get(resource)
+    if key is None:
+        return delta
+
+    existing_list = existing if isinstance(existing, list) else []
+    delta_list = delta if isinstance(delta, list) else []
+    if not existing_list:
+        return delta_list
+    if not delta_list:
+        return existing_list
+
+    merged: Dict[str, Dict[str, Any]] = {}
+    extras: list[Dict[str, Any]] = []
+
+    for item in existing_list:
+        if isinstance(item, dict) and item.get(key):
+            merged[item[key]] = item
+        elif isinstance(item, dict):
+            extras.append(item)
+
+    for item in delta_list:
+        if not isinstance(item, dict):
+            continue
+        identifier = item.get(key)
+        if identifier:
+            merged[identifier] = item
+        else:
+            extras.append(item)
+
+    combined = list(merged.values()) + extras
+
+    if resource == XeroType.CONTACTS:
+        combined.sort(key=lambda c: (c.get("name") or "").casefold())
+    elif resource == XeroType.CREDIT_NOTES:
+        combined.sort(key=lambda note: (note.get("credit_note_id") or ""))
+    elif resource == XeroType.PAYMENTS:
+        combined.sort(key=lambda payment: (payment.get("payment_id") or ""))
+
+    return combined
+
+
 def sync_contacts(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None):
     _sync_resource(api, tenant_id, get_contacts_from_xero, XeroType.CONTACTS, "Syncing contacts", "Synced contacts", modified_since=modified_since)
 
@@ -111,7 +197,7 @@ def check_load_required(tenant_id: str) -> bool:
                 tenant_data_table.put_item(
                     Item={
                         "TenantID": tenant_id,
-                        "TenantStatus": TenantStatus.LOADING.value,
+                        "TenantStatus": TenantStatus.LOADING,
                     },
                     ConditionExpression="attribute_not_exists(TenantID)",
                 )
@@ -137,7 +223,7 @@ def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantSta
 
     try:
         update_expression = "SET TenantStatus = :tenant_status"
-        expression_values = {":tenant_status": tenant_status.value}
+        expression_values = {":tenant_status": tenant_status}
 
         if tenant_status == TenantStatus.FREE:
             update_expression += ", LastSyncTime = :last_sync_time"
@@ -149,7 +235,7 @@ def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantSta
             ExpressionAttributeValues=expression_values,
         )
         logger.info("Updated tenant sync state", tenant_id=tenant_id, tenant_status=tenant_status)
-        cache_provider.set_tenant_status_cache(tenant_id, tenant_status.value)
+        cache_provider.set_tenant_status_cache(tenant_id, tenant_status)
         return True
     except ClientError:
         logger.exception("Failed to update tenant sync state", tenant_id=tenant_id)
