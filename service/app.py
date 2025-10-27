@@ -18,6 +18,7 @@ from flask import (
     url_for,
 )
 from flask_caching import Cache
+from werkzeug.utils import secure_filename
 from openpyxl import Workbook
 
 import cache_provider
@@ -229,7 +230,7 @@ def upload_statements():
                 try:
                     get_contact_config(tenant_id, contact_id)
                 except KeyError:
-                    logger.exception("Upload blocked; contact config missing", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=f.filename)
+                    logger.warning("Upload blocked; contact config missing", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=f.filename)
                     error_messages.append(f"Contact '{contact_name}' does not have a statement config yet. Please configure it before uploading.")
                     continue
                 except Exception as exc:
@@ -517,8 +518,14 @@ def statement(statement_id: str):
             excel_payload,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-        response.headers["Content-Disposition"] = f"attachment; filename=statement_{statement_id}.xlsx"
-        logger.info("Statement Excel generated", tenant_id=tenant_id, statement_id=statement_id, rows=row_count)
+        download_name = f"statement_{statement_id}.xlsx"
+        original_name = str(record.get("OriginalStatementFilename") or "").strip()
+        if original_name:
+            base, _ = os.path.splitext(original_name)
+            sanitized_base = secure_filename(base) or f"statement_{statement_id}"
+            download_name = f"{sanitized_base}_export.xlsx"
+        response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
+        logger.info("Statement Excel generated", tenant_id=tenant_id, statement_id=statement_id, rows=row_count, excel_filename=download_name)
         return response
 
     item_status_map = get_statement_item_status_map(tenant_id, statement_id)

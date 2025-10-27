@@ -25,15 +25,11 @@ def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
 
     item = resp.get("Item")
     if not item or attr_name not in item:
-        raise KeyError(
-            f"Config not found for TenantID={tenant_id}, ContactID={contact_id}"
-        )
+        raise KeyError(f"Config not found for TenantID={tenant_id}, ContactID={contact_id}")
 
     cfg = item[attr_name]
     if not isinstance(cfg, dict):
-        raise TypeError(
-            f"Config attribute '{attr_name}' is not a dict: {type(cfg)}"
-        )
+        raise TypeError(f"Config attribute '{attr_name}' is not a dict: {type(cfg)}")
 
     return cfg
 
