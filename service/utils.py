@@ -209,6 +209,22 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
     return decorated_function
 
 
+def active_tenant_required(message: str = "Please select a tenant before continuing.", redirect_endpoint: str = "tenant_management", flash_key: str = "tenant_error") -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Ensure the user has an active tenant selected; otherwise redirect with a message."""
+    def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(f)
+        def wrapped(*args: Any, **kwargs: Any):
+            tenant_id = session.get("xero_tenant_id")
+            if tenant_id:
+                return f(*args, **kwargs)
+            session[flash_key] = message
+            return redirect(url_for(redirect_endpoint))
+
+        return wrapped
+
+    return decorator
+
+
 def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
     """
     Redirect users away from routes while their active tenant is still loading.
@@ -542,13 +558,7 @@ def textract_in_background(tenant_id: str, contact_id: Optional[str], pdf_key: s
     """
     try:
         # This will no-op if JSON already exists; otherwise runs Textract and uploads JSON
-        get_or_create_json_statement(
-            tenant_id=tenant_id,
-            contact_id=contact_id or "",
-            bucket=S3_BUCKET_NAME,
-            pdf_key=pdf_key,
-            json_key=json_key,
-        )
+        get_or_create_json_statement(tenant_id=tenant_id, contact_id=contact_id or "", bucket=S3_BUCKET_NAME, pdf_key=pdf_key, json_key=json_key)
         logger.info("[bg] Textraction complete", tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_key, json_key=json_key)
     except Exception as exc:
         logger.exception(
