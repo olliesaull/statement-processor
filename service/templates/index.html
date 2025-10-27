@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 
 {% block content %}
+{% if not session.get('access_token') or not session.get('xero_tenant_id') %}
 <div class="py-4">
   <p class="mb-3">Login with Xero to start processing statements.</p>
   <a class="btn btn-primary" href="{{ url_for('login') }}">Login with Xero</a>
 </div>
+{% endif %}
 {% endblock %}

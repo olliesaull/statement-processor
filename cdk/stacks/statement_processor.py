@@ -27,7 +27,7 @@ class StatementProcessorStack(Stack):
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
-        STATEMENTS_S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
+        S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
 
         #region ---------- ParameterStore ----------
 
@@ -91,9 +91,9 @@ class StatementProcessorStack(Stack):
 
         #region ---------- S3 ----------
 
-        statements_bucket = s3.Bucket(
-            self, STATEMENTS_S3_BUCKET_NAME,
-            bucket_name=STATEMENTS_S3_BUCKET_NAME,
+        s3_bucket = s3.Bucket(
+            self, S3_BUCKET_NAME,
+            bucket_name=S3_BUCKET_NAME,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
 
@@ -122,7 +122,7 @@ class StatementProcessorStack(Stack):
         tenant_statements_table.grant_read_write_data(statement_processor_instance_role)
         tenant_contacts_config_table.grant_read_write_data(statement_processor_instance_role)
         tenant_data_table.grant_read_write_data(statement_processor_instance_role)
-        statements_bucket.grant_read_write(statement_processor_instance_role)
+        s3_bucket.grant_read_write(statement_processor_instance_role)
 
         apprunner_asset = DockerImageAsset(self, "AppRunnerImage", directory="../service/")
         web = apprunner_alpha.Service(
@@ -142,9 +142,10 @@ class StatementProcessorStack(Stack):
                         "LOG_LEVEL": "DEBUG",
                         "XERO_CLIENT_ID_PATH": "/StatementProcessor/XERO_CLIENT_ID",
                         "XERO_CLIENT_SECRET_PATH": "/StatementProcessor/XERO_CLIENT_SECRET",
-                        "S3_BUCKET_NAME": f"dexero-statement-processor-{stage}",
+                        "S3_BUCKET_NAME": S3_BUCKET_NAME,
                         "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
                         "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
+                        "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME
                     },
                 )
             ),
