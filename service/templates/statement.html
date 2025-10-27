@@ -180,6 +180,12 @@
               <button type="submit" class="btn btn-success text-nowrap px-3 py-1">Complete statement</button>
             </form>
           {% endif %}
+          <form method="post"
+                action="{{ url_for('delete_statement', statement_id=statement_id) }}"
+                class="mb-0"
+                onsubmit="return confirm('Delete this statement? This cannot be undone.');">
+            <button type="submit" class="btn btn-outline-danger text-nowrap px-3 py-1">Delete statement</button>
+          </form>
         </div>
       </div>
     {% endif %}

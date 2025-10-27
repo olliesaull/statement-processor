@@ -45,6 +45,7 @@ from utils import (
     mark_statement_completed,
     match_invoices_to_statement_items,
     prepare_display_mappings,
+    delete_statement_data,
     route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
@@ -294,6 +295,26 @@ def statements():
     logger.info("Rendering statements", tenant_id=tenant_id, view=view, statements=len(statement_rows))
 
     return render_template("statements.html", statements=statement_rows, show_completed=show_completed, message=message)
+
+
+@app.route("/statement/<statement_id>/delete", methods=["POST"])
+@xero_token_required
+@route_handler_logging
+@block_when_loading
+def delete_statement(statement_id: str):
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        session["tenant_error"] = "Please select a tenant before deleting statements."
+        return redirect(url_for("home"))
+
+    try:
+        delete_statement_data(tenant_id, statement_id)
+        session["statements_message"] = "Statement deleted."
+    except Exception as exc:
+        logger.exception("Failed to delete statement", tenant_id=tenant_id, statement_id=statement_id, error=exc)
+        session["tenant_error"] = "Unable to delete the statement. Please try again."
+
+    return redirect(url_for("statements"))
 
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @xero_token_required

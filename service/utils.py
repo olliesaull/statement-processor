@@ -367,6 +367,57 @@ def set_all_statement_items_completed(tenant_id: str, statement_id: str, complet
         set_statement_item_completed(tenant_id, statement_item_id, completed)
 
 
+def delete_statement_data(tenant_id: str, statement_id: str) -> None:
+    """Delete statement header, items, and associated S3 artifacts."""
+    if not tenant_id or not statement_id:
+        return
+
+    logger.info("Deleting statement data", tenant_id=tenant_id, statement_id=statement_id)
+
+    # Delete statement header and statement items linked to this statement
+    item_prefix = f"{statement_id}"
+    query_kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("StatementID").begins_with(item_prefix),
+        "ProjectionExpression": "#sid",
+        "ExpressionAttributeNames": {"#sid": "StatementID"},
+    }
+
+    deleted_items = 0
+    while True:
+        resp = tenant_statements_table.query(**query_kwargs)
+        items = resp.get("Items", []) or []
+        if not items:
+            break
+        with tenant_statements_table.batch_writer() as batch:
+            for item in items:
+                sort_key = item.get("StatementID")
+                if not sort_key:
+                    continue
+                batch.delete_item(Key={"TenantID": tenant_id, "StatementID": sort_key})
+                deleted_items += 1
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        query_kwargs["ExclusiveStartKey"] = lek
+
+    # Remove S3 artifacts
+    s3_keys = [
+        f"{tenant_id}/statements/{statement_id}.pdf",
+        f"{tenant_id}/statements/{statement_id}.json",
+    ]
+    for key in s3_keys:
+        try:
+            s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=key)
+            logger.info("Deleted statement S3 object", tenant_id=tenant_id, statement_id=statement_id, s3_key=key)
+        except s3_client.exceptions.NoSuchKey:
+            logger.info("Statement S3 object already missing", tenant_id=tenant_id, statement_id=statement_id, s3_key=key)
+        except Exception as exc:
+            logger.exception("Failed to delete statement S3 object", tenant_id=tenant_id, statement_id=statement_id, s3_key=key, error=exc)
+            raise
+
+    logger.info("Statement deletion complete", tenant_id=tenant_id, statement_id=statement_id, items_deleted=deleted_items, s3_objects=len(s3_keys))
+
+
 def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
     item = {
         "TenantID": tenant_id,
