@@ -249,9 +249,6 @@ def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[d
             for note in batch:
                 contact = getattr(note, "contact", None)
 
-                total = getattr(note, "total", None)
-                remaining_credit = getattr(note, "remaining_credit", None)
-
                 if contact:
                     _contact_id = getattr(contact, "contact_id", None)
                     contact_name = getattr(contact, "name", None)
@@ -267,9 +264,9 @@ def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[d
                         "date": fmt_date(getattr(note, "date", None)),
                         "due_date": fmt_date(getattr(note, "due_date", None)),
                         "reference": getattr(note, "reference", None),
-                        "total": remaining_credit if remaining_credit is not None else total,
+                        "total": getattr(note, "total", None),
                         "amount_credited": getattr(note, "amount_credited", None),
-                        "remaining_credit": remaining_credit,
+                        "remaining_credit": getattr(note, "remaining_credit", None),
                         "contact_id": _contact_id,
                         "contact_name": contact_name,
                     }

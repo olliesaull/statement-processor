@@ -26,4 +26,6 @@ EXAMPLE_CONFIG: Dict[str, str | List[str]] = {
     "number": "reference",
     "date_format": "YYYY-MM-DD",
     "total": ["debit", "credit"],
+    "decimal_separator": ".",
+    "thousands_separator": ",",
 }

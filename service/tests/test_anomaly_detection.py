@@ -18,7 +18,6 @@ def _make_statement_item(
         "due_date": due_date,
         "number": number,
         "reference": reference,
-        "date_format": "DD/MM/YYYY",
         "raw": raw or {"description": f"{reference} {number}"},
     }
 

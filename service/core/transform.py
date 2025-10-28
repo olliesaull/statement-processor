@@ -316,38 +316,45 @@ def table_to_json(
     statement_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Produce canonical dict (validated by Pydantic)."""
-    map_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
+    contact_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
 
     # Support both nested (statement_items dict), legacy (list with one dict),
     # and flattened (template keys at root) config shapes
-    if isinstance(map_cfg, dict):
-        si = map_cfg.get("statement_items")
+    template_date_format: Optional[str] = None
+    if isinstance(contact_cfg, dict):
+        si = contact_cfg.get("statement_items")
         if isinstance(si, dict):
             items_template = deepcopy(si)
         elif isinstance(si, list) and si:
             items_template = deepcopy(si[0]) if isinstance(si[0], dict) else {}
         else:
             # Flattened/root form
-            items_template = deepcopy(map_cfg)
+            items_template = deepcopy(contact_cfg)
     else:
         items_template = {}
+
+    template_date_format = items_template.get("date_format") if isinstance(items_template, dict) else None
+
+    # Drop contact-level selectors so rows only carry line-item data.
+    items_template.pop("date_format", None)
+    items_template.pop("decimal_separator", None)
+    items_template.pop("thousands_separator", None)
 
     # build mapping config
     simple_map: Dict[str, str] = {}
     raw_map: Dict[str, str] = {}
     date_format = None
     # Use explicit date_format from config (preferred)
-    if isinstance(map_cfg, dict):
-        date_format = map_cfg.get("date_format")
-    else:
-        date_format = None
+    if isinstance(contact_cfg, dict):
+        date_format = contact_cfg.get("date_format")
+        if not date_format:
+            date_format = template_date_format
     if not date_format:
         raise ValueError("date_format must be configured for this contact")
     # Limit simple fields to those supported by StatementItem (exclude special handled keys)
     # Exclude 'date_format' so it is never treated as a header mapping.
     allowed_fields = set(StatementItem.model_fields.keys()) - {
         "raw",
-        "date_format",
         "statement_item_id",
         "item_type",
     }
@@ -462,9 +469,6 @@ def table_to_json(
 
             row_obj: Dict[str, Any] = deepcopy(items_template)
             row_obj.pop("statement_item_id", None)
-
-            # Surface the configured date format explicitly for downstream consumers
-            row_obj["date_format"] = date_format
 
             # simple fields
             extracted_simple: Dict[str, Any] = {}

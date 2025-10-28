@@ -238,7 +238,7 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
             if status == TenantStatus.LOADING:
                 logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id)
                 session["tenant_error"] = "Please wait for the initial load to finish before navigating away."
-                return redirect(url_for("home"))
+                return redirect(url_for("tenant_management"))
 
         return f(*args, **kwargs)
 
@@ -577,31 +577,52 @@ def textract_in_background(tenant_id: str, contact_id: Optional[str], pdf_key: s
 _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
 
 
-def _to_decimal(x: Any) -> Optional[Decimal]:
+def _normalize_separators(value: Any, decimal_separator: Optional[str] = None, thousands_separator: Optional[str] = None) -> Optional[str]:
+    """Normalize a raw numeric string using configured separators."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        return str(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    cleaned = _NON_NUMERIC_RE.sub("", text)
+
+    dec = decimal_separator or "."
+    thou = thousands_separator if thousands_separator is not None else ","
+
+    if thou and thou != dec:
+        cleaned = cleaned.replace(thou, "")
+
+    if dec and dec != ".":
+        cleaned = cleaned.replace(dec, ".")
+
+    return cleaned
+
+
+def _to_decimal(x: Any, *, decimal_separator: Optional[str] = None, thousands_separator: Optional[str] = None) -> Optional[Decimal]:
     if x is None or x == "":
         return None
-    if isinstance(x, (int, float, Decimal)):
-        try:
-            return Decimal(str(x))
-        except InvalidOperation:
-            return None
-    s = str(x).strip()
-    if not s:
+    normalized = _normalize_separators(x, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
+    if normalized is None:
+        if isinstance(x, str) and x.strip():
+            logger.warning("Unable to normalize numeric value", raw_value=x, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
         return None
-    # strip currency symbols/letters; keep digits . , -
-    s = _NON_NUMERIC_RE.sub("", s).replace(",", "")
     try:
-        return Decimal(s)
+        return Decimal(normalized)
     except InvalidOperation:
+        logger.warning("Unable to parse numeric value", raw_value=x, normalized_value=normalized, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
         return None
 
 
-def format_money(x: Any) -> str:
+def format_money(x: Any, *, decimal_separator: Optional[str] = None, thousands_separator: Optional[str] = None) -> str:
     """Format a number with thousands separators and 2 decimals.
 
     Returns empty string for empty input; returns original string if not numeric.
     """
-    d = _to_decimal(x)
+    d = _to_decimal(x, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
     if d is None:
         return "" if x in (None, "") else str(x)
     return f"{d:,.2f}"
@@ -636,6 +657,31 @@ def get_date_format_from_config(contact_config: Dict[str, Any]) -> Optional[str]
 
     fmt = contact_config.get("date_format")
     return str(fmt) if fmt else None
+
+
+_ALLOWED_DECIMAL_SEPARATORS = {".", ","}
+_ALLOWED_THOUSANDS_SEPARATORS = {",", ".", " ", "'", ""}
+_DEFAULT_DECIMAL_SEPARATOR = "."
+_DEFAULT_THOUSANDS_SEPARATOR = ","
+
+
+def get_number_separators_from_config(contact_config: Dict[str, Any]) -> Tuple[str, str]:
+    """Return (decimal_separator, thousands_separator) with sensible defaults."""
+    if not isinstance(contact_config, dict):
+        return _DEFAULT_DECIMAL_SEPARATOR, _DEFAULT_THOUSANDS_SEPARATOR
+
+    dec_raw = contact_config.get("decimal_separator")
+    thou_raw = contact_config.get("thousands_separator")
+
+    dec = str(dec_raw).strip() if isinstance(dec_raw, str) else dec_raw
+    thou = str(thou_raw) if isinstance(thou_raw, str) else thou_raw
+
+    if dec not in _ALLOWED_DECIMAL_SEPARATORS:
+        dec = _DEFAULT_DECIMAL_SEPARATOR
+    if thou not in _ALLOWED_THOUSANDS_SEPARATORS:
+        thou = _DEFAULT_THOUSANDS_SEPARATOR
+
+    return dec or _DEFAULT_DECIMAL_SEPARATOR, thou if thou is not None else _DEFAULT_THOUSANDS_SEPARATOR
 
 
 def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
@@ -696,6 +742,7 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     # Convert raw rows into dicts filtered by display headers, normalizing date fields for display
     rows_by_header: List[Dict[str, str]] = []
     date_fmt = get_date_format_from_config(contact_config)
+    dec_sep, thou_sep = get_number_separators_from_config(contact_config)
     numeric_fields = {"total"}
     for it in items:
         raw = it.get("raw", {}) if isinstance(it, dict) else {}
@@ -712,7 +759,7 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
                     else:
                         v = dt.strftime("%Y-%m-%d")
             elif canon in numeric_fields:
-                v = format_money(v)
+                v = format_money(v, decimal_separator=dec_sep, thousands_separator=thou_sep)
             row[h] = v
         rows_by_header.append(row)
 
@@ -862,6 +909,8 @@ def build_right_rows(
     matched_map: Dict[str, Dict],
     item_number_header: Optional[str],
     date_format: Optional[str] = None,
+    decimal_separator: Optional[str] = None,
+    thousands_separator: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """
     Using the matched map, build the right-hand table rows with values from
@@ -888,7 +937,15 @@ def build_right_rows(
                 # Only populate the headers that have a value on the statement side
                 left_val = r.get(h)
                 if left_val is not None and str(left_val).strip():
-                    row_right[h] = format_money(inv_total) if inv_total is not None else ""
+                    left_dec = _to_decimal(
+                        left_val,
+                        decimal_separator=decimal_separator,
+                        thousands_separator=thousands_separator,
+                    )
+                    if left_dec is not None and left_dec == Decimal(0):
+                        row_right[h] = format_money(0)
+                    else:
+                        row_right[h] = format_money(inv_total) if inv_total is not None else ""
                 else:
                     row_right[h] = ""
             elif invoice_field in {"due_date", "date"}:

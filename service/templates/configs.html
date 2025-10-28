@@ -72,6 +72,17 @@
               </table>
               {% endif %}
               <p>Due Date is empty as it is not present in the statement.</p>
+              <div class="mt-3">
+                <h3 class="h6">Formatting used in this example</h3>
+                <dl class="row small mb-0">
+                  <dt class="col-sm-6">Date format</dt>
+                  <dd class="col-sm-6"><code>{{ example_date_format or 'Not set' }}</code></dd>
+                  <dt class="col-sm-6">Decimal separator</dt>
+                  <dd class="col-sm-6">{{ decimal_separator_labels.get(example_decimal_separator, example_decimal_separator or 'Not set') }}</dd>
+                  <dt class="col-sm-6">Thousands separator</dt>
+                  <dd class="col-sm-6">{{ thousands_separator_labels.get(example_thousands_separator, example_thousands_separator or 'Not set') }}</dd>
+                </dl>
+              </div>
             </div>
           </div>
         </div>
@@ -159,6 +170,36 @@
           {% endfor %}
         </tbody>
       </table>
+    </div>
+
+    <div class="mt-4">
+      <h2 class="h5">Formatting</h2>
+      <p class="text-muted small mb-3">Tell us how this supplier prints dates and numbers so we can parse the statement correctly.</p>
+      <div class="row g-3">
+        <div class="col-md-6 col-lg-4">
+          <label for="dateFormat" class="form-label">Date format</label>
+          <input type="text" id="dateFormat" name="date_format" class="form-control" value="{{ date_format }}" placeholder="e.g. DD/MM/YYYY">
+          <div class="form-text">{{ field_descriptions.get('date_format') }}</div>
+        </div>
+        <div class="col-md-6 col-lg-4">
+          <label for="decimalSeparator" class="form-label">Decimal separator</label>
+          <select id="decimalSeparator" name="decimal_separator" class="form-select">
+            {% for value, label in decimal_separator_options %}
+            <option value="{{ value }}" {% if decimal_separator == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Choose the character that separates the decimal portion of the number.</div>
+        </div>
+        <div class="col-md-6 col-lg-4">
+          <label for="thousandsSeparator" class="form-label">Thousands separator</label>
+          <select id="thousandsSeparator" name="thousands_separator" class="form-select">
+            {% for value, label in thousands_separator_options %}
+            <option value="{{ value }}" {% if thousands_separator == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Select "None" if large numbers are printed without separators.</div>
+        </div>
+      </div>
     </div>
 
     <div class="mt-4">

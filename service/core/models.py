@@ -14,7 +14,6 @@ class StatementItem(BaseModel):
     item_type: str = "invoice"
     due_date: Optional[str] = ""
     reference: Optional[str] = ""
-    date_format: str = ""
     raw: dict = Field(default_factory=dict)
 
     # Optional: coerce numeric-like strings for known numeric fields

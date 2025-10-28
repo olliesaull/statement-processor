@@ -38,6 +38,7 @@ from utils import (
     fetch_json_statement,
     get_completed_statements,
     get_date_format_from_config,
+    get_number_separators_from_config,
     get_incomplete_statements,
     get_statement_item_status_map,
     get_statement_record,
@@ -78,6 +79,21 @@ TOKEN_URL = "https://identity.xero.com/connect/token"
 REDIRECT_URI = "https://cloudcathode.com/callback" if STAGE == "prod" else "http://localhost:8080/callback"
 
 _executor = ThreadPoolExecutor(max_workers=2)
+
+
+DEFAULT_DECIMAL_SEPARATOR = "."
+DEFAULT_THOUSANDS_SEPARATOR = ","
+DECIMAL_SEPARATOR_OPTIONS = [
+    (".", "Dot (.)"),
+    (",", "Comma (,)"),
+]
+THOUSANDS_SEPARATOR_OPTIONS = [
+    ("", "None"),
+    (",", "Comma (,)"),
+    (".", "Dot (.)"),
+    (" ", "Space ( )"),
+    ("'", "Apostrophe (')"),
+]
 
 
 def _trigger_initial_sync_if_required(tenant_id: Optional[str]) -> None:
@@ -375,12 +391,7 @@ def statement(statement_id: str):
     contact_id = record.get("ContactID")
     is_completed = str(record.get("Completed", "")).lower() == "true"
     try:
-        data, _ = fetch_json_statement(
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            bucket=S3_BUCKET_NAME,
-            json_key=json_statement_key,
-        )
+        data, _ = fetch_json_statement(tenant_id=tenant_id, contact_id=contact_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
     except StatementJSONNotFoundError:
         logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
         return render_template(
@@ -403,6 +414,7 @@ def statement(statement_id: str):
     # 1) Parse display configuration and left-side rows
     items = data.get("statement_items", []) or []
     contact_config = get_contact_config(tenant_id, contact_id)
+    decimal_sep, thousands_sep = get_number_separators_from_config(contact_config)
     display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, contact_config)
 
     # 2) For each row, guess type (invoice/credit note/payment); fetch the needed doc sets
@@ -459,6 +471,8 @@ def statement(statement_id: str):
         matched_map=matched_invoice_to_statement_item,
         item_number_header=item_number_header,
         date_format=date_fmt,
+        decimal_separator=decimal_sep,
+        thousands_separator=thousands_sep,
     )
 
     # 4) Compare LEFT (statement) vs RIGHT (Xero) for row highlighting
@@ -499,9 +513,7 @@ def statement(statement_id: str):
             left_row = rows_by_header[idx] if idx < len(rows_by_header) else {}
             right_row = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
 
-            row_values: List[Any] = [
-                item_types[idx] if idx < len(item_types) else ""
-            ]
+            row_values: List[Any] = [item_types[idx] if idx < len(item_types) else ""]
             for src_header, label in header_labels:
                 left_value = left_row.get(src_header, "") if isinstance(left_row, dict) else ""
                 row_values.append("" if left_value is None else left_value)
@@ -526,10 +538,7 @@ def statement(statement_id: str):
         excel_payload = output.getvalue()
         output.close()
 
-        response = app.response_class(
-            excel_payload,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        response = app.response_class(excel_payload, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         download_name = f"statement_{statement_id}.xlsx"
         original_name = str(record.get("OriginalStatementFilename") or "").strip()
         if original_name:
@@ -703,6 +712,20 @@ def configs():
     mapping_rows: List[Dict[str, Any]] = []  # {field, values:list[str], is_multi:bool}
     message: Optional[str] = None
     error: Optional[str] = None
+    selected_decimal_separator: str = DEFAULT_DECIMAL_SEPARATOR
+    selected_thousands_separator: str = DEFAULT_THOUSANDS_SEPARATOR
+    selected_date_format: str = ""
+
+    # Normalise dropdown values so we only persist supported separators.
+    def _normalize_decimal_separator(value: Optional[str]) -> str:
+        if value in {opt[0] for opt in DECIMAL_SEPARATOR_OPTIONS}:
+            return value or DEFAULT_DECIMAL_SEPARATOR
+        return DEFAULT_DECIMAL_SEPARATOR
+
+    def _normalize_thousands_separator(value: Optional[str]) -> str:
+        if value in {opt[0] for opt in THOUSANDS_SEPARATOR_OPTIONS}:
+            return value if value is not None else DEFAULT_THOUSANDS_SEPARATOR
+        return DEFAULT_THOUSANDS_SEPARATOR
 
     def _build_rows(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Build table rows for canonical fields using existing config values."""
@@ -711,9 +734,11 @@ def configs():
         nested = nested if isinstance(nested, dict) else {}
         flat: Dict[str, Any] = {}
         flat.update(nested)
+        allowed_keys = set(StatementItem.model_fields.keys())
+        disallowed = {"raw", "statement_item_id"}
         if isinstance(cfg, dict):
             for k, v in cfg.items():
-                if k in StatementItem.model_fields and k not in {"raw", "statement_item_id"}:
+                if k in allowed_keys and k not in disallowed:
                     flat[k] = v
 
         flat.pop("reference", None)
@@ -725,7 +750,6 @@ def configs():
             "total",
             "date",
             "due_date",
-            "date_format",
         ]
         model_fields = [
             f
@@ -763,10 +787,16 @@ def configs():
                     cfg = get_contact_config(tenant_id, selected_contact_id)
                     # Build rows including canonical fields; do not error if keys are missing
                     mapping_rows = _build_rows(cfg)
+                    selected_decimal_separator = _normalize_decimal_separator(str(cfg.get("decimal_separator", "")))
+                    selected_thousands_separator = _normalize_thousands_separator(str(cfg.get("thousands_separator", "")))
+                    selected_date_format = str((cfg.get("date_format") or "")) if isinstance(cfg, dict) else ""
                     logger.info("Config loaded", tenant_id=tenant_id, contact_id=selected_contact_id, keys=len(cfg) if isinstance(cfg, dict) else 0)
                 except KeyError:
                     # No existing config: show canonical fields with empty mapping values
                     mapping_rows = _build_rows({})
+                    selected_decimal_separator = DEFAULT_DECIMAL_SEPARATOR
+                    selected_thousands_separator = DEFAULT_THOUSANDS_SEPARATOR
+                    selected_date_format = ""
                     message = "No existing config found. You can create one below."
                     logger.info("Config not found", tenant_id=tenant_id, contact_id=selected_contact_id)
                 except Exception as e:
@@ -785,6 +815,10 @@ def configs():
                     existing = {}
                 # Determine which fields were displayed/edited
                 posted_fields = [f for f in request.form.getlist("fields[]") if f]
+
+                selected_decimal_separator = _normalize_decimal_separator(request.form.get("decimal_separator"))
+                selected_thousands_separator = _normalize_thousands_separator(request.form.get("thousands_separator"))
+                selected_date_format = (request.form.get("date_format") or "").strip()
 
                 # Preserve any root keys not shown in the mapping editor.
                 # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
@@ -807,11 +841,23 @@ def configs():
                 if not number_value:
                     error = "The 'Number' field is mandatory. Please map the statement column that contains invoice numbers."
                     message = None
-                    combined = {**preserved, **new_map}
+                    combined = {
+                        **preserved,
+                        **new_map,
+                        "date_format": selected_date_format,
+                        "decimal_separator": selected_decimal_separator,
+                        "thousands_separator": selected_thousands_separator,
+                    }
                     mapping_rows = _build_rows(combined)
                 else:
                     # Merge and save (root-level only; no nested 'statement_items')
-                    to_save = {**preserved, **new_map}
+                    to_save = {
+                        **preserved,
+                        **new_map,
+                        "date_format": selected_date_format,
+                        "decimal_separator": selected_decimal_separator,
+                        "thousands_separator": selected_thousands_separator,
+                    }
                     set_contact_config(tenant_id, selected_contact_id, to_save)
                     logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name, config=to_save)
                     message = "Config updated successfully."
@@ -821,6 +867,11 @@ def configs():
                 logger.info("Config save failed", tenant_id=tenant_id, contact_id=selected_contact_id, error=e)
 
     example_rows = _build_rows(EXAMPLE_CONFIG)
+    example_date_format = str(EXAMPLE_CONFIG.get("date_format") or "")
+    example_decimal_separator = EXAMPLE_CONFIG.get("decimal_separator", DEFAULT_DECIMAL_SEPARATOR)
+    example_thousands_separator = EXAMPLE_CONFIG.get("thousands_separator", DEFAULT_THOUSANDS_SEPARATOR)
+    decimal_separator_labels = dict(DECIMAL_SEPARATOR_OPTIONS)
+    thousands_separator_labels = dict(THOUSANDS_SEPARATOR_OPTIONS)
 
     return render_template(
         "configs.html",
@@ -832,6 +883,16 @@ def configs():
         message=message,
         error=error,
         field_descriptions=FIELD_DESCRIPTIONS,
+        date_format=selected_date_format,
+        decimal_separator=selected_decimal_separator,
+        thousands_separator=selected_thousands_separator,
+        decimal_separator_options=DECIMAL_SEPARATOR_OPTIONS,
+        thousands_separator_options=THOUSANDS_SEPARATOR_OPTIONS,
+        example_date_format=example_date_format,
+        example_decimal_separator=example_decimal_separator,
+        example_thousands_separator=example_thousands_separator,
+        decimal_separator_labels=decimal_separator_labels,
+        thousands_separator_labels=thousands_separator_labels,
     )
 
 @app.route("/login")
