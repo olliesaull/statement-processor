@@ -1,5 +1,5 @@
 window.addEventListener("load", () => {
-  if (window.location.pathname === "/home") {
+  if (window.location.pathname === "/tenant_management") {
 			// Event listeners to check for inactivity 
 			document.addEventListener("mousemove", throttle(resetActivityTimer, 1000)); // 1000ms delay between events
 			document.addEventListener("keydown", throttle(resetActivityTimer, 1000));

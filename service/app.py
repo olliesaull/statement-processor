@@ -367,14 +367,7 @@ def statement(statement_id: str):
                     logger.info("Statement item updated", tenant_id=tenant_id, statement_id=statement_id, statement_item_id=statement_item_id, completed=desired_state)
                 except Exception as exc:
                     logger.exception("Failed to toggle statement item completion", statement_id=statement_id, statement_item_id=statement_item_id, tenant_id=tenant_id, desired_state=desired_state, error=exc)
-            return redirect(
-                url_for(
-                    "statement",
-                    statement_id=statement_id,
-                    items_view=items_view,
-                    show_payments="true" if show_payments else "false",
-                )
-            )
+            return redirect(url_for("statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false"))
 
     route_key = f"{tenant_id}/statements/{statement_id}"
     json_statement_key = f"{route_key}.json"
@@ -447,12 +440,7 @@ def statement(statement_id: str):
 
     if has_payment:
         payments = get_payments_by_contact(contact_id) or []
-        logger.info(
-            "Payments fetched for statement items",
-            statement_id=statement_id,
-            contact_id=contact_id,
-            count=len(payments),
-        )
+        logger.info("Payments fetched for statement items", statement_id=statement_id, contact_id=contact_id, count=len(payments))
 
     matched_invoice_to_statement_item = match_invoices_to_statement_items(
         items=items,
@@ -482,6 +470,8 @@ def statement(statement_id: str):
     )
     row_matches = [all(cell.matches for cell in row) for row in row_comparisons]
 
+    item_status_map = get_statement_item_status_map(tenant_id, statement_id)
+
     if request.args.get("download") == "xlsx":
         header_labels = []
         statement_headers: List[str] = []
@@ -497,7 +487,7 @@ def statement(statement_id: str):
             statement_headers.append(f"Statement {label}")
             xero_headers.append(f"Xero {label}")
 
-        excel_headers = ["Item Type"] + statement_headers + xero_headers
+        excel_headers = ["Item Type"] + statement_headers + xero_headers + ["Status"]
 
         workbook = Workbook()
         worksheet = workbook.active
@@ -520,6 +510,14 @@ def statement(statement_id: str):
                 right_value = right_row.get(src_header, "") if isinstance(right_row, dict) else ""
                 row_values.append("" if right_value is None else right_value)
 
+            status_label = ""
+            item = items[idx] if idx < len(items) else {}
+            statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
+            if statement_item_id:
+                status_label = "Completed" if item_status_map.get(statement_item_id, False) else "Incomplete"
+            # Providing status in the sheet lets users filter finished work out quickly.
+            row_values.append(status_label)
+
             worksheet.append(row_values)
 
         output = BytesIO()
@@ -541,8 +539,6 @@ def statement(statement_id: str):
         response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
         logger.info("Statement Excel generated", tenant_id=tenant_id, statement_id=statement_id, rows=row_count, excel_filename=download_name)
         return response
-
-    item_status_map = get_statement_item_status_map(tenant_id, statement_id)
 
     statement_rows: List[Dict[str, Any]] = []
     for idx, left_row in enumerate(rows_by_header):
