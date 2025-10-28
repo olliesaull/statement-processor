@@ -680,6 +680,19 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
         header_to_field[h] = canon
         display_headers.append(h)
 
+    # Re-order the display headers to prefer familiar Xero columns when present.
+    preferred_field_order = ["date", "due_date", "number", "total"]
+    ordered_headers: List[str] = []
+    for canonical_field in preferred_field_order:
+        header_match = next((hdr for hdr in display_headers if header_to_field.get(hdr) == canonical_field), None)
+        if header_match:
+            ordered_headers.append(header_match)
+    # Keep any remaining statement-mapped headers in their existing order (currently are not any but keeping for future).
+    for hdr in display_headers:
+        if hdr not in ordered_headers:
+            ordered_headers.append(hdr)
+    display_headers = ordered_headers
+
     # Convert raw rows into dicts filtered by display headers, normalizing date fields for display
     rows_by_header: List[Dict[str, str]] = []
     date_fmt = get_date_format_from_config(contact_config)
