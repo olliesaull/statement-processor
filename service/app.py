@@ -681,12 +681,41 @@ def statement(statement_id: str):
         output.close()
 
         response = app.response_class(excel_payload, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        download_name = f"statement_{statement_id}.xlsx"
-        original_name = str(record.get("OriginalStatementFilename") or "").strip()
-        if original_name:
-            base, _ = os.path.splitext(original_name)
-            sanitized_base = secure_filename(base) or f"statement_{statement_id}"
-            download_name = f"{sanitized_base}_export.xlsx"
+
+        earliest_date_raw = record.get("EarliestItemDate")
+        latest_date_raw = record.get("LatestItemDate")
+        earliest_date: Optional[date] = None
+        latest_date: Optional[date] = None
+        try:
+            if isinstance(earliest_date_raw, str):
+                earliest_date = date.fromisoformat(earliest_date_raw.strip())
+        except ValueError:
+            earliest_date = None
+        try:
+            if isinstance(latest_date_raw, str):
+                latest_date = date.fromisoformat(latest_date_raw.strip())
+        except ValueError:
+            latest_date = None
+
+        if earliest_date and latest_date:
+            if earliest_date == latest_date:
+                date_segment = earliest_date.strftime("%Y-%m-%d")
+            else:
+                date_segment = f"{earliest_date.strftime('%Y-%m-%d')}_{latest_date.strftime('%Y-%m-%d')}"
+        elif latest_date or earliest_date:
+            chosen = latest_date or earliest_date
+            date_segment = chosen.strftime("%Y-%m-%d") if chosen else ""
+        else:
+            date_segment = ""
+
+        contact_name = record.get("ContactName") if isinstance(record, dict) else ""
+        contact_segment = secure_filename(str(contact_name or "").strip()) or f"statement_{statement_id}"
+
+        parts = [contact_segment]
+        if date_segment:
+            parts.append(date_segment)
+        download_name = "_".join(parts) + "_export.xlsx"
+
         response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
         logger.info("Statement Excel generated", tenant_id=tenant_id, statement_id=statement_id, rows=row_count, excel_filename=download_name)
         return response
