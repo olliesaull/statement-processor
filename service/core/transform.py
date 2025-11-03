@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from config import logger
 from core.date_utils import parse_with_format
-from core.item_classification import guess_statement_item_type
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem, SupplierStatement
 
@@ -580,17 +579,7 @@ def table_to_json(
 
             # Keep raw key insertion order (do not reorder to PDF header order)
 
-            try:
-                row_obj["item_type"] = guess_statement_item_type(full_raw)
-            except Exception as exc:
-                logger.warning(
-                    "[table_to_json] failed to classify item type",
-                    statement_id=statement_id,
-                    row_number=i_row,
-                    error=str(exc),
-                    exc_info=True,
-                )
-                row_obj["item_type"] = "invoice"
+            row_obj["item_type"] = ""
 
             # carried-forward skipper
             if row_is_opening_or_carried_forward(r, row_obj):
@@ -611,11 +600,7 @@ def table_to_json(
                 if amount_components:
                     fields_logged["total"] = dict(amount_components)
             except Exception as e:
-                logger.info(
-                    "[table_to_json] validation error",
-                    row_number=i_row,
-                    error=e,
-                )
+                logger.info("[table_to_json] validation error", row_number=i_row, error=e)
                 logger.info("[table_to_json] row_obj", row_obj=row_obj)
                 raise
 

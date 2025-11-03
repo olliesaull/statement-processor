@@ -997,6 +997,6 @@ def build_row_comparisons(
     return comparisons
 
 
-def guess_statement_item_type(raw_row: Dict[str, Any]) -> str:
+def guess_statement_item_type(raw_row: Dict[str, Any], total_entries: Optional[Dict[str, Any]] = None, contact_config: Optional[Dict[str, Any]] = None) -> str:
     """Wrapper for compatibility; delegates to the shared classifier."""
-    return classify_item_type(raw_row)
+    return classify_item_type(raw_row, total_entries=total_entries, contact_config=contact_config)

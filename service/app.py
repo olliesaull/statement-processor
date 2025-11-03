@@ -1,10 +1,11 @@
+import json
 import os
 import secrets
 import urllib.parse
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import requests
 from flask import (
@@ -18,11 +19,12 @@ from flask import (
     url_for,
 )
 from flask_caching import Cache
+from botocore.exceptions import ClientError
 from werkzeug.utils import secure_filename
 from openpyxl import Workbook
 
 import cache_provider
-from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger
+from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger, tenant_statements_table
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
@@ -133,6 +135,10 @@ def tenant_status():
     except Exception as exc:
         logger.exception("Failed to load tenant sync status", tenant_ids=tenant_ids, error=exc)
         return jsonify({"error": "Unable to determine sync status"}), 500
+
+    for tenant_id, status in tenant_statuses.items():
+        if tenant_id:
+            cache_provider.set_tenant_status_cache(tenant_id, str(status))
 
     return jsonify(tenant_statuses), 200
 
@@ -417,49 +423,120 @@ def statement(statement_id: str):
     decimal_sep, thousands_sep = get_number_separators_from_config(contact_config)
     display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, contact_config)
 
-    # 2) For each row, guess type (invoice/credit note/payment); fetch the needed doc sets
-    has_invoice, has_credit_note, has_payment = False, False, False
-    item_types: List[str] = []
-    for idx, it in enumerate(items):
-        raw = it.get("raw", {}) if isinstance(it, dict) else {}
-        existing_type = ""
-        if isinstance(it, dict):
-            existing_type = str(it.get("item_type") or "").strip().lower()
-        if existing_type not in {"invoice", "credit_note", "payment"}:
-            t = guess_statement_item_type(raw)
-            if isinstance(it, dict):
-                it["item_type"] = t
-        else:
-            t = existing_type
-        statement_item_id = it.get("statement_item_id") if isinstance(it, dict) else None
-        logger.info("Statement type classified", statement_id=statement_id, statement_item_id=statement_item_id, item_type=t)
-        item_types.append(t)
-        if t == "credit_note":
-            has_credit_note = True
-        elif t == "payment":
-            has_payment = True
-        else:
-            has_invoice = True
+    # 2) Fetch Xero documents and classify each statement item
+    invoices = get_invoices_by_contact(contact_id) or []
+    credit_notes = get_credit_notes_by_contact(contact_id) or []
+    payments = get_payments_by_contact(contact_id) or []
+    logger.info("Fetched Xero documents", statement_id=statement_id, contact_id=contact_id, invoices=len(invoices), credit_notes=len(credit_notes), payments=len(payments))
 
-    if has_invoice and has_credit_note:
-        invs = get_invoices_by_contact(contact_id) or []
-        cns = get_credit_notes_by_contact(contact_id) or []
-        docs = invs + cns
-    elif has_credit_note:
-        docs = get_credit_notes_by_contact(contact_id) or []
-    else:
-        docs = get_invoices_by_contact(contact_id) or []
-
-    if has_payment:
-        payments = get_payments_by_contact(contact_id) or []
-        logger.info("Payments fetched for statement items", statement_id=statement_id, contact_id=contact_id, count=len(payments))
-
+    docs_for_matching = invoices + credit_notes
     matched_invoice_to_statement_item = match_invoices_to_statement_items(
         items=items,
         rows_by_header=rows_by_header,
         item_number_header=item_number_header,
-        invoices=docs,
+        invoices=docs_for_matching,
     )
+
+    matched_numbers: Set[str] = {key for key in matched_invoice_to_statement_item.keys() if isinstance(key, str)}
+    match_by_item_id: Dict[str, Dict[str, str]] = {}
+    for match in matched_invoice_to_statement_item.values():
+        stmt_item = match.get("statement_item") if isinstance(match, dict) else None
+        doc = match.get("invoice") if isinstance(match, dict) else None
+        if not isinstance(stmt_item, dict) or not isinstance(doc, dict):
+            continue
+        statement_item_id = stmt_item.get("statement_item_id")
+        if not statement_item_id:
+            continue
+        doc_type = str(doc.get("type") or "").upper()
+        if doc.get("credit_note_id") or doc_type.endswith("CREDIT"):
+            match_by_item_id[statement_item_id] = {"type": "credit_note", "source": "credit_note_match"}
+        else:
+            match_by_item_id[statement_item_id] = {"type": "invoice", "source": "invoice_match"}
+
+    invoice_number_by_id: Dict[str, str] = {}
+    for inv in invoices:
+        inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
+        inv_number = str(inv.get("number") or "").strip() if isinstance(inv, dict) else ""
+        if inv_id and inv_number:
+            invoice_number_by_id[str(inv_id)] = inv_number
+
+    payment_number_map: Dict[str, List[Dict[str, Any]]] = {}
+    for payment in payments:
+        if not isinstance(payment, dict):
+            continue
+        invoice_id = payment.get("invoice_id")
+        if not invoice_id:
+            continue
+        invoice_number = invoice_number_by_id.get(str(invoice_id))
+        if not invoice_number:
+            continue
+        payment_number_map.setdefault(invoice_number, []).append(payment)
+
+    classification_updates: Dict[str, str] = {}
+    for idx, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
+        statement_item_id = it.get("statement_item_id")
+        raw = it.get("raw", {}) if isinstance(it.get("raw"), dict) else {}
+        current_type = str(it.get("item_type") or "").strip().lower()
+        row_number = ""
+        if item_number_header and idx < len(rows_by_header):
+            row_number = str(rows_by_header[idx].get(item_number_header) or "").strip()
+
+        new_type: Optional[str]
+        source: Optional[str]
+        new_type = None
+        source = None
+
+        if statement_item_id and statement_item_id in match_by_item_id:
+            entry = match_by_item_id[statement_item_id]
+            new_type = entry["type"]
+            source = entry["source"]
+        elif row_number and row_number in matched_numbers:
+            match = matched_invoice_to_statement_item.get(row_number)
+            doc = match.get("invoice") if isinstance(match, dict) else None
+            if isinstance(doc, dict):
+                doc_type = str(doc.get("type") or "").upper()
+                if doc.get("credit_note_id") or doc_type.endswith("CREDIT"):
+                    new_type = "credit_note"
+                    source = "credit_note_match"
+                else:
+                    new_type = "invoice"
+                    source = "invoice_match"
+        elif row_number and row_number not in matched_numbers and row_number in payment_number_map:
+            new_type = "payment"
+            source = "payment_match"
+
+        if not new_type:
+            new_type = guess_statement_item_type(raw, it.get("total"), contact_config)
+            source = "heuristic"
+
+        if new_type and new_type != current_type:
+            it["item_type"] = new_type
+            if statement_item_id:
+                classification_updates[statement_item_id] = new_type
+            logger.info("Statement item type updated", statement_id=statement_id, statement_item_id=statement_item_id, new_type=new_type, previous_type=current_type or "", source=source)
+
+    item_types = [str((it.get("item_type") if isinstance(it, dict) else "") or "").strip().lower() for it in items]
+
+    if classification_updates:
+        try:
+            json_payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+            upload_statement_to_s3(BytesIO(json_payload), json_statement_key)
+            logger.info("Persisted statement item types to S3", statement_id=statement_id, updated=len(classification_updates))
+        except Exception as exc:
+            logger.exception("Failed to persist statement JSON", statement_id=statement_id, error=str(exc))
+
+        for statement_item_id, new_type in classification_updates.items():
+            try:
+                tenant_statements_table.update_item(
+                    Key={"TenantID": tenant_id, "StatementID": statement_item_id},
+                    UpdateExpression="SET item_type = :item_type",
+                    ExpressionAttributeValues={":item_type": new_type},
+                )
+            except ClientError as exc:
+                logger.exception("Failed to persist item type to DynamoDB", statement_id=statement_id, statement_item_id=statement_item_id, item_type=new_type, error=str(exc))
+        logger.info("Persisted statement item types to DynamoDB", statement_id=statement_id, updated=len(classification_updates))
 
     # 3) Build right-hand rows from the matched invoices
     date_fmt = get_date_format_from_config(contact_config)
