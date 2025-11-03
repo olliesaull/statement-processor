@@ -62,3 +62,5 @@ class StatementItem(BaseModel):
 class SupplierStatement(BaseModel):
     """Top-level container for extracted statement rows."""
     statement_items: List[StatementItem] = Field(default_factory=list)
+    earliest_item_date: Optional[str] = None
+    latest_item_date: Optional[str] = None

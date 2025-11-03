@@ -1,4 +1,5 @@
 import re
+from datetime import date as dt_date
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
@@ -379,6 +380,7 @@ def table_to_json(
     selected = select_relevant_tables_per_page(tables_with_pages, candidates=candidates)
 
     items: List[StatementItem] = []
+    item_flags: List[List[str]] = []
     item_counter = 0
     primary_header_row: Optional[List[str]] = None
     primary_col_index: Optional[Dict[str, int]] = None
@@ -468,6 +470,7 @@ def table_to_json(
 
             row_obj: Dict[str, Any] = deepcopy(items_template)
             row_obj.pop("statement_item_id", None)
+            flags: List[str] = []
 
             # simple fields
             extracted_simple: Dict[str, Any] = {}
@@ -489,6 +492,8 @@ def table_to_json(
                         ) from err
                     if parsed is not None:
                         value = parsed.strftime("%Y-%m-%d")
+                    elif field == "date" and str(cell or "").strip():
+                        flags.append("invalid-date")
                 row_obj[field] = value
                 canonical_header = str(actual_header or header_name)
                 extracted_simple[field] = {"header": canonical_header, "value": value}
@@ -595,6 +600,7 @@ def table_to_json(
             try:
                 si = StatementItem(**row_obj)
                 items.append(si)
+                item_flags.append(flags)
                 fields_logged = {k: getattr(si, k) for k in simple_map.keys()}
                 amount_components = getattr(si, "total", None)
                 if amount_components:
@@ -606,7 +612,34 @@ def table_to_json(
 
     # meta with filename
     statement = SupplierStatement(statement_items=items)
-    return statement.model_dump()
+
+    # Derive statement date range from item dates for downstream filtering.
+    date_values: List[dt_date] = []
+    for item in items:
+        candidate = getattr(item, "date", None)
+        if isinstance(candidate, dt_date):
+            date_values.append(candidate)
+            continue
+        if not isinstance(candidate, str):
+            continue
+        stripped = candidate.strip()
+        if not stripped:
+            continue
+        try:
+            date_values.append(dt_date.fromisoformat(stripped))
+        except ValueError:
+            continue
+    if date_values:
+        statement.earliest_item_date = min(date_values).isoformat()
+        statement.latest_item_date = max(date_values).isoformat()
+    statement_dict = statement.model_dump()
+    for idx, flags in enumerate(item_flags):
+        if idx >= len(statement_dict.get("statement_items", [])):
+            break
+        if not flags:
+            continue
+        statement_dict["statement_items"][idx]["_flags"] = list(dict.fromkeys(flags))
+    return statement_dict
 
 
 def _first_nonempty_row_index(grid: List[List[str]]) -> int:

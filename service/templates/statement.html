@@ -92,7 +92,10 @@
           <tbody>
             {% if statement_rows %}
               {% for row in statement_rows %}
-                {% set anomalous = 'ml-outlier' in (row.flags or []) %}
+                {% set flag_list = row.flags or [] %}
+                {% set has_ml_outlier = 'ml-outlier' in flag_list %}
+                {% set has_invalid_date = 'invalid-date' in flag_list %}
+                {% set anomalous = has_ml_outlier or has_invalid_date %}
                 {% if anomalous %}
                   {% set row_class = 'table-warning anomaly-row' %}
                 {% else %}
@@ -104,7 +107,7 @@
                 <tr class="{{ row_class }}">
                   {% set cells = row.cell_comparisons or [] %}
                   {% for cell in cells %}
-                    <td class="{% if loop.last %}split-right{% endif %}{% if not cell.matches %} cell-mismatch{% endif %}">
+                    <td class="{% if loop.last %}split-right{% endif %}{% if not cell.matches %} {% if anomalous %}anomaly-cell{% else %}cell-mismatch{% endif %}{% endif %}">
                       {% set stmt_text = cell.statement_value %}
                       {{ stmt_text }}
                       {% if not cell.matches %}
@@ -113,7 +116,7 @@
                     </td>
                   {% endfor %}
                   {% for cell in cells %}
-                    <td class="{% if not cell.matches %}cell-mismatch{% endif %}">
+                    <td class="{% if not cell.matches %}{% if anomalous %}anomaly-cell{% else %}cell-mismatch{% endif %}{% endif %}">
                       {% set xero_text = cell.xero_value %}
                       {{ xero_text }}
                       {% if not cell.matches %}

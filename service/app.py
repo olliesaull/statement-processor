@@ -639,7 +639,15 @@ def statement(statement_id: str):
         if isinstance(item, dict):
             raw_flags = item.get("_flags") or []
             if isinstance(raw_flags, list):
-                flags = [str(flag) for flag in raw_flags]
+                seen_flags = set()
+                for flag in raw_flags:
+                    if not isinstance(flag, str):
+                        continue
+                    normalized = flag.strip()
+                    if not normalized or normalized in seen_flags:
+                        continue
+                    seen_flags.add(normalized)
+                    flags.append(normalized)
 
         statement_rows.append(
             {

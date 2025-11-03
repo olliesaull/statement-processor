@@ -45,7 +45,15 @@ def _sanitize_for_dynamodb(value: Any) -> Any:
     return value
 
 
-def _persist_statement_items(tenant_id: str, contact_id: Optional[str], statement_id: Optional[str], items: List[Dict[str, Any]]) -> None:
+def _persist_statement_items(
+    tenant_id: str,
+    contact_id: Optional[str],
+    statement_id: Optional[str],
+    items: List[Dict[str, Any]],
+    *,
+    earliest_item_date: Optional[str] = None,
+    latest_item_date: Optional[str] = None,
+) -> None:
     if not statement_id:
         return
 
@@ -128,6 +136,28 @@ def _persist_statement_items(tenant_id: str, contact_id: Optional[str], statemen
             record.update(sanitized_payload)
             batch.put_item(Item=record)
 
+    if statement_id and (earliest_item_date or latest_item_date):
+        update_parts: List[str] = []
+        attr_names: Dict[str, str] = {}
+        attr_values: Dict[str, Any] = {}
+
+        if earliest_item_date:
+            attr_names["#earliestItemDate"] = "EarliestItemDate"
+            attr_values[":earliestItemDate"] = earliest_item_date
+            update_parts.append("#earliestItemDate = :earliestItemDate")
+        if latest_item_date:
+            attr_names["#latestItemDate"] = "LatestItemDate"
+            attr_values[":latestItemDate"] = latest_item_date
+            update_parts.append("#latestItemDate = :latestItemDate")
+
+        if update_parts:
+            tenant_statements_table.update_item(
+                Key={"TenantID": tenant_id, "StatementID": statement_id},
+                UpdateExpression="SET " + ", ".join(update_parts),
+                ExpressionAttributeNames=attr_names,
+                ExpressionAttributeValues=attr_values,
+            )
+
 
 def run_textraction(bucket: str, pdf_key: str, tenant_id: str, contact_id: str) -> FileStorage:
     """Run Textract, transform to canonical JSON, validate, and return as FileStorage."""
@@ -146,7 +176,14 @@ def run_textraction(bucket: str, pdf_key: str, tenant_id: str, contact_id: str) 
     statement = table_to_json(key, tables_wp, tenant_id, contact_id, statement_id=statement_id)
 
     try:
-        _persist_statement_items(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, items=statement.get("statement_items", []) or [])
+        _persist_statement_items(
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            statement_id=statement_id,
+            items=statement.get("statement_items", []) or [],
+            earliest_item_date=statement.get("earliest_item_date"),
+            latest_item_date=statement.get("latest_item_date"),
+        )
     except Exception as exc:
         logger.exception("Failed to persist statement items", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id, error=str(exc))
 
