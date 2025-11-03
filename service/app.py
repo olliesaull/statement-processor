@@ -300,6 +300,13 @@ def upload_statements():
         error_messages=error_messages,
     )
 
+
+@app.route("/instructions")
+@xero_token_required
+@route_handler_logging
+def instructions():
+    return render_template("instructions.html")
+
 @app.route("/statements")
 @active_tenant_required("Please select a tenant to view statements.")
 @xero_token_required
