@@ -4,8 +4,9 @@ import secrets
 import urllib.parse
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 from flask import (
@@ -310,10 +311,74 @@ def statements():
     view = request.args.get("view", "incomplete").lower()
     show_completed = view == "completed"
     statement_rows = get_completed_statements() if show_completed else get_incomplete_statements()
+    sort_key = request.args.get("sort", "contact").lower()
     message = session.pop("statements_message", None)
-    logger.info("Rendering statements", tenant_id=tenant_id, view=view, statements=len(statement_rows))
 
-    return render_template("statements.html", statements=statement_rows, show_completed=show_completed, message=message)
+    def _parse_iso_date(value: object) -> Optional[date]:
+        if not isinstance(value, str):
+            return None
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return date.fromisoformat(stripped)
+        except ValueError:
+            return None
+
+    for row in statement_rows:
+        earliest = _parse_iso_date(row.get("EarliestItemDate"))
+        latest = _parse_iso_date(row.get("LatestItemDate"))
+        row["_earliest_item_date"] = earliest
+        row["_latest_item_date"] = latest
+        if earliest and latest:
+            row["ItemDateRangeDisplay"] = earliest.isoformat() if earliest == latest else f"{earliest.isoformat()} – {latest.isoformat()}"
+        elif latest:
+            row["ItemDateRangeDisplay"] = latest.isoformat()
+        elif earliest:
+            row["ItemDateRangeDisplay"] = earliest.isoformat()
+        else:
+            row["ItemDateRangeDisplay"] = "—"
+
+    if sort_key == "date_range":
+        statement_rows.sort(key=lambda r: r.get("_latest_item_date") or date.min, reverse=True)
+    else:
+        sort_key = "contact"
+        def _contact_sort_value(row: Dict[str, Any]) -> Tuple[int, str]:
+            name = row.get("ContactName")
+            if isinstance(name, str) and name.strip():
+                return (0, name.strip().casefold())
+            return (1, "")
+        statement_rows.sort(key=_contact_sort_value)
+
+    for row in statement_rows:
+        row.pop("_earliest_item_date", None)
+        row.pop("_latest_item_date", None)
+
+    base_args: Dict[str, Any] = {}
+    if show_completed:
+        base_args["view"] = "completed"
+
+    sort_links = {
+        "contact": url_for("statements", **dict(base_args, sort="contact")),
+        "date_range": url_for("statements", **dict(base_args, sort="date_range")),
+    }
+
+    logger.info(
+        "Rendering statements",
+        tenant_id=tenant_id,
+        view=view,
+        sort=sort_key,
+        statements=len(statement_rows),
+    )
+
+    return render_template(
+        "statements.html",
+        statements=statement_rows,
+        show_completed=show_completed,
+        message=message,
+        current_sort=sort_key,
+        sort_links=sort_links,
+    )
 
 
 @app.route("/statement/<statement_id>/delete", methods=["POST"])
