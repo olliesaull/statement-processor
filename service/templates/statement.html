@@ -78,6 +78,7 @@
             <tr>
               <th class="split-right text-center" colspan="{{ statement_col_count }}">Statement</th>
               <th class="text-center" colspan="{{ statement_col_count }}">Xero</th>
+              <th class="text-center" rowspan="2">Xero Link</th>
               <th class="text-center" rowspan="2">Status</th>
             </tr>
             <tr>
@@ -125,6 +126,15 @@
                     </td>
                   {% endfor %}
                   <td class="text-center">
+                    {% if row.xero_credit_note_id %}
+                      <a href="https://go.xero.com/AccountsPayable/ViewCreditNote.aspx?creditNoteID={{ row.xero_credit_note_id }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary text-nowrap px-2 py-0">Open</a>
+                    {% elif row.xero_invoice_id %}
+                      <a href="https://go.xero.com/AccountsPayable/View.aspx?InvoiceID={{ row.xero_invoice_id }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary text-nowrap px-2 py-0">Open</a>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td class="text-center">
                     {% if row.statement_item_id %}
                       {% if row.is_completed %}
                         <form method="post" class="d-inline">
@@ -151,7 +161,7 @@
               {% endfor %}
             {% else %}
               <tr>
-                <td colspan="{{ statement_col_count * 2 + 1 }}" class="text-center text-muted">
+                <td colspan="{{ statement_col_count * 2 + 2 }}" class="text-center text-muted">
                   {% if items_view == 'completed' %}
                     No completed statement items found.
                   {% elif items_view == 'incomplete' %}

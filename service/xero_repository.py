@@ -140,7 +140,7 @@ def get_contacts_from_xero(tenant_id: Optional[str] = None, modified_since: Opti
 
 
 def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> Dict[str, Dict[str, Any]]:
-    """Get all invoices from Xero, across all pages.
+    """Get all supplier bills (ACCPAY) from Xero, across all pages.
 
     Args:
         modified_since: If provided, only invoices modified since this datetime are returned.
@@ -169,7 +169,9 @@ def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datet
             "xero_tenant_id": tenant_id,
             "order": "UpdatedDateUTC ASC",
             "page_size": PAGE_SIZE,
-            "statuses": ["DRAFT", "SUBMITTED", "AUTHORISED", "PAID", "VOIDED"], # Excludes DELETED
+            "statuses": ["DRAFT", "SUBMITTED", "AUTHORISED", "PAID"], # Excludes DELETED and VOIDED
+            # Only fetch supplier bills (exclude ACCREC)
+            "where": 'Type=="ACCPAY"',
         }
 
         if modified_since:
@@ -213,7 +215,7 @@ def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datet
 
 def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
     """
-    Get all credit notes across all pages (no contact filter).
+    Get all supplier credit notes (ACCPAYCREDIT) across all pages (no contact filter).
 
     Args:
         modified_since: Optional datetime to fetch only credit notes modified since this timestamp.
@@ -234,7 +236,13 @@ def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[d
     try:
         logger.info("Fetching all credit notes (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
 
-        kwargs = {"xero_tenant_id": tenant_id, "order": "UpdatedDateUTC ASC", "page_size": PAGE_SIZE}
+        kwargs = {
+            "xero_tenant_id": tenant_id,
+            "order": "UpdatedDateUTC ASC",
+            "page_size": PAGE_SIZE,
+            # Only fetch supplier credit notes (exclude ACCRECCREDIT)
+            "where": 'Type=="ACCPAYCREDIT"',
+        }
 
         if modified_since:
             kwargs["if_modified_since"] = modified_since

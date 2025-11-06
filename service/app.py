@@ -768,6 +768,23 @@ def statement(statement_id: str):
                     seen_flags.add(normalized)
                     flags.append(normalized)
 
+        # Build Xero links by extracting IDs from matched data
+        xero_invoice_id: Optional[str] = None
+        xero_credit_note_id: Optional[str] = None
+        if item_number_header and idx < len(rows_by_header):
+            row_number = str(rows_by_header[idx].get(item_number_header) or "").strip()
+            if row_number:
+                match = matched_invoice_to_statement_item.get(row_number)
+                if isinstance(match, dict):
+                    inv = match.get("invoice")
+                    if isinstance(inv, dict):
+                        cn_id = inv.get("credit_note_id")
+                        if isinstance(cn_id, str) and cn_id.strip():
+                            xero_credit_note_id = cn_id.strip()
+                        inv_id = inv.get("invoice_id")
+                        if isinstance(inv_id, str) and inv_id.strip():
+                            xero_invoice_id = inv_id.strip()
+
         statement_rows.append(
             {
                 "statement_item_id": statement_item_id,
@@ -781,6 +798,8 @@ def statement(statement_id: str):
                     (item.get("item_type") if isinstance(item, dict) else None)
                     or (item_types[idx] if idx < len(item_types) else "invoice")
                 ),
+                "xero_invoice_id": xero_invoice_id,
+                "xero_credit_note_id": xero_credit_note_id,
             }
         )
 
