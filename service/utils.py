@@ -857,9 +857,18 @@ def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Di
     ]
     missing = [n for n in numbers_in_rows if n and n not in matched]
 
+    # Keywords indicating the statement number cell refers to a payment action, not an invoice number
+    payment_keywords = ("payment", "paid", "remittance", "receipt")
+
     for key in missing:
         stmt_item = stmt_by_number.get(key)
         if stmt_item is None:
+            continue
+
+        # Guard: if the number cell clearly references a payment, skip substring matching
+        lowered = str(key).casefold()
+        if any(kw in lowered for kw in payment_keywords):
+            logger.info("Skipping substring match due to payment keywords", statement_number=key)
             continue
         target_norm = _norm_num(key)
 
