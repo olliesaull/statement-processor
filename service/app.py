@@ -4,7 +4,7 @@ import secrets
 import urllib.parse
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -318,7 +318,7 @@ def statements():
     view = request.args.get("view", "incomplete").lower()
     show_completed = view == "completed"
     statement_rows = get_completed_statements() if show_completed else get_incomplete_statements()
-    sort_key = request.args.get("sort", "contact").lower()
+    sort_key = request.args.get("sort", "uploaded").lower()
     message = session.pop("statements_message", None)
 
     def _parse_iso_date(value: object) -> Optional[date]:
@@ -332,11 +332,24 @@ def statements():
         except ValueError:
             return None
 
+    def _parse_iso_datetime(value: object) -> Optional[datetime]:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            # Support both "+00:00" and trailing "Z"
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
     for row in statement_rows:
         earliest = _parse_iso_date(row.get("EarliestItemDate"))
         latest = _parse_iso_date(row.get("LatestItemDate"))
         row["_earliest_item_date"] = earliest
         row["_latest_item_date"] = latest
+        row["_uploaded_at"] = _parse_iso_datetime(row.get("UploadedAt"))
         if earliest and latest:
             row["ItemDateRangeDisplay"] = earliest.isoformat() if earliest == latest else f"{earliest.isoformat()} – {latest.isoformat()}"
         elif latest:
@@ -348,6 +361,8 @@ def statements():
 
     if sort_key == "date_range":
         statement_rows.sort(key=lambda r: r.get("_latest_item_date") or date.min, reverse=True)
+    elif sort_key == "uploaded":
+        statement_rows.sort(key=lambda r: r.get("_uploaded_at") or datetime.min, reverse=True)
     else:
         sort_key = "contact"
         def _contact_sort_value(row: Dict[str, Any]) -> Tuple[int, str]:
@@ -360,6 +375,7 @@ def statements():
     for row in statement_rows:
         row.pop("_earliest_item_date", None)
         row.pop("_latest_item_date", None)
+        row.pop("_uploaded_at", None)
 
     base_args: Dict[str, Any] = {}
     if show_completed:
@@ -368,6 +384,8 @@ def statements():
     sort_links = {
         "contact": url_for("statements", **dict(base_args, sort="contact")),
         "date_range": url_for("statements", **dict(base_args, sort="date_range")),
+        # Not surfaced in UI yet, but supported via `?sort=uploaded`
+        "uploaded": url_for("statements", **dict(base_args, sort="uploaded")),
     }
 
     logger.info(

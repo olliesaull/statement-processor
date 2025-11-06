@@ -12,23 +12,19 @@
     {% endif %}
 
     {% if statements %}
+      <div class="d-flex justify-content-end align-items-center gap-2 mb-3">
+        <span class="text-muted">Sort by:</span>
+        <div class="btn-group" role="group" aria-label="Sort statements">
+          <a href="{{ sort_links.contact }}" class="btn btn-sm {% if current_sort == 'contact' %}btn-primary{% else %}btn-outline-primary{% endif %}">Contact</a>
+          <a href="{{ sort_links.date_range }}" class="btn btn-sm {% if current_sort == 'date_range' %}btn-primary{% else %}btn-outline-primary{% endif %}">Item Date Range</a>
+          <a href="{{ sort_links.uploaded }}" class="btn btn-sm {% if current_sort == 'uploaded' %}btn-primary{% else %}btn-outline-primary{% endif %}">Uploaded</a>
+        </div>
+      </div>
       <table class="table table-striped table-bordered align-middle">
         <thead class="table-light">
           <tr>
-            <th scope="col">
-              <a href="{{ sort_links.contact }}"
-                 class="text-decoration-none">
-                Contact Name
-                {% if current_sort == 'contact' %}<span aria-hidden="true">↑</span>{% endif %}
-              </a>
-            </th>
-            <th scope="col">
-              <a href="{{ sort_links.date_range }}"
-                 class="text-decoration-none">
-                Item Date Range
-                {% if current_sort == 'date_range' %}<span aria-hidden="true">↓</span>{% endif %}
-              </a>
-            </th>
+            <th scope="col">Contact Name</th>
+            <th scope="col">Item Date Range</th>
             <th scope="col">Statement Filename</th>
             <th scope="col" class="text-center">Action</th>
           </tr>

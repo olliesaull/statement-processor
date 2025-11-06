@@ -1,7 +1,7 @@
 import io
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
@@ -441,6 +441,8 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
         "OriginalStatementFilename": entry["statement_name"],
         "ContactID": entry["contact_id"],
         "ContactName": entry["contact_name"],
+        # Store upload time in UTC for sorting/filtering
+        "UploadedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "Completed": "false",
         "RecordType": "statement",
     }
