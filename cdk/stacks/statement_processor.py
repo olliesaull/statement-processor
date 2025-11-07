@@ -1,24 +1,24 @@
 from aws_cdk import (
     RemovalPolicy,
     Stack,
+    Duration,
 )
 from aws_cdk import aws_apprunner_alpha as apprunner_alpha
+from aws_cdk import aws_apprunner as apprunner
+from aws_cdk import aws_cloudwatch as cloudwatch
+from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
+from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_sns as sns
+from aws_cdk import aws_sns_subscriptions as subs
 from aws_cdk.aws_ecr_assets import DockerImageAsset
 from constructs import Construct
 
 
 class StatementProcessorStack(Stack):
-    def __init__(
-        self,
-        scope: Construct,
-        construct_id: str,
-        stage: str,
-        domain_name: str,
-        **kwargs
-    ) -> None:
+    def __init__(self, scope: Construct, construct_id: str, stage: str, domain_name: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         stage = stage.lower()
@@ -28,10 +28,13 @@ class StatementProcessorStack(Stack):
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
         S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
+        APP_RUNNER_SERVICE_NAME = f"statement-processor-{stage}"
+
+        NOTIFICATION_EMAILS = ["ollie@dotelastic.com", "james@dotelastic.com"]
 
         #region ---------- ParameterStore ----------
 
-        # SSM Parameter Store Parameter ARNs, using wildcards to satisfy ssm:GetParametersByPath 
+        # SSM Parameter Store Parameter ARNs, using wildcards to satisfy ssm:GetParametersByPath
         parameter_arns = ["arn:aws:ssm:eu-west-1:747310139457:parameter/StatementProcessor/*"]
 
         # Create a policy statement to grant SSM Parameter Store access
@@ -113,9 +116,7 @@ class StatementProcessorStack(Stack):
                     "textract:StartDocumentAnalysis",
                     "textract:GetDocumentAnalysis",
                 ],
-                resources=[
-                    "*"
-                ]
+                resources=["*"]
             )
         )
 
@@ -131,6 +132,7 @@ class StatementProcessorStack(Stack):
             instance_role=statement_processor_instance_role,
             memory=apprunner_alpha.Memory.ONE_GB,
             cpu=apprunner_alpha.Cpu.QUARTER_VCPU,
+            service_name=APP_RUNNER_SERVICE_NAME,
             source=apprunner_alpha.Source.from_asset(
                 asset=apprunner_asset,
                 image_configuration=apprunner_alpha.ImageConfiguration(
@@ -154,3 +156,58 @@ class StatementProcessorStack(Stack):
         web.add_to_role_policy(parameter_policy)
 
         #endregion ---------- AppRunner ----------
+
+        # region ---------- CloudWatch ----------
+        # Use the actual App Runner–managed log group:
+        # /aws/apprunner/{service-name}/{service-id}/application
+
+        cfn_service: apprunner.CfnService = web.node.default_child  # type: ignore[assignment]
+        service_id = cfn_service.attr_service_id
+        service_name = APP_RUNNER_SERVICE_NAME
+
+        app_logs_group = logs.LogGroup.from_log_group_name(
+            self,
+            "StatementProcessorAppRunnerApplicationLogs",
+            log_group_name=f"/aws/apprunner/{service_name}/{service_id}/application",
+        )
+
+        error_metric_filter = logs.MetricFilter(
+            self,
+            "StatementProcessorAppRunnerErrorMetricFilter",
+            log_group=app_logs_group,
+            filter_pattern=logs.FilterPattern.literal("ERROR"),
+            metric_namespace="StatementProcessorAppRunner/ApplicationLogs",
+            metric_name="ErrorCount",
+            default_value=0,
+        )
+        # Ensure the filter is created after the service
+        error_metric_filter.node.add_dependency(cfn_service)
+
+        error_metric = cloudwatch.Metric(
+            namespace="StatementProcessorAppRunner/ApplicationLogs",
+            metric_name="ErrorCount",
+            statistic="Sum",
+            period=Duration.minutes(1),
+        )
+
+        error_alarm = cloudwatch.Alarm(
+            self,
+            "StatementProcessorAppRunnerErrorAlarm",
+            metric=error_metric,
+            threshold=1,
+            evaluation_periods=1,
+            datapoints_to_alarm=1,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+
+        topic = sns.Topic(
+            self,
+            "StatementProcessorAppRunnerErrorTopic",
+            display_name=f"Statement Processor {stage} App Errors",
+        )
+        for email in NOTIFICATION_EMAILS:
+            topic.add_subscription(subs.EmailSubscription(email))
+        error_alarm.add_alarm_action(cw_actions.SnsAction(topic))
+
+        # endregion ---------- CloudWatch ----------
