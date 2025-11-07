@@ -191,14 +191,7 @@ def tenant_management():
     active_tenant = next((t for t in tenants if t.get("tenantId") == active_tenant_id), None)
     logger.info("Rendering tenant_management page", active_tenant_id=active_tenant_id, tenants=len(tenants), has_message=bool(message), has_error=bool(error), authenticated=bool(session.get("access_token")))
 
-    return render_template(
-        "tenant_management.html",
-        tenants=tenants,
-        active_tenant_id=active_tenant_id,
-        active_tenant=active_tenant,
-        message=message,
-        error=error,
-    )
+    return render_template("tenant_management.html", tenants=tenants, active_tenant_id=active_tenant_id, active_tenant=active_tenant, message=message, error=error)
 
 
 @app.route("/favicon.ico")
@@ -293,12 +286,7 @@ def upload_statements():
             success_count = uploads_ok
         logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=len(error_messages))
 
-    return render_template(
-        "upload_statements.html",
-        contacts=contacts_list,
-        success_count=success_count,
-        error_messages=error_messages,
-    )
+    return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages)
 
 
 @app.route("/instructions")
@@ -388,22 +376,9 @@ def statements():
         "uploaded": url_for("statements", **dict(base_args, sort="uploaded")),
     }
 
-    logger.info(
-        "Rendering statements",
-        tenant_id=tenant_id,
-        view=view,
-        sort=sort_key,
-        statements=len(statement_rows),
-    )
+    logger.info("Rendering statements", tenant_id=tenant_id, view=view, sort=sort_key, statements=len(statement_rows))
 
-    return render_template(
-        "statements.html",
-        statements=statement_rows,
-        show_completed=show_completed,
-        message=message,
-        current_sort=sort_key,
-        sort_links=sort_links,
-    )
+    return render_template("statements.html", statements=statement_rows, show_completed=show_completed, message=message, current_sort=sort_key, sort_links=sort_links)
 
 
 @app.route("/statement/<statement_id>/delete", methods=["POST"])

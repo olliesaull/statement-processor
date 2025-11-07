@@ -1,6 +1,7 @@
 import io
 import json
 import re
+import time
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -196,15 +197,26 @@ def get_cached_tenant_status(tenant_id: str) -> Optional[TenantStatus]:
 
 
 def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
-    """Flask route decorator ensuring the user has an access token + tenant."""
+    """Ensure a valid (non-expired) Xero token and active tenant before route access."""
     @wraps(f)
     def decorated_function(*args: Any, **kwargs: Any):
         tenant_id = session.get("xero_tenant_id")
-        if "access_token" not in session or "xero_tenant_id" not in session:
+        token = get_xero_oauth2_token()
+        if not tenant_id or not token:
             logger.info("Missing Xero token or tenant; redirecting", route=request.path, tenant_id=tenant_id)
             return redirect(url_for("login"))
 
+        try:
+            expires_at = float(token.get("expires_at", 0))
+        except (TypeError, ValueError):
+            expires_at = 0.0
+
+        if expires_at and time.time() > expires_at:
+            logger.info("Xero token expired; redirecting", route=request.path, tenant_id=tenant_id)
+            return redirect(url_for("login"))
+
         return f(*args, **kwargs)
+
     return decorated_function
 
 
