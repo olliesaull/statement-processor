@@ -32,7 +32,6 @@ from config import (
     tenant_statements_table,
 )
 from core.date_utils import coerce_datetime_with_template, format_iso_with
-from core.item_classification import guess_statement_item_type as classify_item_type
 from core.models_comparison import CellComparison
 from core.textract_statement import run_textraction
 from core.transform import equal
@@ -1006,8 +1005,3 @@ def build_row_comparisons(
             )
         comparisons.append(row_cells)
     return comparisons
-
-
-def guess_statement_item_type(raw_row: Dict[str, Any], total_entries: Optional[Dict[str, Any]] = None, contact_config: Optional[Dict[str, Any]] = None) -> str:
-    """Wrapper for compatibility; delegates to the shared classifier."""
-    return classify_item_type(raw_row, total_entries=total_entries, contact_config=contact_config)

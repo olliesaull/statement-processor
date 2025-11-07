@@ -1,10 +1,10 @@
 import io
-import json
 import re
-from typing import Any, Dict, List, Set, Tuple, Union
+from typing import Any, Dict, List, Set, Union
 
 import pdfplumber
 from config import logger
+from exceptions import ItemCountDisagreementError
 try:
     from werkzeug.datastructures import FileStorage  # type: ignore
 except Exception:  # pragma: no cover - optional import for typing
@@ -22,20 +22,6 @@ def normalise(s: str) -> str:
 # -----------------------------
 # Learn a generalized pattern from JSON refs
 # -----------------------------
-def _runs_by_type(s: str) -> List[Tuple[str, int]]:
-    """Compress normalized string into runs of L(etter)/D(igit)/X(other)."""
-    runs, prev, cnt = [], None, 0
-    for ch in s:
-        kind = "L" if ch.isalpha() else ("D" if ch.isdigit() else "X")
-        if kind == prev:
-            cnt += 1
-        else:
-            if prev is not None:
-                runs.append((prev, cnt))
-            prev, cnt = kind, 1
-    if prev is not None:
-        runs.append((prev, cnt))
-    return runs
 
 def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, min_samples_for_prefixing: int = 3, coverage_threshold: float = 0.6) -> re.Pattern:
     """
@@ -228,7 +214,7 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
                 break
 
     if not has_text:
-        logger.info("[WARNING] PDF appears to be image-only (scanned). Skipping validation.")
+        logger.warning("PDF appears to be image-only (scanned). Skipping validation.")
 
     # Collect JSON refs
     raw_refs = [(i, (it.get(ref_field) or "").strip()) for i, it in enumerate(statement_items)]
@@ -249,17 +235,8 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
 
     # Print summary
     total_checked = len(found) + len(not_found)
-    logger.info(
-        "JSON -> PDF summary",
-        total_checked=total_checked,
-        found=len(found),
-        not_found=len(not_found),
-    )
-    logger.info(
-        "PDF -> JSON summary",
-        pdf_candidates=len(pdf_candidates_norm),
-        pdf_only=len(pdf_only_norm),
-    )
+    logger.info("JSON -> PDF summary", total_checked=total_checked, found=len(found), not_found=len(not_found))
+    logger.info("PDF -> JSON summary", pdf_candidates=len(pdf_candidates_norm), pdf_only=len(pdf_only_norm))
 
     summary = {
         "summary": {
@@ -280,6 +257,7 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
     }
 
     if len(not_found) > 0 or len(pdf_only_norm) > 0:
-        logger.info("Validation discrepancies", details=json.dumps(summary, indent=2))
+        # Raise with full summary; exception logs a warning with structured details
+        raise ItemCountDisagreementError(pdfplumber_count=len(pdf_candidates_norm), textract_count=len(json_norm_set), summary=summary, message="PDF/Textract references disagree")
 
     return summary

@@ -47,14 +47,6 @@ MONTH_ABBR_TO_NUM = {
 MONTH_NAME_TO_NUM["sept"] = 9  # common alternative abbreviation
 
 
-def ensure_abbrev_month(fmt: Optional[str]) -> Optional[str]:
-    """Prefer abbreviated month token (MMMM -> MMM) when displaying."""
-    if not fmt:
-        return fmt
-    normalized = _normalize_template(fmt)
-    return normalized.replace("MMMM", "MMM")
-
-
 def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]:
     """Parse ``value`` using the custom Supplier Date Format tokens."""
     if value is None:
