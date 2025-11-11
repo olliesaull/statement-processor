@@ -307,6 +307,13 @@ def statements():
     show_completed = view == "completed"
     statement_rows = get_completed_statements() if show_completed else get_incomplete_statements()
     sort_key = request.args.get("sort", "uploaded").lower()
+    dir_param = (request.args.get("dir") or "").strip().lower()
+    ALLOWED_DIR = {"asc", "desc"}
+    default_dir_map = {"contact": "asc", "date_range": "desc", "uploaded": "desc"}
+    if sort_key not in {"contact", "date_range", "uploaded"}:
+        sort_key = "uploaded"
+    current_dir = dir_param if dir_param in ALLOWED_DIR else default_dir_map.get(sort_key, "desc")
+    reverse = current_dir == "desc"
     message = session.pop("statements_message", None)
 
     def _parse_iso_date(value: object) -> Optional[date]:
@@ -348,17 +355,16 @@ def statements():
             row["ItemDateRangeDisplay"] = "—"
 
     if sort_key == "date_range":
-        statement_rows.sort(key=lambda r: r.get("_latest_item_date") or date.min, reverse=True)
+        statement_rows.sort(key=lambda r: r.get("_latest_item_date") or date.min, reverse=reverse)
     elif sort_key == "uploaded":
-        statement_rows.sort(key=lambda r: r.get("_uploaded_at") or datetime.min, reverse=True)
+        statement_rows.sort(key=lambda r: r.get("_uploaded_at") or datetime.min, reverse=reverse)
     else:
+        # Contact: alphabetical or reverse, always keep missing/blank names last
         sort_key = "contact"
-        def _contact_sort_value(row: Dict[str, Any]) -> Tuple[int, str]:
-            name = row.get("ContactName")
-            if isinstance(name, str) and name.strip():
-                return (0, name.strip().casefold())
-            return (1, "")
-        statement_rows.sort(key=_contact_sort_value)
+        nonempty = [r for r in statement_rows if isinstance(r.get("ContactName"), str) and r.get("ContactName").strip()]
+        empty = [r for r in statement_rows if r not in nonempty]
+        nonempty.sort(key=lambda r: str(r.get("ContactName")).strip().casefold(), reverse=reverse)
+        statement_rows = nonempty + empty
 
     for row in statement_rows:
         row.pop("_earliest_item_date", None)
@@ -369,16 +375,30 @@ def statements():
     if show_completed:
         base_args["view"] = "completed"
 
+    # For each sort key, clicking its button toggles the direction if already active,
+    # otherwise applies the default direction for that key.
+    def next_dir_for(key: str) -> str:
+        if key == sort_key:
+            return "asc" if current_dir == "desc" else "desc"
+        return default_dir_map.get(key, "desc")
+
     sort_links = {
-        "contact": url_for("statements", **dict(base_args, sort="contact")),
-        "date_range": url_for("statements", **dict(base_args, sort="date_range")),
-        # Not surfaced in UI yet, but supported via `?sort=uploaded`
-        "uploaded": url_for("statements", **dict(base_args, sort="uploaded")),
+        "contact": url_for("statements", **dict(base_args, sort="contact", dir=next_dir_for("contact"))),
+        "date_range": url_for("statements", **dict(base_args, sort="date_range", dir=next_dir_for("date_range"))),
+        "uploaded": url_for("statements", **dict(base_args, sort="uploaded", dir=next_dir_for("uploaded"))),
     }
 
-    logger.info("Rendering statements", tenant_id=tenant_id, view=view, sort=sort_key, statements=len(statement_rows))
+    logger.info("Rendering statements", tenant_id=tenant_id, view=view, sort=sort_key, direction=current_dir, statements=len(statement_rows))
 
-    return render_template("statements.html", statements=statement_rows, show_completed=show_completed, message=message, current_sort=sort_key, sort_links=sort_links)
+    return render_template(
+        "statements.html",
+        statements=statement_rows,
+        show_completed=show_completed,
+        message=message,
+        current_sort=sort_key,
+        current_dir=current_dir,
+        sort_links=sort_links,
+    )
 
 
 @app.route("/statement/<statement_id>/delete", methods=["POST"])
