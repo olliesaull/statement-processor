@@ -617,14 +617,23 @@ def statement(statement_id: str):
         thousands_separator=thousands_sep,
     )
 
-    # 4) Compare LEFT (statement) vs RIGHT (Xero) for row highlighting
+    # 4) Compare LEFT (statement) vs RIGHT (Xero) for per-cell indicators
     row_comparisons = build_row_comparisons(
         left_rows=rows_by_header,
         right_rows=right_rows_by_header,
         display_headers=display_headers,
         header_to_field=header_to_field,
     )
-    row_matches = [all(cell.matches for cell in row) for row in row_comparisons]
+    # Row highlight: if this row is linked to a Xero document (exact or substring),
+    # consider the row a "match" for coloring purposes even if some cells differ.
+    if item_number_header:
+        row_matches: List[bool] = []
+        for r in rows_by_header:
+            num = (r.get(item_number_header) or "").strip()
+            row_matches.append(bool(num and matched_invoice_to_statement_item.get(num)))
+    else:
+        # Fallback: if no number mapping, use strict all-cells match
+        row_matches = [all(cell.matches for cell in row) for row in row_comparisons]
 
     item_status_map = get_statement_item_status_map(tenant_id, statement_id)
 

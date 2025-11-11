@@ -108,7 +108,7 @@
                 <tr class="{{ row_class }}">
                   {% set cells = row.cell_comparisons or [] %}
                   {% for cell in cells %}
-                    <td class="{% if loop.last %}split-right{% endif %}{% if not cell.matches %} {% if anomalous %}anomaly-cell{% else %}cell-mismatch{% endif %}{% endif %}">
+                    <td class="{% if loop.last %}split-right{% endif %}{% if anomalous and not cell.matches %} anomaly-cell{% endif %}">
                       {% set stmt_text = cell.statement_value %}
                       {{ stmt_text }}
                       {% if not cell.matches %}
@@ -117,7 +117,7 @@
                     </td>
                   {% endfor %}
                   {% for cell in cells %}
-                    <td class="{% if not cell.matches %}{% if anomalous %}anomaly-cell{% else %}cell-mismatch{% endif %}{% endif %}">
+                    <td class="{% if anomalous and not cell.matches %}anomaly-cell{% endif %}">
                       {% set xero_text = cell.xero_value %}
                       {{ xero_text }}
                       {% if not cell.matches %}
