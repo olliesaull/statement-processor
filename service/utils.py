@@ -1004,7 +1004,16 @@ def build_row_comparisons(
         for header in display_headers:
             left_val = left.get(header, "") if isinstance(left, dict) else ""
             right_val = right.get(header, "") if isinstance(right, dict) else ""
-            matches = equal(left_val, right_val)
+            # For the canonical invoice number column, treat values as IDs and
+            # consider them matching if one normalized string contains the other.
+            if header_to_field and header_to_field.get(header) == "number":
+                def _norm_id_text(x: Any) -> str:
+                    s = "" if x is None else str(x).strip()
+                    return "".join(ch for ch in s.upper() if ch.isalnum())
+                a, b = _norm_id_text(left_val), _norm_id_text(right_val)
+                matches = bool(a and b and (a == b or a in b or b in a))
+            else:
+                matches = equal(left_val, right_val)
             canonical = (header_to_field or {}).get(header)
             row_cells.append(
                 CellComparison(
