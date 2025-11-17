@@ -6,9 +6,10 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 import requests
+from botocore.exceptions import ClientError
 from flask import (
     Flask,
     abort,
@@ -20,12 +21,18 @@ from flask import (
     url_for,
 )
 from flask_caching import Cache
-from botocore.exceptions import ClientError
-from werkzeug.utils import secure_filename
 from openpyxl import Workbook
+from werkzeug.utils import secure_filename
 
 import cache_provider
-from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger, tenant_statements_table
+from config import (
+    CLIENT_ID,
+    CLIENT_SECRET,
+    S3_BUCKET_NAME,
+    STAGE,
+    logger,
+    tenant_statements_table,
+)
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
@@ -34,31 +41,33 @@ from sync import check_load_required, sync_data
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils import (
     StatementJSONNotFoundError,
+    active_tenant_required,
     add_statement_to_table,
     block_when_loading,
     build_right_rows,
     build_row_comparisons,
+    delete_statement_data,
     fetch_json_statement,
     get_completed_statements,
     get_date_format_from_config,
-    get_number_separators_from_config,
     get_incomplete_statements,
+    get_number_separators_from_config,
     get_statement_item_status_map,
     get_statement_record,
     is_allowed_pdf,
     mark_statement_completed,
     match_invoices_to_statement_items,
     prepare_display_mappings,
-    delete_statement_data,
     route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
     set_all_statement_items_completed,
     set_statement_item_completed,
+    statement_json_s3_key,
+    statement_pdf_s3_key,
     textract_in_background,
     upload_statement_to_s3,
     xero_token_required,
-    active_tenant_required,
 )
 from xero_repository import (
     get_contacts,
@@ -265,7 +274,7 @@ def upload_statements():
                 }
 
                 # Upload pdf statement to S3
-                pdf_statement_key = f"{tenant_id}/statements/{statement_id}.pdf"
+                pdf_statement_key = statement_pdf_s3_key(tenant_id, statement_id)
                 upload_statement_to_s3(fs_like=f, key=pdf_statement_key)
                 logger.info("Uploaded statement PDF", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, s3_key=pdf_statement_key)
 
@@ -276,7 +285,7 @@ def upload_statements():
                 logger.info("Statement submitted", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id)
 
                 # Kick off background textraction so it's ready by the time the user views it
-                json_statement_key = f"{tenant_id}/statements/{statement_id}.json"
+                json_statement_key = statement_json_s3_key(tenant_id, statement_id)
                 _executor.submit(textract_in_background, tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
                 logger.info("Queued Textract background job", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
 
@@ -476,8 +485,7 @@ def statement(statement_id: str):
                     logger.exception("Failed to toggle statement item completion", statement_id=statement_id, statement_item_id=statement_item_id, tenant_id=tenant_id, desired_state=desired_state, error=exc)
             return redirect(url_for("statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false"))
 
-    route_key = f"{tenant_id}/statements/{statement_id}"
-    json_statement_key = f"{route_key}.json"
+    json_statement_key = statement_json_s3_key(tenant_id, statement_id)
 
     contact_id = record.get("ContactID")
     is_completed = str(record.get("Completed", "")).lower() == "true"
@@ -972,17 +980,8 @@ def configs():
         flat.pop("item_type", None)
 
         # Canonical field order from the Pydantic model, prioritising config UI alignment
-        preferred_order = [
-            "number",
-            "total",
-            "date",
-            "due_date",
-        ]
-        model_fields = [
-            f
-            for f in StatementItem.model_fields.keys()
-            if f not in {"raw", "statement_item_id", "item_type"}
-        ]
+        preferred_order = ["number", "total", "date", "due_date"]
+        model_fields = [f for f in StatementItem.model_fields.keys() if f not in {"raw", "statement_item_id", "item_type"}]
         remaining_fields = [f for f in model_fields if f not in preferred_order]
         canonical_order = preferred_order + remaining_fields
 
@@ -1049,11 +1048,7 @@ def configs():
 
                 # Preserve any root keys not shown in the mapping editor.
                 # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
-                preserved = {
-                    k: v
-                    for k, v in existing.items()
-                    if k not in posted_fields + ["statement_items"] and k not in {"reference", "item_type"}
-                }
+                preserved = {k: v for k, v in existing.items() if k not in posted_fields + ["statement_items"] and k not in {"reference", "item_type"}}
 
                 # Rebuild mapping from form
                 new_map: Dict[str, Any] = {}

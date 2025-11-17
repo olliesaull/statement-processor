@@ -129,7 +129,6 @@ def scope_str() -> str:
 
 class RedirectToLogin(HTTPException):
     """HTTP exception that produces a redirect to the login route."""
-
     code = 302
 
     def __init__(self) -> None:
@@ -428,10 +427,7 @@ def delete_statement_data(tenant_id: str, statement_id: str) -> None:
         query_kwargs["ExclusiveStartKey"] = lek
 
     # Remove S3 artifacts
-    s3_keys = [
-        f"{tenant_id}/statements/{statement_id}.pdf",
-        f"{tenant_id}/statements/{statement_id}.json",
-    ]
+    s3_keys = [statement_pdf_s3_key(tenant_id, statement_id), statement_json_s3_key(tenant_id, statement_id)]
     for key in s3_keys:
         try:
             s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=key)
@@ -460,16 +456,38 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
     try:
         # Ensure we don't overwrite an existing statement for this tenant.
         # NOTE: Table key schema is (TenantID, StatementID). Using StatementID here is intentional.
-        tenant_statements_table.put_item(
-            Item=item,
-            ConditionExpression=Attr("StatementID").not_exists(),
-        )
+        tenant_statements_table.put_item(Item=item, ConditionExpression=Attr("StatementID").not_exists())
         logger.info("Statement added to table", tenant_id=tenant_id, statement_id=entry["statement_id"], contact_id=entry.get("contact_id"))
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             # Using single-quotes to simplify nested quotes in f-string
             raise ValueError(f"Statement {entry['statement_name']} already exists") from e
         raise
+
+
+def _clean_key_segment(value: Optional[str], label: str) -> str:
+    segment = (value or "").strip()
+    if not segment:
+        raise ValueError(f"{label} is required for S3 key construction")
+    if any(sep in segment for sep in ("/", "\\")):
+        raise ValueError(f"{label} cannot contain path separators")
+    return segment
+
+
+def _statement_s3_key(tenant_id: str, statement_id: str, extension: str) -> str:
+    tenant_segment = _clean_key_segment(tenant_id, "tenant_id")
+    statement_segment = _clean_key_segment(statement_id, "statement_id")
+    return f"{tenant_segment}/statements/{statement_segment}{extension}"
+
+
+def statement_pdf_s3_key(tenant_id: str, statement_id: str) -> str:
+    """Return the S3 key for a tenant's statement PDF."""
+    return _statement_s3_key(tenant_id, statement_id, ".pdf")
+
+
+def statement_json_s3_key(tenant_id: str, statement_id: str) -> str:
+    """Return the S3 key for a tenant's statement JSON payload."""
+    return _statement_s3_key(tenant_id, statement_id, ".json")
 
 
 def upload_statement_to_s3(fs_like: Any, key: str) -> bool:
@@ -485,15 +503,11 @@ def upload_statement_to_s3(fs_like: Any, key: str) -> bool:
     stream.seek(0)
 
     try:
-        s3_client.upload_fileobj(
-            Fileobj=stream,
-            Bucket=S3_BUCKET_NAME,
-            Key=key,
-        )
+        s3_client.upload_fileobj(Fileobj=stream, Bucket=S3_BUCKET_NAME, Key=key)
         logger.info("Uploaded statement asset to S3", key=key)
         return True
     except (BotoCoreError, ClientError) as e:
-        logger.info("Failed to upload to S3", key=key, error=e)
+        logger.exception("Failed to upload to S3", key=key, error=e)
         return False
 
 
@@ -572,16 +586,9 @@ def textract_in_background(tenant_id: str, contact_id: Optional[str], pdf_key: s
     try:
         # This will no-op if JSON already exists; otherwise runs Textract and uploads JSON
         get_or_create_json_statement(tenant_id=tenant_id, contact_id=contact_id or "", bucket=S3_BUCKET_NAME, pdf_key=pdf_key, json_key=json_key)
-        logger.info("[bg] Textraction complete", tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_key, json_key=json_key)
-    except Exception as exc:
-        logger.exception(
-            "[bg] Textraction failed",
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            pdf_key=pdf_key,
-            json_key=json_key,
-            error=str(exc),
-        )
+        logger.info("Textraction complete", tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_key, json_key=json_key)
+    except Exception:
+        logger.exception("Textraction failed", tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_key, json_key=json_key)
 
 # -----------------------------
 # Helpers for statement view
@@ -830,13 +837,7 @@ def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Di
                 "match_score": 1.0,
                 "matched_invoice_number": key,
             }
-            logger.info(
-                "Exact match",
-                statement_number=key,
-                invoice_number=key,
-                statement_item=stmt_item,
-                xero_item=inv,
-            )
+            logger.info("Exact match", statement_number=key, invoice_number=key, statement_item=stmt_item, xero_item=inv)
             # Track used invoice to exclude from fuzzy matching pool
             inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
             if inv_id:
@@ -863,9 +864,7 @@ def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Di
             continue
         candidates.append((inv_no_str, inv, _norm_num(inv_no_str)))
 
-    numbers_in_rows = [
-        (r.get(item_number_header) or "").strip() for r in rows_by_header if r.get(item_number_header)
-    ]
+    numbers_in_rows = [(r.get(item_number_header) or "").strip() for r in rows_by_header if r.get(item_number_header)]
     missing = [n for n in numbers_in_rows if n and n not in matched]
 
     # Keywords indicating the statement number cell refers to a payment action, not an invoice number
@@ -989,12 +988,7 @@ def build_right_rows(
     return right_rows
 
 
-def build_row_comparisons(
-    left_rows: List[Dict[str, str]],
-    right_rows: List[Dict[str, str]],
-    display_headers: List[str],
-    header_to_field: Optional[Dict[str, str]] = None,
-) -> List[List[CellComparison]]:
+def build_row_comparisons(left_rows: List[Dict[str, str]], right_rows: List[Dict[str, str]], display_headers: List[str], header_to_field: Optional[Dict[str, str]] = None) -> List[List[CellComparison]]:
     """
     Build per-cell comparison objects for each row.
     """
