@@ -47,8 +47,10 @@ from utils import (
     build_right_rows,
     build_row_comparisons,
     delete_statement_data,
+    enforce_csrf_protection,
     fetch_json_statement,
     get_completed_statements,
+    get_csrf_token,
     get_date_format_from_config,
     get_incomplete_statements,
     get_number_separators_from_config,
@@ -81,6 +83,16 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(16))
 
 cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 0})
 cache_provider.set_cache(cache)
+
+
+@app.before_request
+def _apply_csrf_protection() -> None:
+    enforce_csrf_protection()
+
+
+@app.context_processor
+def _inject_csrf_token() -> Dict[str, Any]:
+    return {"csrf_token": get_csrf_token}
 
 # Mirror selected config values in Flask app config for convenience
 app.config["CLIENT_ID"] = CLIENT_ID

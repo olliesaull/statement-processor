@@ -50,11 +50,13 @@
                     </button>
                     {% if not is_active %}
                       <form method="post" action="{{ url_for('select_tenant') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
                         <button class="btn btn-outline-primary btn-sm" type="submit">Switch to Tenant</button>
                       </form>
                     {% endif %}
                     <form method="post" action="{{ url_for('disconnect_tenant') }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
                       <button class="btn btn-outline-danger btn-sm" type="submit">Disconnect Tenant</button>
                     </form>

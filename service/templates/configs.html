@@ -99,6 +99,7 @@
 
   <!-- Contact selector -->
   <form method="POST" action="{{ url_for('configs') }}" class="mb-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset class="row gy-2 gx-3 align-items-center">
       <input type="hidden" name="action" value="load">
       <div class="col-auto">
@@ -120,6 +121,7 @@
 
   {% if selected_contact_id %}
   <form method="POST" action="{{ url_for('configs') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset>
     <input type="hidden" name="action" value="save_map">
     <input type="hidden" name="contact_id" value="{{ selected_contact_id }}">

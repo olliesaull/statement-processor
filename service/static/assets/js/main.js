@@ -1,3 +1,8 @@
+const getCsrfToken = () => {
+  const meta = document.querySelector('meta[name="csrf-token"]');
+  return meta ? meta.getAttribute("content") : "";
+};
+
 window.addEventListener("load", () => {
   if (window.location.pathname === "/tenant_management") {
 			// Event listeners to check for inactivity 
@@ -81,7 +86,10 @@ async function handleSyncClick(button) {
   try {
     const response = await fetch(`/api/tenants/${encodeURIComponent(tenantId)}/sync`, {
       method: "POST",
-      headers: { "Accept": "application/json" },
+      headers: {
+        "Accept": "application/json",
+        "X-CSRF-Token": getCsrfToken(),
+      },
       credentials: "same-origin",
     });
 

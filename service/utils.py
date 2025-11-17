@@ -6,11 +6,13 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
+import secrets
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
 from flask import (
+    abort,
     redirect,
     request,
     session,
@@ -44,6 +46,41 @@ SCOPES = [
     "offline_access", "openid", "profile", "email", "accounting.transactions", "accounting.reports.read", "accounting.journals.read",
     "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
 ]
+CSRF_SESSION_KEY = "_csrf_token"
+SAFE_CSRF_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+
+
+def get_csrf_token() -> str:
+    """Return the per-session CSRF token, generating one if missing."""
+    token = session.get(CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[CSRF_SESSION_KEY] = token
+    return token
+
+
+def _is_valid_csrf(token: Optional[str]) -> bool:
+    expected = session.get(CSRF_SESSION_KEY)
+    if not expected:
+        expected = get_csrf_token()
+    if not token:
+        return False
+    try:
+        return secrets.compare_digest(token, expected)
+    except Exception:
+        return False
+
+
+def enforce_csrf_protection() -> None:
+    """Abort unsafe requests if the CSRF token is missing or invalid."""
+    if request.method in SAFE_CSRF_METHODS:
+        get_csrf_token()
+        return
+
+    token = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token") or request.args.get("csrf_token")
+    if not _is_valid_csrf(token):
+        logger.warning("CSRF validation failed", route=request.path, method=request.method)
+        abort(400, description="Invalid CSRF token")
 
 def get_xero_oauth2_token() -> Optional[dict]:
     """Return the token dict the SDK expects, or None if not set."""
