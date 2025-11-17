@@ -142,12 +142,13 @@ class StatementProcessorStack(Stack):
                         "DOMAIN_NAME": domain_name,
                         "POWERTOOLS_SERVICE_NAME": "StatementProcessor",
                         "LOG_LEVEL": "DEBUG",
-                        "XERO_CLIENT_ID_PATH": "/StatementProcessor/XERO_CLIENT_ID",
-                        "XERO_CLIENT_SECRET_PATH": "/StatementProcessor/XERO_CLIENT_SECRET",
+                        "MAX_UPLOAD_MB": "10",
                         "S3_BUCKET_NAME": S3_BUCKET_NAME,
                         "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
                         "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
-                        "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME
+                        "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
+                        "XERO_CLIENT_ID_PATH": "/StatementProcessor/XERO_CLIENT_ID",
+                        "XERO_CLIENT_SECRET_PATH": "/StatementProcessor/XERO_CLIENT_SECRET"
                     },
                 )
             ),

@@ -82,6 +82,10 @@ from xero_repository import (
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(16))
 
+MAX_UPLOAD_MB = os.getenv("MAX_UPLOAD_MB", "10")
+MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB) * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+
 os.makedirs(app.instance_path, exist_ok=True)
 session_dir = os.path.join(app.instance_path, "flask_session")
 os.makedirs(session_dir, exist_ok=True)
