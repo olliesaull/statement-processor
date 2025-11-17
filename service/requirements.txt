@@ -15,6 +15,7 @@ numpy
 # Web app
 flask
 flask-caching
+Flask-Session
 requests
 xero-python
 

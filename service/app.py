@@ -21,6 +21,7 @@ from flask import (
     url_for,
 )
 from flask_caching import Cache
+from flask_session import Session
 from openpyxl import Workbook
 from werkzeug.utils import secure_filename
 
@@ -80,6 +81,17 @@ from xero_repository import (
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(16))
+
+os.makedirs(app.instance_path, exist_ok=True)
+session_dir = os.path.join(app.instance_path, "flask_session")
+os.makedirs(session_dir, exist_ok=True)
+app.config.update(
+    SESSION_TYPE="filesystem",
+    SESSION_FILE_DIR=session_dir,
+    SESSION_PERMANENT=False,
+    SESSION_USE_SIGNER=True,
+)
+Session(app)
 
 cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 0})
 cache_provider.set_cache(cache)
