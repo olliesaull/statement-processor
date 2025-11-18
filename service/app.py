@@ -321,7 +321,7 @@ def upload_statements():
 
         if uploads_ok:
             success_count = uploads_ok
-        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=len(error_messages))
+        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=[msg for msg in error_messages])
 
     return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages)
 

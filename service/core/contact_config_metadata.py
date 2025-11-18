@@ -5,7 +5,7 @@ FIELD_DESCRIPTIONS: Dict[str, str] = {
         "Transaction date as it appears on the statement."
     ),
     "due_date": (
-        "Payment due date from the statement line."
+        "Payment due date from the statement line. If you do not care about due date, leave it blank."
     ),
     "number": (
         "Document number on the statement (e.g. invoice number). This is the primary key used when matching to Xero. "
