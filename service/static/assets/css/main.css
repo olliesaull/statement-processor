@@ -88,7 +88,7 @@ opacity: 0.6;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: 0.4rem;
+  margin-left: 0;
   width: 1.2rem;
   height: 1.2rem;
   border-radius: 999px;
@@ -99,13 +99,21 @@ opacity: 0.6;
   line-height: 1;
 }
 
-.cell-value-truncate {
-  display: inline-block;
-  max-width: 12ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.cell-value-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 18ch;
   vertical-align: middle;
 }
 
-.legend-indicator { margin-left: 0; }
+/* Statement comparison table cells tend to run wider */
+.table-compare .cell-value-wrapper { max-width: 22ch; }
+
+.cell-value-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}

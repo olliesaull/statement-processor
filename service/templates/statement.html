@@ -110,19 +110,25 @@
                   {% for cell in cells %}
                     <td class="{% if loop.last %}split-right{% endif %}{% if anomalous and not cell.matches %} anomaly-cell{% endif %}">
                       {% set stmt_text = cell.statement_value %}
-                      {{ stmt_text }}
-                      {% if not cell.matches %}
-                        <span class="cell-indicator" title="Does not match Xero value">!</span>
-                      {% endif %}
+                      {% set show_indicator = row.matches and not cell.matches %}
+                      <span class="cell-value-wrapper">
+                        <span class="cell-value-truncate" title="{{ stmt_text|default('', true)|e }}">{{ stmt_text }}</span>
+                        {% if show_indicator %}
+                          <span class="cell-indicator" title="Does not match Xero value">!</span>
+                        {% endif %}
+                      </span>
                     </td>
                   {% endfor %}
                   {% for cell in cells %}
                     <td class="{% if anomalous and not cell.matches %}anomaly-cell{% endif %}">
                       {% set xero_text = cell.xero_value %}
-                      {{ xero_text }}
-                      {% if not cell.matches %}
-                        <span class="cell-indicator" title="Does not match statement value">!</span>
-                      {% endif %}
+                      {% set show_indicator = row.matches and not cell.matches %}
+                      <span class="cell-value-wrapper">
+                        <span class="cell-value-truncate" title="{{ xero_text|default('', true)|e }}">{{ xero_text }}</span>
+                        {% if show_indicator %}
+                          <span class="cell-indicator" title="Does not match statement value">!</span>
+                        {% endif %}
+                      </span>
                     </td>
                   {% endfor %}
                   <td class="text-center">
