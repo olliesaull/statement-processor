@@ -1,14 +1,15 @@
 from aws_cdk import (
+    Duration,
     RemovalPolicy,
     Stack,
-    Duration,
 )
-from aws_cdk import aws_apprunner_alpha as apprunner_alpha
 from aws_cdk import aws_apprunner as apprunner
+from aws_cdk import aws_apprunner_alpha as apprunner_alpha
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
+from aws_cdk import aws_lambda as _lambda
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_sns as sns
@@ -23,6 +24,7 @@ class StatementProcessorStack(Stack):
 
         stage = stage.lower()
         is_production: bool = stage == "prod"
+        log_retention=logs.RetentionDays.THREE_MONTHS if is_production else logs.RetentionDays.ONE_WEEK
 
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
@@ -101,6 +103,24 @@ class StatementProcessorStack(Stack):
         )
 
         #endregion ---------- S3 ----------
+
+        #region ---------- Lambda ----------
+
+        textraction_lambda_image = _lambda.EcrImageCode.from_asset_image(directory="") # TODO: Create function code
+
+        textraction_lambda =  _lambda.Function(
+            self, 
+            "TextractionLambda",
+            description="Perform statement textraction using Textract and PDF Plumber",
+            code=textraction_lambda_image,
+            memory_size=2048,
+            timeout=Duration.seconds(900),
+            log_retention=log_retention
+        )
+
+        # TODO: Add Lambda function envars and DDB / S3 permissions
+
+        #endregion ---------- Lambda ----------
 
         #region ---------- AppRunner ----------
 
