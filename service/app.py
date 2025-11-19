@@ -9,7 +9,6 @@ from io import BytesIO
 from typing import Any, Dict, List, Optional, Set
 
 import requests
-from botocore.exceptions import ClientError
 from flask import (
     Flask,
     abort,
@@ -33,7 +32,6 @@ from config import (
     S3_BUCKET_NAME,
     STAGE,
     logger,
-    tenant_statements_table,
 )
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
@@ -65,6 +63,7 @@ from utils import (
     scope_str,
     set_all_statement_items_completed,
     set_statement_item_completed,
+    persist_item_types_to_dynamo,
     statement_json_s3_key,
     statement_pdf_s3_key,
     textract_in_background,
@@ -641,15 +640,7 @@ def statement(statement_id: str):
         except Exception as exc:
             logger.exception("Failed to persist statement JSON", statement_id=statement_id, error=str(exc))
 
-        for statement_item_id, new_type in classification_updates.items():
-            try:
-                tenant_statements_table.update_item(
-                    Key={"TenantID": tenant_id, "StatementID": statement_item_id},
-                    UpdateExpression="SET item_type = :item_type",
-                    ExpressionAttributeValues={":item_type": new_type},
-                )
-            except ClientError as exc:
-                logger.exception("Failed to persist item type to DynamoDB", statement_id=statement_id, statement_item_id=statement_item_id, item_type=new_type, error=str(exc))
+        persist_item_types_to_dynamo(tenant_id, classification_updates)
         logger.info("Persisted statement item types to DynamoDB", statement_id=statement_id, updated=len(classification_updates))
 
     # 3) Build right-hand rows from the matched invoices

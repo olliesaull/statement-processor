@@ -1,7 +1,9 @@
 import io
 import json
+import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -44,6 +46,9 @@ SCOPES = [
     "offline_access", "openid", "profile", "email", "accounting.transactions", "accounting.reports.read", "accounting.journals.read",
     "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
 ]
+_DDB_UPDATE_MAX_WORKERS = max(4, min(16, (os.cpu_count() or 4)))
+
+
 def get_xero_oauth2_token() -> Optional[dict]:
     """Return the token dict the SDK expects, or None if not set."""
     return session.get("xero_oauth2_token")
@@ -263,6 +268,31 @@ def route_handler_logging(function):
         return function(*args, **kwargs)
 
     return decorator
+
+
+def persist_item_types_to_dynamo(tenant_id: Optional[str], classification_updates: Dict[str, str], *, max_workers: Optional[int] = None) -> None:
+    """Update DynamoDB item types using a thread pool to hide network latency."""
+    if not tenant_id or not classification_updates:
+        return
+
+    items = list(classification_updates.items())
+    worker_count = max_workers or _DDB_UPDATE_MAX_WORKERS
+    worker_count = min(worker_count, len(items)) or 1
+
+    def _update(entry: Tuple[str, str]) -> None:
+        statement_item_id, new_type = entry
+        try:
+            tenant_statements_table.update_item(
+                Key={"TenantID": tenant_id, "StatementID": statement_item_id},
+                UpdateExpression="SET item_type = :item_type",
+                ExpressionAttributeValues={":item_type": new_type},
+            )
+        except ClientError as exc:
+            logger.exception("Failed to persist item type to DynamoDB", tenant_id=tenant_id, statement_id=statement_item_id, item_type=new_type, error=str(exc))
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        executor.map(_update, items)
+
 
 def is_allowed_pdf(filename: str, mimetype: str) -> bool:
     """Basic check for PDF uploads by extension and MIME type.
