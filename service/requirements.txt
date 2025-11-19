@@ -18,6 +18,7 @@ flask-caching
 Flask-Session
 requests
 xero-python
+Flask-WTF
 
 # Textraction
 amazon-textract-textractor

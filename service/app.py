@@ -22,6 +22,7 @@ from flask import (
 )
 from flask_caching import Cache
 from flask_session import Session
+from flask_wtf.csrf import CSRFProtect
 from openpyxl import Workbook
 from werkzeug.utils import secure_filename
 
@@ -48,10 +49,8 @@ from utils import (
     build_right_rows,
     build_row_comparisons,
     delete_statement_data,
-    enforce_csrf_protection,
     fetch_json_statement,
     get_completed_statements,
-    get_csrf_token,
     get_date_format_from_config,
     get_incomplete_statements,
     get_number_separators_from_config,
@@ -82,6 +81,9 @@ from xero_repository import (
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(16))
 
+# Enable CSRF protection globally
+csrf = CSRFProtect(app)
+
 MAX_UPLOAD_MB = os.getenv("MAX_UPLOAD_MB", "10")
 MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB) * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -100,15 +102,6 @@ Session(app)
 cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 0})
 cache_provider.set_cache(cache)
 
-
-@app.before_request
-def _apply_csrf_protection() -> None:
-    enforce_csrf_protection()
-
-
-@app.context_processor
-def _inject_csrf_token() -> Dict[str, Any]:
-    return {"csrf_token": get_csrf_token}
 
 # Mirror selected config values in Flask app config for convenience
 app.config["CLIENT_ID"] = CLIENT_ID

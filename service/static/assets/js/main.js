@@ -88,7 +88,7 @@ async function handleSyncClick(button) {
       method: "POST",
       headers: {
         "Accept": "application/json",
-        "X-CSRF-Token": getCsrfToken(),
+        "X-CSRFToken": getCsrfToken(),
       },
       credentials: "same-origin",
     });
