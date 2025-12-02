@@ -239,7 +239,8 @@ def upload_statements():
     tenant_id = session.get("xero_tenant_id")
 
     contacts_raw = get_contacts()
-    contacts_list = sorted(contacts_raw, key=lambda c: (c.get("name") or "").casefold())
+    contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
+    contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     success_count: Optional[int] = None
     error_messages: List[str] = []
@@ -946,10 +947,8 @@ def configs():
     tenant_id = session.get("xero_tenant_id")
 
     contacts_raw = get_contacts()
-    contacts_list = sorted(
-        contacts_raw,
-        key=lambda c: (c.get("name") or "").casefold(),
-    )
+    contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
+    contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     logger.info("Rendering configs", tenant_id=tenant_id, contacts=len(contacts_list))
 

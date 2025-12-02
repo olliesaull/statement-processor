@@ -5,7 +5,7 @@ import os
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Callable, Optional, Dict
+from typing import Any, Callable, Dict, List, Optional
 
 from botocore.exceptions import ClientError
 
@@ -51,7 +51,7 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, resour
             payload = data if data is not None else existing_payload
 
         if payload is None:
-            payload = {} if resource == XeroType.INVOICES else []
+            payload = []
 
         os.makedirs(os.path.dirname(local_file), exist_ok=True)
 
@@ -60,7 +60,7 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, resour
 
         s3_client.upload_file(local_file, S3_BUCKET_NAME, s3_file)
 
-        record_count = len(payload) if isinstance(payload, list) else len(payload.keys()) if isinstance(payload, dict) else None
+        record_count = len(payload) if isinstance(payload, (list, dict)) else None
         logger.info(done_message, tenant_id=tenant_id, records=record_count)
         return True
 
@@ -114,27 +114,25 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
     if isinstance(delta, (list, dict)) and not delta:
         return existing
 
-    if resource == XeroType.INVOICES:
-        if not isinstance(existing, dict):
-            existing = {}
-        if not isinstance(delta, dict):
-            return existing
-
-        merged = existing.copy()
-        merged.update(delta)
-        return merged
+    def _as_list(value: Any) -> List[Dict[str, Any]]:
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            return [item for item in value.values() if isinstance(item, dict)]
+        return []
 
     key_fields = {
         XeroType.CONTACTS: "contact_id",
         XeroType.CREDIT_NOTES: "credit_note_id",
         XeroType.PAYMENTS: "payment_id",
+        XeroType.INVOICES: "invoice_id",
     }
     key = key_fields.get(resource)
     if key is None:
         return delta
 
-    existing_list = existing if isinstance(existing, list) else []
-    delta_list = delta if isinstance(delta, list) else []
+    existing_list = _as_list(existing)
+    delta_list = _as_list(delta)
     if not existing_list:
         return delta_list
     if not delta_list:
@@ -166,6 +164,8 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
         combined.sort(key=lambda note: (note.get("credit_note_id") or ""))
     elif resource == XeroType.PAYMENTS:
         combined.sort(key=lambda payment: (payment.get("payment_id") or ""))
+    elif resource == XeroType.INVOICES:
+        combined.sort(key=lambda inv: str(inv.get("number") or "").casefold())
 
     return combined
 

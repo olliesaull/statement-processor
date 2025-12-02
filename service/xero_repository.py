@@ -86,7 +86,7 @@ def get_contacts_from_xero(tenant_id: Optional[str] = None, modified_since: Opti
         logger.info("Fetching contacts", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
 
         while True:
-            kwargs = {"xero_tenant_id": tenant_id, "page": page, "include_archived": False, "page_size": PAGE_SIZE}
+            kwargs = {"xero_tenant_id": tenant_id, "page": page, "include_archived": True, "page_size": PAGE_SIZE}
             if modified_since:
                 kwargs["if_modified_since"] = modified_since
 
@@ -117,6 +117,7 @@ def get_contacts_from_xero(tenant_id: Optional[str] = None, modified_since: Opti
                         "contact_id": key,
                         "name": getattr(item, "name", None),
                         "updated_at": updated_iso,
+                        "contact_status": getattr(item, "contact_status", None),
                     }
                 )
 
@@ -139,28 +140,20 @@ def get_contacts_from_xero(tenant_id: Optional[str] = None, modified_since: Opti
     return []
 
 
-def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> Dict[str, Dict[str, Any]]:
-    """Get all supplier bills (ACCPAY) from Xero, across all pages.
-
-    Args:
-        modified_since: If provided, only invoices modified since this datetime are returned.
-        statuses: Optional explicit list of statuses to fetch. Defaults to common non-deleted statuses.
-        include_archived: Whether to include archived contacts' invoices (content still filtered by statuses).
-
-    Returns:
-        Dict keyed by invoice number with normalized invoice records.
-    """
+def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
+    """Get all supplier bills (ACCPAY) from Xero, across all pages."""
 
     tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id:
         logger.info("Skipping invoice lookup; tenant not selected")
-        return {}
+        return []
 
     client = api or get_xero_api_client()
 
     page = 1
     total_returned = 0
-    by_number: Dict[str, Dict[str, Any]] = {}
+    by_id: Dict[str, Dict[str, Any]] = {}
+    extras: List[Dict[str, Any]] = []
 
     try:
         logger.info("Fetching all invoices (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
@@ -189,10 +182,11 @@ def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datet
 
             for inv in invs:
                 rec = fmt_invoice_data(inv)
-                n = rec.get("number")
-                if n:
-                    # Last one wins if duplicates appear
-                    by_number[n] = rec
+                inv_id = rec.get("invoice_id")
+                if inv_id:
+                    by_id[str(inv_id)] = rec
+                else:
+                    extras.append(rec)
 
             # Stop when the final page returns less than PAGE_SIZE
             if batch_count < PAGE_SIZE:
@@ -200,17 +194,19 @@ def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datet
 
             page += 1
 
-        logger.info("Fetched all invoices", tenant_id=tenant_id, pages=page, returned=total_returned, unique_numbers=len(by_number))
-        return by_number
+        invoices: List[Dict[str, Any]] = list(by_id.values()) + extras
+        invoices.sort(key=lambda inv: str(inv.get("number") or "").casefold())
+        logger.info("Fetched all invoices", tenant_id=tenant_id, pages=page, returned=total_returned, unique_ids=len(by_id) if by_id else len(invoices))
+        return invoices
 
     except AccountingBadRequestException as e:
         raise_for_unauthorized(e)
         logger.exception("Failed to fetch invoices", tenant_id=tenant_id, error=e)
-        return {}
+        return []
     except Exception as e:
         raise_for_unauthorized(e)
         logger.exception("Failed to fetch invoices", tenant_id=tenant_id, error=e)
-        return {}
+        return []
 
 
 def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
@@ -397,10 +393,35 @@ def get_contacts(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
         return []
 
 
-def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
+def _coerce_invoice_list(payload: Any) -> List[Dict[str, Any]]:
+    """Normalize cached invoice payload (list or legacy dict) to a sorted list."""
+    if isinstance(payload, list):
+        invoices = [inv for inv in payload if isinstance(inv, dict)]
+    elif isinstance(payload, dict):
+        invoices = [inv for inv in payload.values() if isinstance(inv, dict)]
+    else:
+        return []
+
+    invoices.sort(key=lambda inv: str(inv.get("number") or "").casefold())
+    return invoices
+
+
+def _build_invoice_lookup_by_number(invoices: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Build mapping of invoice number -> list of invoices sharing that number."""
+    lookup: Dict[str, List[Dict[str, Any]]] = {}
+    for inv in invoices:
+        num = inv.get("number") if isinstance(inv, dict) else None
+        key = str(num).strip() if num is not None else ""
+        if not key:
+            continue
+        lookup.setdefault(key, []).append(inv)
+    return lookup
+
+
+def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, List[Dict[str, Any]]]:
     """
     Fetch invoices for a list of invoice numbers from the locally cached dataset.
-    Returns a dict keyed by invoice number: { "INV-001": {...}, ... }
+    Returns a dict keyed by invoice number: { "INV-001": [{...}, {...}], ... }
     """
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
@@ -419,17 +440,22 @@ def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, Dict[st
             normalized.append(n)
 
     try:
-        cached = load_local_dataset(XeroType.INVOICES, tenant_id=tenant_id) or {}
+        cached = load_local_dataset(XeroType.INVOICES, tenant_id=tenant_id) or []
         if not cached:
             logger.info("No cached invoices available", tenant_id=tenant_id)
             return {}
 
-        result: Dict[str, Dict[str, Any]] = {}
-        for number in normalized:
-            if (invoice := cached.get(number)):
-                result[number] = invoice
+        invoices = _coerce_invoice_list(cached)
+        lookup = _build_invoice_lookup_by_number(invoices)
 
-        logger.info("Fetched invoices by numbers", tenant_id=tenant_id, requested=len(normalized), returned=len(result))
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for number in normalized:
+            matches = lookup.get(number)
+            if matches:
+                result[number] = matches
+
+        returned = sum(len(v) for v in result.values())
+        logger.info("Fetched invoices by numbers", tenant_id=tenant_id, requested=len(normalized), returned=returned)
         return result
 
     except Exception:
@@ -445,12 +471,13 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
         return []
 
     try:
-        cached = load_local_dataset(XeroType.INVOICES, tenant_id=tenant_id) or {}
+        cached = load_local_dataset(XeroType.INVOICES, tenant_id=tenant_id) or []
         if not cached:
             logger.info("No cached invoices available", tenant_id=tenant_id)
             return []
 
-        invoices = [inv for inv in cached.values() if inv.get("contact_id") == contact_id]
+        invoices_all = _coerce_invoice_list(cached)
+        invoices = [inv for inv in invoices_all if inv.get("contact_id") == contact_id]
         logger.info("Fetched invoices for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(invoices))
         return invoices
 
