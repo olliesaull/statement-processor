@@ -104,30 +104,30 @@ class StatementProcessorStack(Stack):
 
         #endregion ---------- S3 ----------
 
-        #region ---------- Lambda ----------
+        # #region ---------- Lambda ----------
 
-        textraction_lambda_image = _lambda.EcrImageCode.from_asset_image(directory="../lambda_functions/textraction_lambda")
+        # textraction_lambda_image = _lambda.EcrImageCode.from_asset_image(directory="../lambda_functions/textraction_lambda")
 
-        textraction_lambda =  _lambda.Function(
-            self, 
-            "TextractionLambda",
-            description="Perform statement textraction using Textract and PDF Plumber",
-            code=textraction_lambda_image,
-            memory_size=2048,
-            timeout=Duration.seconds(60),
-            log_retention=log_retention
-        )
+        # textraction_lambda =  _lambda.Function(
+        #     self, 
+        #     "TextractionLambda",
+        #     description="Perform statement textraction using Textract and PDF Plumber",
+        #     code=textraction_lambda_image,
+        #     memory_size=2048,
+        #     timeout=Duration.seconds(60),
+        #     log_retention=log_retention
+        # )
 
-        # # TODO: Add Lambda function envars and DDB / S3 permissions
+        # # # TODO: Add Lambda function envars and DDB / S3 permissions
 
-        textraction_lambda.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=["textract:GetDocumentAnalysis"],
-                resources=["*"],
-            )
-        )
+        # textraction_lambda.add_to_role_policy(
+        #     iam.PolicyStatement(
+        #         actions=["textract:GetDocumentAnalysis"],
+        #         resources=["*"],
+        #     )
+        # )
 
-        #endregion ---------- Lambda ----------
+        # #endregion ---------- Lambda ----------
 
         #region ---------- AppRunner ----------
 
