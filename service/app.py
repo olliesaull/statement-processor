@@ -108,7 +108,13 @@ app.config["CLIENT_SECRET"] = CLIENT_SECRET
 
 AUTH_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
-REDIRECT_URI = "https://cloudcathode.com/callback" if STAGE == "prod" else "http://localhost:8080/callback"
+
+if STAGE == "prod":
+    REDIRECT_URI = "https://cloudcathode.com/callback"
+elif STAGE == "dev":
+    REDIRECT_URI = "https://s7mznicnms.eu-west-1.awsapprunner.com/callback"
+else:
+    REDIRECT_URI = "http://localhost:8080/callback"
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
