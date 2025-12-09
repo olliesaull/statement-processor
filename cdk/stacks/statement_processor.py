@@ -108,6 +108,18 @@ class StatementProcessorStack(Stack):
             bucket_name=S3_BUCKET_NAME,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
+        s3_bucket.add_to_resource_policy(
+            iam.PolicyStatement(
+                sid="AllowTextractReadStatements",
+                principals=[iam.ServicePrincipal("textract.amazonaws.com")],
+                actions=["s3:GetObject", "s3:GetObjectVersion"],
+                resources=[s3_bucket.arn_for_objects("*")],
+                conditions={
+                    "StringEquals": {"AWS:SourceAccount": env.account},
+                    "ArnLike": {"AWS:SourceArn": f"arn:aws:textract:{env.region}:{env.account}:*"},
+                },
+            )
+        )
 
         #endregion ---------- S3 ----------
 
@@ -248,6 +260,7 @@ class StatementProcessorStack(Stack):
                 resources=["*"],
             )
         )
+        s3_bucket.grant_read(state_machine.role)
 
         textraction_lambda.grant_invoke(state_machine.role)
 

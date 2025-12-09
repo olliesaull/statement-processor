@@ -61,12 +61,12 @@ from utils import (
     route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
+    start_textraction_state_machine,
     set_all_statement_items_completed,
     set_statement_item_completed,
     persist_item_types_to_dynamo,
     statement_json_s3_key,
     statement_pdf_s3_key,
-    textract_in_background,
     upload_statement_to_s3,
     xero_token_required,
 )
@@ -313,8 +313,31 @@ def upload_statements():
 
                 # Kick off background textraction so it's ready by the time the user views it
                 json_statement_key = statement_json_s3_key(tenant_id, statement_id)
-                _executor.submit(textract_in_background, tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
-                logger.info("Queued Textract background job", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
+                started = start_textraction_state_machine(
+                    tenant_id=tenant_id,
+                    contact_id=contact_id,
+                    statement_id=statement_id,
+                    pdf_key=pdf_statement_key,
+                    json_key=json_statement_key,
+                )
+                if started:
+                    logger.info(
+                        "Started textraction workflow",
+                        tenant_id=tenant_id,
+                        contact_id=contact_id,
+                        statement_id=statement_id,
+                        pdf_key=pdf_statement_key,
+                        json_key=json_statement_key,
+                    )
+                else:
+                    logger.error(
+                        "Failed to start textraction workflow",
+                        tenant_id=tenant_id,
+                        contact_id=contact_id,
+                        statement_id=statement_id,
+                        pdf_key=pdf_statement_key,
+                        json_key=json_statement_key,
+                    )
 
                 uploads_ok += 1
 

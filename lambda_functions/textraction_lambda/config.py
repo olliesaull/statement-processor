@@ -17,6 +17,7 @@ if AWS_PROFILE:
 else:
     session = boto3.session.Session(region_name=AWS_REGION)
 s3_client = session.client("s3")
+textract_client = session.client("textract")
 ddb = session.resource("dynamodb")
 
 tenant_statements_table = ddb.Table(TENANT_STATEMENTS_TABLE_NAME) if TENANT_STATEMENTS_TABLE_NAME else None

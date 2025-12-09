@@ -175,12 +175,13 @@ def run_textraction(
     statement_id: str,
 ) -> Dict[str, Any]:
     tables_by_key: Dict[str, List[TableOnPage]] = get_tables_for_job(job_id)
-
     tables_wp = next(iter(tables_by_key.values())) if tables_by_key else []
     key = pdf_key
 
     logger.info("Textract statement processing", job_id=job_id, key=key)
     statement = table_to_json(key, tables_wp, tenant_id, contact_id, statement_id=statement_id)
+    item_count = len(statement.get("statement_items", []) or [])
+    logger.info("Built statement JSON", job_id=job_id, statement_id=statement_id, items=item_count)
 
     try:
         _persist_statement_items(
@@ -201,7 +202,7 @@ def run_textraction(
         )
 
     try:
-        obj = s3_client.get_object(Bucket=bucket, Key=key)
+        obj = s3_client.get_object(Bucket=bucket or S3_BUCKET_NAME, Key=key)
         pdf_bytes = obj["Body"].read()
         statement_items = statement.get("statement_items", []) or []
         validate_references_roundtrip(pdf_bytes, statement_items)

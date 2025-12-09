@@ -14,6 +14,7 @@ AWS_PROFILE = os.getenv("AWS_PROFILE")
 AWS_REGION = os.getenv("AWS_REGION")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 STAGE = os.getenv("STAGE")
+TEXTRACTION_STATE_MACHINE_ARN = os.getenv("TEXTRACTION_STATE_MACHINE_ARN")
 
 TENANT_CONTACTS_CONFIG_TABLE_NAME=os.getenv("TENANT_CONTACTS_CONFIG_TABLE_NAME")
 TENANT_STATEMENTS_TABLE_NAME=os.getenv("TENANT_STATEMENTS_TABLE_NAME")
@@ -25,6 +26,7 @@ else:
     session = boto3.session.Session() # Use the default session (e.g., in AppRunner)
 
 s3_client = session.client("s3")
+stepfunctions_client = session.client("stepfunctions")
 
 ddb = session.resource("dynamodb")
 tenant_statements_table = ddb.Table(TENANT_STATEMENTS_TABLE_NAME)

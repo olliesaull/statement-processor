@@ -30,13 +30,14 @@ from config import (
     CLIENT_ID,
     CLIENT_SECRET,
     S3_BUCKET_NAME,
+    TEXTRACTION_STATE_MACHINE_ARN,
     logger,
     s3_client,
+    stepfunctions_client,
     tenant_statements_table,
 )
 from core.date_utils import coerce_datetime_with_template, format_iso_with
 from core.models_comparison import CellComparison
-from core.textract_statement import run_textraction
 from core.transform import equal
 from tenant_data_repository import TenantDataRepository, TenantStatus
 
@@ -568,57 +569,72 @@ def fetch_json_statement(tenant_id: str, contact_id: str, bucket: str, json_key:
     return data, fs
 
 
-def get_or_create_json_statement(tenant_id: str, contact_id: str, bucket: str, pdf_key: str, json_key: str) -> Tuple[Dict[str, Any], FileStorage]:
-    """
-    Look for JSON statement in S3. If it exists, download and return it.
-    Otherwise, run Textract on the PDF, upload the JSON, and return it.
+def start_textraction_state_machine(
+    tenant_id: str,
+    contact_id: str,
+    statement_id: str,
+    pdf_key: str,
+    json_key: str,
+) -> bool:
+    """Kick off the Step Functions textraction workflow."""
+    if not TEXTRACTION_STATE_MACHINE_ARN:
+        logger.error("Textraction state machine ARN not configured; skipping execution", tenant_id=tenant_id, statement_id=statement_id)
+        return False
 
-    Returns:
-        (data_dict, FileStorage) where:
-          - data_dict is the parsed JSON object
-          - FileStorage is a file-like wrapper around the JSON (for reuse)
-    """
+    payload = {
+        "tenant_id": tenant_id,
+        "contact_id": contact_id,
+        "statement_id": statement_id,
+        "s3Bucket": S3_BUCKET_NAME,
+        "pdfKey": pdf_key,
+        "jsonKey": json_key,
+    }
+    exec_name = f"{tenant_id}-{statement_id}"[:80]
+
     try:
-        data, fs = fetch_json_statement(tenant_id, contact_id, bucket, json_key)
-        item_count = len(data.get("statement_items", []) or []) if isinstance(data, dict) else 0
-        logger.info("Found existing JSON, downloading", tenant_id=tenant_id, json_key=json_key, items=item_count)
-        return data, fs
-    except StatementJSONNotFoundError:
-        pass
-
-    # Not found → run Textract
-    logger.info("Running Textract for missing JSON", tenant_id=tenant_id, json_key=json_key, pdf_key=pdf_key)
-    # Use the provided bucket argument for consistency with the read path.
-    # Current callers pass the global bucket, so this does not alter behavior.
-    json_fs = run_textraction(bucket=bucket, pdf_key=pdf_key, tenant_id=tenant_id, contact_id=contact_id)
-    json_fs.stream.seek(0)
-    json_bytes = json_fs.stream.read()
-
-    # Parse
-    data = json.loads(json_bytes.decode("utf-8"))
-    item_count = len(data.get("statement_items", []) or []) if isinstance(data, dict) else 0
-    logger.info("Parsed generated JSON", tenant_id=tenant_id, json_key=json_key, items=item_count, bytes=len(json_bytes))
-
-    # Upload new JSON
-    upload_statement_to_s3(io.BytesIO(json_bytes), json_key)
-
-    # Return both
-    fs = FileStorage(stream=io.BytesIO(json_bytes), filename=json_key.rsplit("/", 1)[-1])
-    logger.info("Generated JSON via Textract", tenant_id=tenant_id, json_key=json_key, items=item_count, bytes=len(json_bytes))
-    return data, fs
-
-
-def textract_in_background(tenant_id: str, contact_id: Optional[str], pdf_key: str, json_key: str) -> None:
-    """Run get_or_create_json_statement to generate and upload JSON.
-
-    Designed to be run off the request thread. Swallows exceptions after logging.
-    """
-    try:
-        # This will no-op if JSON already exists; otherwise runs Textract and uploads JSON
-        get_or_create_json_statement(tenant_id=tenant_id, contact_id=contact_id or "", bucket=S3_BUCKET_NAME, pdf_key=pdf_key, json_key=json_key)
-        logger.info("Textraction complete", tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_key, json_key=json_key)
-    except Exception:
-        logger.exception("Textraction failed", tenant_id=tenant_id, contact_id=contact_id, pdf_key=pdf_key, json_key=json_key)
+        stepfunctions_client.start_execution(
+            stateMachineArn=TEXTRACTION_STATE_MACHINE_ARN,
+            name=exec_name,
+            input=json.dumps(payload),
+        )
+        logger.info(
+            "Started textraction state machine",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            statement_id=statement_id,
+            execution_name=exec_name,
+        )
+        return True
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code")
+        if code == "ExecutionAlreadyExists":
+            logger.info(
+                "Textraction execution already exists",
+                tenant_id=tenant_id,
+                contact_id=contact_id,
+                statement_id=statement_id,
+                execution_name=exec_name,
+            )
+            return True
+        logger.exception(
+            "Failed to start textraction state machine",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            statement_id=statement_id,
+            execution_name=exec_name,
+            error=str(exc),
+        )
+        return False
+    except Exception as exc:
+        logger.exception(
+            "Unexpected error starting textraction state machine",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            statement_id=statement_id,
+            execution_name=exec_name,
+            error=str(exc),
+        )
+        return False
 
 # -----------------------------
 # Helpers for statement view

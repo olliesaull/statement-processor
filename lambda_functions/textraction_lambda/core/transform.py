@@ -467,7 +467,8 @@ def table_to_json(
                 val = get_by_header(r, col_index, chosen_header)
                 raw_obj[canonical_header] = val
                 extracted_raw[canonical_header] = {"header": canonical_header, "value": val}
-            row_obj["raw"] = raw_obj
+            # Always store the raw row; fall back to full row if no raw mapping provided.
+            row_obj["raw"] = raw_obj if raw_obj else full_raw
 
             total_entries: Dict[str, Any] = {}
             for header_idx, header_label in configured_amount_headers:

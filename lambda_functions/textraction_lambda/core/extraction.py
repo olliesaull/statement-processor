@@ -1,9 +1,6 @@
-from typing import Dict, List, TypedDict
+from typing import Any, Dict, List, TypedDict, Optional
 
-from textractor import Textractor
-from textractor.entities.table import Table
-
-from config import AWS_PROFILE, AWS_REGION, logger
+from config import logger, textract_client
 
 
 class TableOnPage(TypedDict):
@@ -45,43 +42,77 @@ def _sanitize_grid(grid: List[List[str]]) -> List[List[str]]:
     return [[row[idx] for idx in keep_dedup] for row in cleaned]
 
 
-def _table_to_grid(table: Table) -> List[List[str]]:
-    row_count = table.row_count or 0
-    col_count = table.column_count or 0
-
-    if not row_count or not col_count:
-        return []
-
-    grid = [["" for _ in range(col_count)] for _ in range(row_count)]
-
-    for cell in table.table_cells:
-        row_idx = max(int(cell.row_index or 1) - 1, 0)
-        col_idx = max(int(cell.col_index or 1) - 1, 0)
-        if row_idx >= row_count or col_idx >= col_count:
+def _extract_text_for_block(block_map: Dict[str, Dict[str, Any]], block: Dict[str, Any]) -> str:
+    """Concatenate text for WORD and SELECTION blocks under a CELL."""
+    texts: List[str] = []
+    for rel in block.get("Relationships", []):
+        if rel.get("Type") != "CHILD":
             continue
-        cell_text = (cell.text or "").strip()
-        if cell_text:
-            grid[row_idx][col_idx] = cell_text
-        elif not grid[row_idx][col_idx]:
-            grid[row_idx][col_idx] = ""
+        for cid in rel.get("Ids", []):
+            child = block_map.get(cid, {})
+            if child.get("BlockType") == "WORD":
+                txt = (child.get("Text") or "").strip()
+                if txt:
+                    texts.append(txt)
+            elif child.get("BlockType") == "SELECTION_ELEMENT" and child.get("SelectionStatus") == "SELECTED":
+                texts.append("X")
+    return " ".join(texts)
 
-    return _sanitize_grid(grid)
 
-
-def analyze_tables_job(job_id: str) -> List[TableOnPage]:
-    textractor = Textractor(profile_name=AWS_PROFILE, region_name=AWS_REGION)
-    document = textractor.get_document_analysis(job_id)
-
+def _extract_tables_from_blocks(blocks: List[Dict[str, Any]]) -> List[TableOnPage]:
+    block_map = {b.get("Id"): b for b in blocks if isinstance(b, dict)}
     tables: List[TableOnPage] = []
-    for index, page in enumerate(document.pages, start=1):
-        page_number = page.page_num if isinstance(page.page_num, int) and page.page_num > 0 else index
-        for table in page.tables:
-            grid = _table_to_grid(table)
-            if grid:
-                tables.append({"page": int(page_number), "grid": grid})
+
+    for block in blocks:
+        if not isinstance(block, dict) or block.get("BlockType") != "TABLE":
+            continue
+        page = int(block.get("Page") or 1)
+        cell_ids: List[str] = []
+        for rel in block.get("Relationships", []):
+            if rel.get("Type") == "CHILD":
+                cell_ids.extend(rel.get("Ids", []))
+
+        cells = [block_map.get(cid) for cid in cell_ids if cid in block_map]
+        if not cells:
+            continue
+
+        max_row = max(int(c.get("RowIndex") or 0) for c in cells if isinstance(c, dict))
+        max_col = max(int(c.get("ColumnIndex") or 0) for c in cells if isinstance(c, dict))
+        grid = [["" for _ in range(max_col)] for _ in range(max_row)]
+
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            r_idx = max(int(cell.get("RowIndex") or 1) - 1, 0)
+            c_idx = max(int(cell.get("ColumnIndex") or 1) - 1, 0)
+            if r_idx >= max_row or c_idx >= max_col:
+                continue
+            text = _extract_text_for_block(block_map, cell)
+            grid[r_idx][c_idx] = text
+
+        sanitized = _sanitize_grid(grid)
+        if sanitized:
+            tables.append({"page": page, "grid": sanitized})
 
     tables.sort(key=lambda t: t["page"])
     return tables
+
+
+def analyze_tables_job(job_id: str) -> List[TableOnPage]:
+    """Fetch completed Textract job results and convert tables to grids."""
+    blocks: List[Dict[str, Any]] = []
+    next_token: Optional[str] = None
+    while True:
+        params: Dict[str, Any] = {"JobId": job_id}
+        if next_token:
+            params["NextToken"] = next_token
+        resp = textract_client.get_document_analysis(**params)
+        blocks.extend(resp.get("Blocks", []))
+        next_token = resp.get("NextToken")
+        if not next_token:
+            break
+
+    return _extract_tables_from_blocks(blocks)
 
 
 def get_tables_for_job(job_id: str) -> Dict[str, List[TableOnPage]]:
