@@ -290,13 +290,7 @@ def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], can
     return selected
 
 
-def table_to_json(
-    key: str,
-    tables_with_pages: List[Dict[str, Any]],
-    tenant_id: str,
-    contact_id: str,
-    statement_id: Optional[str] = None,
-) -> Dict[str, Any]:
+def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, contact_id: str, statement_id: Optional[str] = None) -> Dict[str, Any]:
     # Main transformation: map Textract tables into structured statement items using contact-specific config
     contact_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
 
