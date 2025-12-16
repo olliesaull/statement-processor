@@ -36,20 +36,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             contact_id=contact_id,
             statement_id=statement_id,
         )
-        logger.info(
-            "Textraction complete",
-            job_id=job_id,
-            tenant_id=tenant_id,
-            statement_id=statement_id,
-            json_key=json_key,
-        )
+        logger.info("Textraction complete", job_id=job_id, tenant_id=tenant_id, statement_id=statement_id, json_key=json_key)
         return {"status": "ok", "jobId": job_id, "jsonKey": json_key, "result": result}
     except Exception as exc:
-        logger.exception(
-            "Textraction lambda failed",
-            job_id=job_id,
-            tenant_id=tenant_id,
-            statement_id=statement_id,
-            error=str(exc),
-        )
+        logger.exception("Textraction lambda failed", job_id=job_id, tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
         return {"status": "error", "message": str(exc)}

@@ -165,15 +165,7 @@ def _persist_statement_items(
             )
 
 
-def run_textraction(
-    job_id: str,
-    bucket: str,
-    pdf_key: str,
-    json_key: str,
-    tenant_id: str,
-    contact_id: str,
-    statement_id: str,
-) -> Dict[str, Any]:
+def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenant_id: str, contact_id: str, statement_id: str) -> Dict[str, Any]:
     tables_by_key: Dict[str, List[TableOnPage]] = get_tables_for_job(job_id)
     tables_wp = next(iter(tables_by_key.values())) if tables_by_key else []
     key = pdf_key
@@ -216,9 +208,7 @@ def run_textraction(
             exc_info=True,
         )
 
-    statement, summary = apply_outlier_flags(
-        statement, remove=False, one_based_index=True, threshold_method="iqr"
-    )
+    statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True, threshold_method="iqr")
     logger.info("Performed anomaly detection", summary=json.dumps(summary, indent=2))
 
     buf = io.BytesIO(json.dumps(statement, ensure_ascii=False, indent=2).encode("utf-8"))
@@ -235,13 +225,7 @@ def run_textraction(
                 ExpressionAttributeValues={":jobId": job_id},
             )
         except Exception as exc:
-            logger.warning(
-                "Failed to store job id on statement",
-                statement_id=statement_id,
-                tenant_id=tenant_id,
-                error=str(exc),
-                exc_info=True,
-            )
+            logger.warning("Failed to store job id on statement", statement_id=statement_id, tenant_id=tenant_id, error=str(exc), exc_info=True)
 
     filename = f"{Path(key).stem}.json"
     return {"filename": filename, "statement": statement}

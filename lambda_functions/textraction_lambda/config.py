@@ -1,7 +1,11 @@
 import os
+from typing import Optional
 
 import boto3
 from aws_lambda_powertools.logging import Logger
+from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource, Table
+from mypy_boto3_s3 import S3Client
+from mypy_boto3_textract import TextractClient
 
 AWS_REGION = os.getenv("AWS_REGION")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "")
@@ -16,10 +20,10 @@ if AWS_PROFILE:
     session = boto3.session.Session(region_name=AWS_REGION, profile_name=AWS_PROFILE)
 else:
     session = boto3.session.Session(region_name=AWS_REGION)
-s3_client = session.client("s3")
-textract_client = session.client("textract")
-ddb = session.resource("dynamodb")
+s3_client: S3Client = session.client("s3")
+textract_client: TextractClient = session.client("textract")
+ddb: DynamoDBServiceResource = session.resource("dynamodb")
 
-tenant_statements_table = ddb.Table(TENANT_STATEMENTS_TABLE_NAME) if TENANT_STATEMENTS_TABLE_NAME else None
-tenant_contacts_config_table = ddb.Table(TENANT_CONTACTS_CONFIG_TABLE_NAME) if TENANT_CONTACTS_CONFIG_TABLE_NAME else None
-tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME) if TENANT_DATA_TABLE_NAME else None
+tenant_statements_table: Optional[Table] = ddb.Table(TENANT_STATEMENTS_TABLE_NAME) if TENANT_STATEMENTS_TABLE_NAME else None
+tenant_contacts_config_table: Optional[Table] = ddb.Table(TENANT_CONTACTS_CONFIG_TABLE_NAME) if TENANT_CONTACTS_CONFIG_TABLE_NAME else None
+tenant_data_table: Optional[Table] = ddb.Table(TENANT_DATA_TABLE_NAME) if TENANT_DATA_TABLE_NAME else None
