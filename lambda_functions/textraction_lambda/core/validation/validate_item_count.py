@@ -10,11 +10,13 @@ from exceptions import ItemCountDisagreementError
 PdfInput = Union[str, bytes, bytearray, io.BytesIO, Any]
 
 def normalise(s: str) -> str:
+    # Normalize reference strings to a comparable uppercase, punctuation-free form
     s = (s or "").upper().strip()
     return re.sub(r"[\s\-_/\.]", "", s)
 
 
 def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, min_samples_for_prefixing: int = 3, coverage_threshold: float = 0.6) -> re.Pattern:
+    # Learn a regex that captures a family of reference patterns (prefix + digits) from sample refs
     ex_norm = sorted({normalise(r) for r in refs if (r or "").strip()})
     if not ex_norm:
         return re.compile(r"$^")
@@ -81,6 +83,7 @@ def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, 
 
 
 def _to_pdf_open_arg(pdf_input: PdfInput) -> Union[str, io.BytesIO, Any]:
+    # Convert various PDF inputs into a format pdfplumber.open understands
     if isinstance(pdf_input, str):
         return pdf_input
 
@@ -98,6 +101,7 @@ def _to_pdf_open_arg(pdf_input: PdfInput) -> Union[str, io.BytesIO, Any]:
 
 
 def extract_normalized_pdf_text(pdf_input: PdfInput) -> str:
+    # Pull full PDF text, normalized for comparison
     chunks: List[str] = []
     with pdfplumber.open(_to_pdf_open_arg(pdf_input)) as pdf:
         for page in pdf.pages:
@@ -108,6 +112,7 @@ def extract_normalized_pdf_text(pdf_input: PdfInput) -> str:
 
 
 def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern, ngram_max: int = 5, hard_seps: str = ":.") -> Set[str]:
+    # Scan PDF text for alphanumeric n-grams matching the learned reference regex
     cands: Set[str] = set()
     with pdfplumber.open(_to_pdf_open_arg(pdf_input)) as pdf:
         for page in pdf.pages:
@@ -137,6 +142,7 @@ def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern
 
 
 def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dict], ref_field: str = "reference") -> Dict:
+    # Cross-check references: ensure JSON references appear in the PDF, and PDF candidates are represented in JSON
     has_text = False
     with pdfplumber.open(_to_pdf_open_arg(pdf_input)) as pdf:
         for page in pdf.pages:

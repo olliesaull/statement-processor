@@ -14,6 +14,7 @@ from core.validation.validate_item_count import validate_references_roundtrip
 
 
 def _sanitize_for_dynamodb(value: Any) -> Any:
+    # Coerce incoming values into DynamoDB-friendly types and drop empty strings
     if value is None:
         return None
     if isinstance(value, str):
@@ -47,6 +48,7 @@ def _sanitize_for_dynamodb(value: Any) -> Any:
 def _persist_statement_items(
     tenant_id: str, contact_id: Optional[str], statement_id: Optional[str], items: List[Dict[str, Any]],
     *, earliest_item_date: Optional[str] = None, latest_item_date: Optional[str] = None) -> None:
+    # Persist the per-item rows for a statement; replace any prior rows for this statement.
     if tenant_statements_table is None:
         logger.warning("Tenant statements table not configured; skipping persistence", tenant_id=tenant_id)
         return
@@ -148,16 +150,19 @@ def _persist_statement_items(
 
 
 def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenant_id: str, contact_id: str, statement_id: str) -> Dict[str, Any]:
+    # Fetch Textract tables for the job and derive the first (and only) PDF key we expect
     tables_by_key: Dict[str, List[TableOnPage]] = get_tables_for_job(job_id)
     tables_wp = next(iter(tables_by_key.values())) if tables_by_key else []
     key = pdf_key
 
     logger.info("Textract statement processing", job_id=job_id, key=key)
+    # Convert the tables into our statement JSON structure
     statement = table_to_json(key, tables_wp, tenant_id, contact_id, statement_id=statement_id)
     item_count = len(statement.get("statement_items", []) or [])
     logger.info("Built statement JSON", job_id=job_id, statement_id=statement_id, items=item_count)
 
     try:
+        # Replace any existing statement_item rows and update date metadata on the statement header
         _persist_statement_items(
             tenant_id=tenant_id,
             contact_id=contact_id,
@@ -170,6 +175,7 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
         logger.exception("Failed to persist statement items", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id, error=str(exc))
 
     try:
+        # Re-read the PDF to validate extracted references against the source file
         obj = s3_client.get_object(Bucket=bucket or S3_BUCKET_NAME, Key=key)
         pdf_bytes = obj["Body"].read()
         statement_items = statement.get("statement_items", []) or []
@@ -177,9 +183,11 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
     except Exception as exc:
         logger.warning("Reference validation skipped", key=key, tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
 
+    # Flag outliers without removing them, so downstream consumers can inspect anomalies
     statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True, threshold_method="iqr")
     logger.info("Performed anomaly detection", summary=json.dumps(summary, indent=2))
 
+    # Upload the enriched JSON back to S3 for the caller to consume
     buf = io.BytesIO(json.dumps(statement, ensure_ascii=False, indent=2).encode("utf-8"))
     buf.seek(0)
 
@@ -188,6 +196,7 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
 
     if tenant_statements_table is not None:
         try:
+            # Persist the Textract JobId alongside the statement header for traceability
             tenant_statements_table.update_item(
                 Key={"TenantID": tenant_id, "StatementID": statement_id},
                 UpdateExpression="SET JobId = :jobId",

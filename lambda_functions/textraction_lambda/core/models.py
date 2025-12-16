@@ -1,9 +1,21 @@
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 Number = Union[int, float, str]
 
+class TextractionEvent(BaseModel):
+    """Typed event payload with minimal validation/normalization."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    job_id: str = Field(alias="jobId")
+    statement_id: str = Field(alias="statementId")
+    tenant_id: str = Field(alias="tenantId")
+    contact_id: str = Field(alias="contactId")
+    pdf_key: str = Field(alias="pdfKey")
+    json_key: str = Field(alias="jsonKey")
+    pdf_bucket: Optional[str] = Field(default=None, alias="pdfBucket")
 
 class StatementItem(BaseModel):
     """Canonical line item extracted from a supplier statement."""

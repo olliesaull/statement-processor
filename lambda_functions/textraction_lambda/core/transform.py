@@ -23,12 +23,14 @@ _SUMMARY_KEYWORDS = (
 
 
 def _generate_statement_item_id(statement_id: Optional[str], sequence: int) -> str:
+    # Build a stable per-row identifier, namespaced under the parent statement id when provided
     if statement_id:
         return f"{statement_id}#item-{sequence:04d}"
     return f"stmt-item-{uuid4().hex[:12]}-{sequence:04d}"
 
 
 def _normalize_table_cell(cell: Any) -> str:
+    # Normalize a table cell to a clean string for comparisons/headers (strip currency symbols, punctuation)
     if cell is None:
         return ""
     text = str(cell).strip()
@@ -51,6 +53,7 @@ def _normalize_table_cell(cell: Any) -> str:
 
 
 def _dedupe_grid_columns(grid: List[List[str]]) -> List[List[str]]:
+    # Remove duplicate columns (identical header+values) to avoid double-counting fields
     if not grid or not grid[0]:
         return grid
     seen: Dict[Tuple[str, Tuple[str, ...]], int] = {}
@@ -90,6 +93,7 @@ def to_number_if_possible(s: str):
 
 
 def best_header_row(grid: List[List[str]], candidate_headers: List[str], lookahead: int = 5) -> Tuple[int, List[str]]:
+    # Heuristically pick the most likely header row by matching configured candidates and early rows
     cand = set(norm(h) for h in candidate_headers if h)
     if not cand:
         for idx, row in enumerate(grid):
@@ -110,6 +114,7 @@ def best_header_row(grid: List[List[str]], candidate_headers: List[str], lookahe
 
 
 def build_col_index(header_row: List[str]) -> Dict[str, int]:
+    # Map normalized header labels to their column indices for lookup later
     col_index: Dict[str, int] = {}
     for i, h in enumerate(header_row):
         hn = norm(h)
@@ -119,6 +124,7 @@ def build_col_index(header_row: List[str]) -> Dict[str, int]:
 
 
 def get_by_header(row: List[str], col_index: Dict[str, int], header_label: str) -> str:
+    # Safely fetch a cell value by header name; returns empty string if missing/out of range
     if not header_label:
         return ""
     idx = col_index.get(norm(header_label))
@@ -248,6 +254,7 @@ def row_is_summary_like(raw_row: List[str], mapped_item: Dict[str, Any]) -> bool
 
 
 def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], candidates: List[str], small_table_penalty: float = 2.5) -> List[Dict[str, Any]]:
+    # When multiple tables exist per page, choose the grid that best matches configured headers/date patterns
     if not tables_with_pages:
         return []
     cand_set = {c.strip().lower() for c in candidates if c}
@@ -290,6 +297,7 @@ def table_to_json(
     contact_id: str,
     statement_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # Main transformation: map Textract tables into structured statement items using contact-specific config
     contact_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
 
     template_date_format: Optional[str] = None
@@ -526,6 +534,7 @@ def table_to_json(
 
 
 def _derive_date_range(items: List[StatementItem]) -> Tuple[Optional[str], Optional[str]]:
+    # Compute min/max dates across all statement items
     dates = []
     for item in items:
         if item.date:
@@ -537,6 +546,7 @@ def _derive_date_range(items: List[StatementItem]) -> Tuple[Optional[str], Optio
 
 
 def _update_date_range(date_val: Optional[str], due_date: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    # Track earliest/latest dates seen within the current row
     earliest_date: Optional[str] = None
     latest_date: Optional[str] = None
     for d in (date_val, due_date):
@@ -549,6 +559,7 @@ def _update_date_range(date_val: Optional[str], due_date: Optional[str]) -> Tupl
 
 
 def _clean_currency(value: Any) -> str:
+    # Strip currency adornments and whitespace, leaving a numeric-like string
     if value is None:
         return ""
     text = str(value).strip()
@@ -565,6 +576,7 @@ def _clean_currency(value: Any) -> str:
 
 
 def _to_number(value: Any) -> Optional[float]:
+    # Convert cleaned numeric string to float when possible
     if value is None:
         return None
     text = str(value).strip()
@@ -577,6 +589,7 @@ def _to_number(value: Any) -> Optional[float]:
 
 
 def _first_nonempty_row_index(grid: List[List[str]]) -> int:
+    # Find the first row with any non-empty cell
     for idx, row in enumerate(grid):
         if any((c or "").strip() for c in row):
             return idx
@@ -584,6 +597,7 @@ def _first_nonempty_row_index(grid: List[List[str]]) -> int:
 
 
 def _rows_match_header(row: List[str], header: List[str]) -> bool:
+    # Check whether a row resembles the header (used when carrying header across pages)
     if not row or not header:
         return False
     header_norm = [norm(h) for h in header]

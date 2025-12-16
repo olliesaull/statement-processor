@@ -30,6 +30,7 @@ SUSPECT_TOKEN_RULES: List[Tuple[set[str], str]] = [
 
 
 def _normalize_text(value: Any) -> str:
+    # Lowercase and strip punctuation to create comparable tokens
     if value is None:
         return ""
     text = str(value)
@@ -44,6 +45,7 @@ def _tokenize(text: str) -> List[str]:
 
 
 def _keyword_hit(value: Any) -> str | None:
+    # Flag suspicious keywords in a field (e.g., "balance forward") that indicate non-item rows
     text = _normalize_text(value)
     if not text:
         return None
@@ -66,6 +68,7 @@ def _keyword_hit(value: Any) -> str | None:
 
 
 def _has_text(value: Any) -> bool:
+    # Minimal presence check: non-empty string after stripping
     if value is None:
         return False
     if isinstance(value, str):
