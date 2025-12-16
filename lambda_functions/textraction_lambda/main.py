@@ -27,15 +27,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     pdf_bucket = _get_str(event, "pdfBucket") or S3_BUCKET_NAME
 
     try:
-        result = run_textraction(
-            job_id=job_id,
-            bucket=pdf_bucket,
-            pdf_key=pdf_key,
-            json_key=json_key,
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            statement_id=statement_id,
-        )
+        result = run_textraction(job_id=job_id, bucket=pdf_bucket, pdf_key=pdf_key, json_key=json_key, tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id)
         logger.info("Textraction complete", job_id=job_id, tenant_id=tenant_id, statement_id=statement_id, json_key=json_key)
         return {"status": "ok", "jobId": job_id, "jsonKey": json_key, "result": result}
     except Exception as exc:

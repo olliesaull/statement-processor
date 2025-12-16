@@ -45,14 +45,8 @@ def _sanitize_for_dynamodb(value: Any) -> Any:
 
 
 def _persist_statement_items(
-    tenant_id: str,
-    contact_id: Optional[str],
-    statement_id: Optional[str],
-    items: List[Dict[str, Any]],
-    *,
-    earliest_item_date: Optional[str] = None,
-    latest_item_date: Optional[str] = None,
-) -> None:
+    tenant_id: str, contact_id: Optional[str], statement_id: Optional[str], items: List[Dict[str, Any]],
+    *, earliest_item_date: Optional[str] = None, latest_item_date: Optional[str] = None) -> None:
     if tenant_statements_table is None:
         logger.warning("Tenant statements table not configured; skipping persistence", tenant_id=tenant_id)
         return
@@ -86,23 +80,11 @@ def _persist_statement_items(
         query_kwargs["ExclusiveStartKey"] = lek
 
     try:
-        header_resp = tenant_statements_table.get_item(
-            Key={"TenantID": tenant_id, "StatementID": statement_id}
-        )
+        header_resp = tenant_statements_table.get_item(Key={"TenantID": tenant_id, "StatementID": statement_id})
         header_item = header_resp.get("Item") if isinstance(header_resp, dict) else None
-        header_completed = (
-            str(header_item.get("Completed", "false")).strip().lower() == "true"
-            if header_item
-            else False
-        )
+        header_completed = (str(header_item.get("Completed", "false")).strip().lower() == "true" if header_item else False)
     except Exception as exc:
-        logger.warning(
-            "Failed to fetch statement header completion flag",
-            tenant_id=tenant_id,
-            statement_id=statement_id,
-            error=str(exc),
-            exc_info=True,
-        )
+        logger.warning("Failed to fetch statement header completion flag", tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
         header_completed = False
 
     if keys_to_delete:
@@ -185,13 +167,7 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
             latest_item_date=statement.get("latest_item_date"),
         )
     except Exception as exc:
-        logger.exception(
-            "Failed to persist statement items",
-            statement_id=statement_id,
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            error=str(exc),
-        )
+        logger.exception("Failed to persist statement items", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id, error=str(exc))
 
     try:
         obj = s3_client.get_object(Bucket=bucket or S3_BUCKET_NAME, Key=key)
@@ -199,14 +175,7 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
         statement_items = statement.get("statement_items", []) or []
         validate_references_roundtrip(pdf_bytes, statement_items)
     except Exception as exc:
-        logger.warning(
-            "Reference validation skipped",
-            key=key,
-            tenant_id=tenant_id,
-            statement_id=statement_id,
-            error=str(exc),
-            exc_info=True,
-        )
+        logger.warning("Reference validation skipped", key=key, tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
 
     statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True, threshold_method="iqr")
     logger.info("Performed anomaly detection", summary=json.dumps(summary, indent=2))
