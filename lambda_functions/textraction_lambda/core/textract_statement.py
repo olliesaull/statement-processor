@@ -243,7 +243,7 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
         logger.warning("Reference validation skipped", key=key, tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
 
     # Flag outliers without removing them, so downstream consumers can inspect anomalies
-    statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True, threshold_method="iqr")
+    statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True)
     logger.info("Performed anomaly detection", summary=json.dumps(summary, indent=2))
 
     # Upload the enriched JSON back to S3 for the caller to consume

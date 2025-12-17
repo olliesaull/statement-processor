@@ -1,9 +1,31 @@
+"""
+Lightweight "anomaly" flagging for extracted statement items.
+
+This module runs after `table_to_json` has produced a statement JSON dict. It is
+not a machine-learning model; it is a simple keyword-based detector that tries
+to catch common non-transaction rows that often appear in statements, such as:
+- brought/carried forward lines
+- opening/closing balances
+- statement totals / amount due summaries
+
+`apply_outlier_flags` can either:
+- annotate suspicious items in-place by adding an `_flags` entry (default), or
+- remove them entirely (`remove=True`)
+
+It returns the possibly-modified statement dict plus a summary that can be logged
+or attached to the output for inspection.
+"""
+
 import re
 from collections import Counter
 from typing import Any, Dict, List, Tuple
 
+from config import logger
+
 FLAG_LABEL = "ml-outlier"
 
+# Keyword token rules used by `_keyword_hit` to mark suspicious lines.
+# Each entry is: (required_tokens, human_label)
 SUSPECT_TOKEN_RULES: List[Tuple[set[str], str]] = [
     ({"brought", "forward"}, "brought forward"),
     ({"carried", "forward"}, "carried forward"),
@@ -30,7 +52,12 @@ SUSPECT_TOKEN_RULES: List[Tuple[set[str], str]] = [
 
 
 def _normalize_text(value: Any) -> str:
-    # Lowercase and strip punctuation to create comparable tokens
+    """
+    Normalize arbitrary values into a token-friendly lowercase string.
+
+    This keeps letters/digits/spaces, removes punctuation, collapses whitespace,
+    and turns separators like "/" into spaces so they tokenize consistently.
+    """
     if value is None:
         return ""
     text = str(value)
@@ -41,11 +68,18 @@ def _normalize_text(value: Any) -> str:
 
 
 def _tokenize(text: str) -> List[str]:
+    """Split normalized text into tokens, dropping empty tokens."""
     return [tok for tok in text.split() if tok]
 
 
 def _keyword_hit(value: Any) -> str | None:
-    # Flag suspicious keywords in a field (e.g., "balance forward") that indicate non-item rows
+    """
+    Return a keyword label if the value looks like a non-item "summary/balance" line.
+
+    We treat fields like `number` and `reference` as suspicious if they contain
+    tokens that match balance/summary phrases. This is a heuristic: it aims to
+    catch common statement formatting issues without being overly aggressive.
+    """
     text = _normalize_text(value)
     if not text:
         return None
@@ -68,7 +102,7 @@ def _keyword_hit(value: Any) -> str | None:
 
 
 def _has_text(value: Any) -> bool:
-    # Minimal presence check: non-empty string after stripping
+    """Return True if `value` has a non-empty string representation."""
     if value is None:
         return False
     if isinstance(value, str):
@@ -76,27 +110,29 @@ def _has_text(value: Any) -> bool:
     return str(value).strip() != ""
 
 
-def apply_outlier_flags(
-    statement: Dict[str, Any],
-    *,
-    remove: bool = False,
-    one_based_index: bool = False,
-    threshold_method: str = "iqr",
-    percentile: float = 0.98,
-    iqr_k: float = 1.5,
-    zscore_z: float = 3.0,
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    _ = (threshold_method, percentile, iqr_k, zscore_z)
+def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_based_index: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Flag suspicious statement items (and optionally remove them).
 
+    Current behavior is keyword-based (see `SUSPECT_TOKEN_RULES`).
+
+    Returns:
+    - `statement`: the input dict, possibly modified in-place
+    - `summary`: counts + per-item detail about what was flagged and why
+    """
     items = statement.get("statement_items", []) or []
     if not items:
         return statement, {"total": 0, "flagged": 0, "flagged_items": [], "rules": {}, "field_stats": {}}
+
+    logger.debug("Outlier flagging start", total_items=len(items), remove=remove)
 
     flagged_items: List[Dict[str, Any]] = []
     flagged_indices: List[int] = []
     rule_counter: Counter[str] = Counter()
 
     for idx, item in enumerate(items):
+        # We track both high-level "issues" (for counting) and structured "details"
+        # so consumers can understand exactly what was detected.
         issues: List[str] = []
         details: List[Dict[str, Any]] = []
 
@@ -140,8 +176,10 @@ def apply_outlier_flags(
 
     flagged_index_set = set(flagged_indices)
     if remove:
+        # Removing flagged items is an optional mode; default is to annotate items in-place.
         statement["statement_items"] = [it for i, it in enumerate(items) if i not in flagged_index_set]
     else:
+        # Add a simple marker to the item itself so downstream consumers can show warnings.
         for idx in flagged_index_set:
             flags = items[idx].setdefault("_flags", [])
             if FLAG_LABEL not in flags:
@@ -154,4 +192,5 @@ def apply_outlier_flags(
         "rules": dict(rule_counter),
         "field_stats": {},
     }
+    logger.debug("Outlier flagging complete", flagged=summary["flagged"], rules=summary["rules"])
     return statement, summary
