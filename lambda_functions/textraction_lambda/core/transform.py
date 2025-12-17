@@ -130,6 +130,208 @@ def get_by_header(row: List[str], col_index: Dict[str, int], header_label: str) 
     return (row[idx] or "").strip()
 
 
+def _load_contact_mapping(tenant_id: str, contact_id: str) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], List[str], str]:
+    """
+    Load contact-specific mapping config and normalize it for table extraction.
+
+    Returns:
+    - items_template: base template used to seed each row
+    - simple_map: field -> header mapping (e.g. "date" -> "Invoice Date")
+    - raw_map: optional raw header mapping for passthrough fields
+    - total_candidates: header labels that should be interpreted as totals
+    - date_format: required parsing format for dates
+    """
+    contact_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
+
+    template_date_format: Optional[str] = None
+    if isinstance(contact_cfg, dict):
+        si = contact_cfg.get("statement_items")
+        if isinstance(si, dict):
+            items_template = deepcopy(si)
+        elif isinstance(si, list) and si:
+            items_template = deepcopy(si[0]) if isinstance(si[0], dict) else {}
+        else:
+            items_template = deepcopy(contact_cfg)
+    else:
+        items_template = {}
+
+    template_date_format = items_template.get("date_format") if isinstance(items_template, dict) else None
+
+    items_template.pop("date_format", None)
+    items_template.pop("decimal_separator", None)
+    items_template.pop("thousands_separator", None)
+
+    simple_map: Dict[str, str] = {}
+    raw_map: Dict[str, str] = {}
+    date_format = None
+    if isinstance(contact_cfg, dict):
+        date_format = contact_cfg.get("date_format")
+        if not date_format:
+            date_format = template_date_format
+    if not date_format:
+        raise ValueError("date_format must be configured for this contact")
+
+    allowed_fields = set(StatementItem.model_fields.keys()) - {"raw", "statement_item_id", "item_type"}
+    for field, value in items_template.items():
+        if field == "raw" and isinstance(value, dict):
+            raw_map = value
+        elif field in allowed_fields and isinstance(value, str) and value.strip():
+            simple_map[field] = value
+
+    total_candidates: List[str] = []
+    total_cfg = items_template.get("total")
+    if isinstance(total_cfg, list):
+        total_candidates = [str(x).strip() for x in total_cfg if isinstance(x, str) and x.strip()]
+    elif isinstance(total_cfg, str) and total_cfg.strip():
+        total_candidates = [total_cfg.strip()]
+
+    return items_template, simple_map, raw_map, total_candidates, date_format
+
+
+def _prepare_header_context(
+    grid: List[List[str]], candidates: List[str], primary_header_row: Optional[List[str]], primary_col_index: Optional[Dict[str, int]],
+    ) -> Tuple[List[str], Dict[str, int], List[List[str]], bool, List[str], Dict[str, int]]:
+    """
+    Determine header row/columns and data rows for a table grid.
+
+    For the first page we detect the header row; subsequent pages reuse the
+    primary header unless the current grid appears to repeat it.
+    """
+    header_detected = False
+
+    if primary_header_row is None:
+        hdr_idx, detected_header = best_header_row(grid, candidates)
+        header_row = list(detected_header)
+        col_index = build_col_index(header_row)
+        data_rows = grid[hdr_idx + 1 :]
+        primary_header_row = list(header_row)
+        primary_col_index = dict(col_index)
+        header_detected = True
+    else:
+        header_row = list(primary_header_row)
+        col_index = dict(primary_col_index or build_col_index(header_row))
+        start_idx = _first_nonempty_row_index(grid)
+        first_content_row = grid[start_idx] if start_idx < len(grid) else []
+        if _rows_match_header(first_content_row, primary_header_row):
+            data_rows = grid[start_idx + 1 :]
+            header_detected = True
+        else:
+            data_rows = grid[start_idx:]
+
+    return header_row, col_index, data_rows, header_detected, primary_header_row, primary_col_index or {}
+
+
+def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: List[str]) -> None:
+    """Persist newly-seen raw headers to contact config for future mapping."""
+    try:
+        cfg_existing: Dict[str, Any] = {}
+        try:
+            cfg_existing = get_contact_config(tenant_id, contact_id)
+        except Exception:
+            cfg_existing = {}
+
+        updated = False
+        root_raw = cfg_existing.get("raw") if isinstance(cfg_existing.get("raw"), dict) else {}
+        root_raw = dict(root_raw)
+        for h in header_row:
+            hh = str(h or "").strip()
+            if not hh:
+                continue
+            kl = hh.lower()
+            if kl not in root_raw:
+                root_raw[kl] = kl
+                updated = True
+        if updated:
+            new_cfg = dict(cfg_existing)
+            new_cfg["raw"] = root_raw
+            set_contact_config(tenant_id, contact_id, new_cfg)
+    except Exception as e:
+        logger.info("[table_to_json] failed to persist raw headers", error=e)
+
+
+def _map_row_to_item(
+    row: List[str], header_row: List[str], col_index: Dict[str, int], items_template: Dict[str, Any],simple_map: Dict[str, str],
+    raw_map: Dict[str, str], configured_amount_headers: List[Tuple[Optional[int], str]], date_format: str, statement_id: Optional[str], item_counter: int,
+) -> Tuple[StatementItem, List[str], Dict[str, Any], Dict[str, Any]]:
+    """
+    Map a single data row into a `StatementItem` plus extraction metadata.
+
+    Returns the item, flags, extracted simple fields, and extracted raw fields
+    (for debug/audit output in `_flags`).
+    """
+    # Build a raw row map keyed by the header text.
+    full_raw: Dict[str, Any] = {}
+    for col_idx, header_value in enumerate(header_row):
+        label = str(header_value or "").strip() or f"column_{col_idx}"
+        cell_value = row[col_idx] if col_idx < len(row) else ""
+        if label in full_raw:
+            dedup_label = f"{label}_{col_idx}"
+            full_raw[dedup_label] = cell_value
+        else:
+            full_raw[label] = cell_value
+
+    row_obj: Dict[str, Any] = deepcopy(items_template)
+    row_obj.pop("statement_item_id", None)
+    flags: List[str] = []
+
+    extracted_simple: Dict[str, Any] = {}
+    for field, header_name in simple_map.items():
+        idx = col_index.get(_norm(header_name))
+        actual_header = header_row[idx] if idx is not None and idx < len(header_row) else header_name
+        cell = get_by_header(row, col_index, header_name)
+        value: Any = cell
+        if field in {"date", "due_date"}:
+            try:
+                parsed = parse_with_format(cell, date_format)
+            except ValueError as err:
+                raise ValueError(f"Failed to parse '{cell}' using format '{date_format}'") from err
+            if parsed is not None:
+                value = parsed.strftime("%Y-%m-%d")
+            elif field == "date" and str(cell or "").strip():
+                flags.append("invalid-date")
+        row_obj[field] = value
+        canonical_header = str(actual_header or header_name)
+        extracted_simple[field] = {"header": canonical_header, "value": value}
+
+    raw_obj: Dict[str, Any] = {}
+    extracted_raw: Dict[str, Any] = {}
+    for raw_key, raw_src_header in (raw_map or {}).items():
+        chosen_header = raw_src_header or raw_key
+        idx = col_index.get(_norm(chosen_header))
+        actual_header = header_row[idx] if idx is not None and idx < len(header_row) else chosen_header
+        canonical_header = str(actual_header or chosen_header)
+        val = get_by_header(row, col_index, chosen_header)
+        raw_obj[canonical_header] = val
+        extracted_raw[canonical_header] = {"header": canonical_header, "value": val}
+    # Always store the raw row; fall back to full row if no raw mapping provided.
+    row_obj["raw"] = raw_obj if raw_obj else full_raw
+
+    total_entries: Dict[str, Any] = {}
+    for header_idx, header_label in configured_amount_headers:
+        if header_idx is None or header_idx >= len(row):
+            continue
+        cell_value = row[header_idx]
+        if cell_value is None:
+            continue
+        clean = _clean_currency(cell_value)
+        if not clean:
+            continue
+        num = _to_number(clean)
+        if num is None:
+            continue
+        total_entries[header_label] = num
+    row_obj["total"] = total_entries
+
+    row_obj["statement_item_id"] = _generate_statement_item_id(statement_id, item_counter)
+    stmt_item = StatementItem(**row_obj)
+
+    raw_extracted = extracted_raw or {}
+    if full_raw:
+        raw_extracted = {**{k: {"header": k, "value": v} for k, v in full_raw.items()}, **raw_extracted}
+
+    return stmt_item, flags, extracted_simple, raw_extracted
+
+
 def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], candidates: List[str], small_table_penalty: float = 2.5) -> List[Dict[str, Any]]:
     """
     Choose the best table per page when multiple candidates exist.
@@ -179,7 +381,7 @@ def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], can
     return selected
 
 
-def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, contact_id: str, statement_id: Optional[str] = None) -> Dict[str, Any]:
+def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, contact_id: str,statement_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Convert Textract table grids into structured statement JSON.
 
@@ -188,48 +390,7 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
     with optional `_flags` metadata describing extraction issues.
     """
     # Main transformation: map Textract tables into structured statement items using contact-specific config
-    contact_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
-
-    template_date_format: Optional[str] = None
-    if isinstance(contact_cfg, dict):
-        si = contact_cfg.get("statement_items")
-        if isinstance(si, dict):
-            items_template = deepcopy(si)
-        elif isinstance(si, list) and si:
-            items_template = deepcopy(si[0]) if isinstance(si[0], dict) else {}
-        else:
-            items_template = deepcopy(contact_cfg)
-    else:
-        items_template = {}
-
-    template_date_format = items_template.get("date_format") if isinstance(items_template, dict) else None
-
-    items_template.pop("date_format", None)
-    items_template.pop("decimal_separator", None)
-    items_template.pop("thousands_separator", None)
-
-    simple_map: Dict[str, str] = {}
-    raw_map: Dict[str, str] = {}
-    date_format = None
-    if isinstance(contact_cfg, dict):
-        date_format = contact_cfg.get("date_format")
-        if not date_format:
-            date_format = template_date_format
-    if not date_format:
-        raise ValueError("date_format must be configured for this contact")
-    allowed_fields = set(StatementItem.model_fields.keys()) - {"raw", "statement_item_id", "item_type"}
-    for field, value in items_template.items():
-        if field == "raw" and isinstance(value, dict):
-            raw_map = value
-        elif field in allowed_fields and isinstance(value, str) and value.strip():
-            simple_map[field] = value
-
-    total_candidates: List[str] = []
-    total_cfg = items_template.get("total")
-    if isinstance(total_cfg, list):
-        total_candidates = [str(x).strip() for x in total_cfg if isinstance(x, str) and x.strip()]
-    elif isinstance(total_cfg, str) and total_cfg.strip():
-        total_candidates = [total_cfg.strip()]
+    items_template, simple_map, raw_map, total_candidates, date_format = _load_contact_mapping(tenant_id=tenant_id, contact_id=contact_id)
 
     candidates = list(simple_map.values())
     candidates.extend(list(raw_map.keys()))
@@ -258,52 +419,12 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
         data_rows: List[List[str]]
         header_detected = False
 
-        if primary_header_row is None:
-            hdr_idx, detected_header = best_header_row(grid, candidates)
-            header_row = list(detected_header)
-            col_index = build_col_index(header_row)
-            data_rows = grid[hdr_idx + 1 :]
-            primary_header_row = list(header_row)
-            primary_col_index = dict(col_index)
-            header_detected = True
-        else:
-            header_row = list(primary_header_row)
-            col_index = dict(primary_col_index or build_col_index(header_row))
-            start_idx = _first_nonempty_row_index(grid)
-            first_content_row = grid[start_idx] if start_idx < len(grid) else []
-            if _rows_match_header(first_content_row, primary_header_row):
-                data_rows = grid[start_idx + 1 :]
-                header_detected = True
-            else:
-                data_rows = grid[start_idx:]
+        header_row, col_index, data_rows, header_detected, primary_header_row, primary_col_index = _prepare_header_context(grid, candidates, primary_header_row, primary_col_index)
 
         logger.debug("Header detection result", page=entry["page"], header_detected=header_detected,header_len=len(header_row), data_rows=len(data_rows))
 
         if header_detected:
-            try:
-                cfg_existing: Dict[str, Any] = {}
-                try:
-                    cfg_existing = get_contact_config(tenant_id, contact_id)
-                except Exception:
-                    cfg_existing = {}
-
-                updated = False
-                root_raw = cfg_existing.get("raw") if isinstance(cfg_existing.get("raw"), dict) else {}
-                root_raw = dict(root_raw)
-                for h in header_row:
-                    hh = str(h or "").strip()
-                    if not hh:
-                        continue
-                    kl = hh.lower()
-                    if kl not in root_raw:
-                        root_raw[kl] = kl
-                        updated = True
-                if updated:
-                    new_cfg = dict(cfg_existing)
-                    new_cfg["raw"] = root_raw
-                    set_contact_config(tenant_id, contact_id, new_cfg)
-            except Exception as e:
-                logger.info("[table_to_json] failed to persist raw headers", error=e)
+            _persist_raw_headers(tenant_id, contact_id, header_row)
 
         # Pre-compute which columns should be interpreted as "total" values.
         configured_amount_headers: List[Tuple[Optional[int], str]] = []
@@ -318,79 +439,13 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
             if not any((c or "").strip() for c in r):
                 continue
 
-            # Build a raw row map keyed by the header text.
-            full_raw: Dict[str, Any] = {}
-            for col_idx, header_value in enumerate(header_row):
-                label = str(header_value or "").strip() or f"column_{col_idx}"
-                cell_value = r[col_idx] if col_idx < len(r) else ""
-                if label in full_raw:
-                    dedup_label = f"{label}_{col_idx}"
-                    full_raw[dedup_label] = cell_value
-                else:
-                    full_raw[label] = cell_value
-
-            row_obj: Dict[str, Any] = deepcopy(items_template)
-            row_obj.pop("statement_item_id", None)
-            flags: List[str] = []
-
-            extracted_simple: Dict[str, Any] = {}
-            for field, header_name in simple_map.items():
-                idx = col_index.get(_norm(header_name))
-                actual_header = (header_row[idx] if idx is not None and idx < len(header_row) else header_name)
-                cell = get_by_header(r, col_index, header_name)
-                value: Any = cell
-                if field in {"date", "due_date"}:
-                    try:
-                        parsed = parse_with_format(cell, date_format)
-                    except ValueError as err:
-                        raise ValueError(
-                            f"Failed to parse '{cell}' using format '{date_format}'"
-                        ) from err
-                    if parsed is not None:
-                        value = parsed.strftime("%Y-%m-%d")
-                    elif field == "date" and str(cell or "").strip():
-                        flags.append("invalid-date")
-                row_obj[field] = value
-                canonical_header = str(actual_header or header_name)
-                extracted_simple[field] = {"header": canonical_header, "value": value}
-
-            raw_obj: Dict[str, Any] = {}
-            extracted_raw: Dict[str, Any] = {}
-            for raw_key, raw_src_header in (raw_map or {}).items():
-                chosen_header = raw_src_header or raw_key
-                idx = col_index.get(_norm(chosen_header))
-                actual_header = (header_row[idx] if idx is not None and idx < len(header_row) else chosen_header)
-                canonical_header = str(actual_header or chosen_header)
-                val = get_by_header(r, col_index, chosen_header)
-                raw_obj[canonical_header] = val
-                extracted_raw[canonical_header] = {"header": canonical_header, "value": val}
-            # Always store the raw row; fall back to full row if no raw mapping provided.
-            row_obj["raw"] = raw_obj if raw_obj else full_raw
-
-            total_entries: Dict[str, Any] = {}
-            for header_idx, header_label in configured_amount_headers:
-                if header_idx is None or header_idx >= len(r):
-                    continue
-                cell_value = r[header_idx]
-                if cell_value is None:
-                    continue
-                clean = _clean_currency(cell_value)
-                if not clean:
-                    continue
-                num = _to_number(clean)
-                if num is None:
-                    continue
-                total_entries[header_label] = num
-            row_obj["total"] = total_entries
-
             item_counter += 1
-            row_obj["statement_item_id"] = _generate_statement_item_id(statement_id, item_counter)
-            stmt_item = StatementItem(**row_obj)
+            stmt_item, flags, extracted_simple, raw_extracted = _map_row_to_item(
+                row=r, header_row=header_row, col_index=col_index, items_template=items_template, simple_map=simple_map, raw_map=raw_map,
+                configured_amount_headers=configured_amount_headers, date_format=date_format, statement_id=statement_id, item_counter=item_counter,
+            )
             items.append(stmt_item)
 
-            raw_extracted = extracted_raw or {}
-            if full_raw:
-                raw_extracted = {**{k: {"header": k, "value": v} for k, v in full_raw.items()}, **raw_extracted}
             item_flags.append(
                 [
                     {
