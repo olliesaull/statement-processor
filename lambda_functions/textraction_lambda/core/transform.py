@@ -1,3 +1,15 @@
+"""
+Transform Textract table grids into structured statement JSON.
+
+This module is the core mapping layer for statement extraction. It:
+- Chooses the most relevant table per page
+- Identifies header rows and maps columns to configured fields
+- Normalizes dates and numeric values
+- Emits `StatementItem` models and aggregates statement-level metadata
+
+The main entry point is `table_to_json`.
+"""
+
 import re
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
@@ -9,28 +21,26 @@ from core.date_utils import parse_with_format
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem, SupplierStatement
 
-_NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
-_SUMMARY_KEYWORDS = (
-    "balance",
-    "closing",
-    "outstanding",
-    "subtotal",
-    "total",
-    "amount due",
-    "due",
-    "statement total",
-)
-
 
 def _generate_statement_item_id(statement_id: Optional[str], sequence: int) -> str:
-    # Build a stable per-row identifier, namespaced under the parent statement id when provided
+    """Build a stable per-row identifier, namespaced under the statement id when provided."""
     if statement_id:
         return f"{statement_id}#item-{sequence:04d}"
     return f"stmt-item-{uuid4().hex[:12]}-{sequence:04d}"
 
 
+def _norm(s: str) -> str:
+    """Normalize header/cell text for fuzzy comparisons."""
+    return " ".join((s or "").split()).strip().lower()
+
+
 def _normalize_table_cell(cell: Any) -> str:
-    # Normalize a table cell to a clean string for comparisons/headers (strip currency symbols, punctuation)
+    """
+    Normalize a table cell to a clean string for comparisons/headers.
+
+    This strips currency symbols, separators, and parenthetical negatives, then
+    tries to coerce numeric values into a canonical string representation.
+    """
     if cell is None:
         return ""
     text = str(cell).strip()
@@ -53,17 +63,14 @@ def _normalize_table_cell(cell: Any) -> str:
 
 
 def _dedupe_grid_columns(grid: List[List[str]]) -> List[List[str]]:
-    # Remove duplicate columns (identical header+values) to avoid double-counting fields
+    """Remove duplicate columns (identical header + values) to avoid double-counting fields."""
     if not grid or not grid[0]:
         return grid
     seen: Dict[Tuple[str, Tuple[str, ...]], int] = {}
     keep: List[int] = []
     for idx in range(len(grid[0])):
-        header = norm(grid[0][idx]) if idx < len(grid[0]) else ""
-        column_values = tuple(
-            _normalize_table_cell(row[idx] if idx < len(row) else "")
-            for row in grid[1:]
-        )
+        header = _norm(grid[0][idx]) if idx < len(grid[0]) else ""
+        column_values = tuple(_normalize_table_cell(row[idx] if idx < len(row) else "") for row in grid[1:])
         signature = (header, column_values)
         if signature in seen:
             continue
@@ -74,187 +81,64 @@ def _dedupe_grid_columns(grid: List[List[str]]) -> List[List[str]]:
     return [[row[i] if i < len(row) else "" for i in keep] for row in grid]
 
 
-def norm(s: str) -> str:
-    return " ".join((s or "").split()).strip().lower()
-
-
-def clean_number_str(s: str) -> str:
-    return re.sub(r"\s+", "", (s or "")).replace(",", "")
-
-
-def to_number_if_possible(s: str):
-    t = clean_number_str(s)
-    if t == "":
-        return ""
-    try:
-        return float(t) if "." in t else int(t)
-    except ValueError:
-        return s.strip()
-
-
 def best_header_row(grid: List[List[str]], candidate_headers: List[str], lookahead: int = 5) -> Tuple[int, List[str]]:
-    # Heuristically pick the most likely header row by matching configured candidates and early rows
-    cand = set(norm(h) for h in candidate_headers if h)
+    """
+    Pick the most likely header row by matching configured candidates.
+
+    We scan up to `lookahead` rows and score based on candidate header matches.
+    """
+    cand = set(_norm(h) for h in candidate_headers if h)
     if not cand:
         for idx, row in enumerate(grid):
             if any(c.strip() for c in row):
+                logger.debug("Header row selected (no candidates)", selected_index=idx, lookahead_rows=len(grid))
                 return idx, row
+        logger.debug("Header row defaulted to first row (no candidates)", selected_index=0)
         return 0, grid[0] if grid else []
     best_idx, best_score = 0, -1
-    for i in range(min(lookahead, len(grid))):
+    lookahead_rows = min(lookahead, len(grid))
+    for i in range(lookahead_rows):
         row = grid[i]
         score = 0
         for cell in row:
-            cn = norm(cell)
+            cn = _norm(cell)
             if cn and (cn in cand or any(c in cn or cn in c for c in cand)):
                 score += 1
         if score > best_score:
             best_score, best_idx = score, i
+    logger.debug("Header row selected", selected_index=best_idx, best_score=best_score, lookahead_rows=lookahead_rows, candidate_count=len(cand))
     return best_idx, grid[best_idx]
 
 
 def build_col_index(header_row: List[str]) -> Dict[str, int]:
-    # Map normalized header labels to their column indices for lookup later
+    """Map normalized header labels to their column indices for lookup later."""
     col_index: Dict[str, int] = {}
     for i, h in enumerate(header_row):
-        hn = norm(h)
+        hn = _norm(h)
         if hn and hn not in col_index:
             col_index[hn] = i
     return col_index
 
 
 def get_by_header(row: List[str], col_index: Dict[str, int], header_label: str) -> str:
-    # Safely fetch a cell value by header name; returns empty string if missing/out of range
+    """Safely fetch a cell value by header name; returns empty string if missing/out of range."""
     if not header_label:
         return ""
-    idx = col_index.get(norm(header_label))
+    idx = col_index.get(_norm(header_label))
     if idx is None or idx >= len(row):
         return ""
     return (row[idx] or "").strip()
 
 
-def _looks_money(s: str) -> bool:
-    if s is None:
-        return False
-    t = str(s).strip()
-    if not t:
-        return False
-    t = t.replace("−", "-")
-    t = t.replace(",", "")
-    t = t.replace(" ", "")
-    t = re.sub(r"^[\$£€]\s*", "", t)
-    t = re.sub(r"(?i)(cr|dr)$", "", t)
-    if t.startswith("(") and t.endswith(")"):
-        t = "-" + t[1:-1]
-    return bool(re.fullmatch(r"-?\d+(?:\.\d+)?", t))
-
-
-def _is_forward_label(text: str) -> bool:
-    t = re.sub(r"[^a-z0-9 ]+", "", (norm(text) or ""))
-    if not t:
-        return False
-    keywords = (
-        "brought forward",
-        "carried forward",
-        "opening balance",
-        "opening bal",
-        "previous balance",
-        "balance forward",
-        "balance bf",
-        "balance b f",
-        "bal bf",
-        "bal b f",
-        "balance cf",
-        "balance c f",
-        "bal cf",
-        "bal c f",
-    )
-    short_forms = {"bf", "b f", "bfwd", "b fwd", "cf", "c f", "cfwd", "c fwd"}
-    return t in short_forms or any(k in t for k in keywords)
-
-
-def row_is_opening_or_carried_forward(raw_row: List[str], mapped_item: Dict[str, Any]) -> bool:
-    raw = mapped_item.get("raw") or {}
-    if isinstance(raw, dict) and any(_is_forward_label(v) for v in raw.values() if v):
-        return True
-    non_empty = sum(1 for c in raw_row if (c or "").strip())
-    money_count = sum(1 for c in raw_row if _looks_money(c))
-    return money_count == 0 and non_empty <= 2
-
-
-def _has_summary_keyword(text: str) -> bool:
-    if not text:
-        return False
-    t = norm(text)
-    if not t:
-        return False
-    for kw in _SUMMARY_KEYWORDS:
-        if " " in kw:
-            if kw in t:
-                return True
-        else:
-            if re.search(rf"\b{re.escape(kw)}\b", t):
-                return True
-    return False
-
-
-def row_is_summary_like(raw_row: List[str], mapped_item: Dict[str, Any]) -> bool:
-    raw_cells = [str(c or "").strip() for c in raw_row]
-    text_cells = [c for c in raw_cells if c]
-    if not text_cells:
-        return False
-
-    keyword_hits = sum(1 for c in text_cells if _has_summary_keyword(c))
-    if keyword_hits < 2:
-        return False
-
-    has_number = bool(str((mapped_item or {}).get("number") or "").strip())
-    has_date = bool(str((mapped_item or {}).get("date") or "").strip())
-    has_reference = bool(str((mapped_item or {}).get("reference") or "").strip())
-    missing_identifiers = sum(1 for flag in (has_number, has_date, has_reference) if not flag)
-
-    money_count = sum(1 for cell in raw_cells if _looks_money(cell))
-
-    def _iter_amount_like_values(values: Any) -> List[str]:
-        results: List[str] = []
-        if isinstance(values, (list, tuple)):
-            for entry in values:
-                if isinstance(entry, dict):
-                    candidate = entry.get("value")
-                elif hasattr(entry, "value"):
-                    candidate = getattr(entry, "value")
-                else:
-                    candidate = entry
-                if str(candidate or "").strip():
-                    results.append(str(candidate))
-            return results
-        if isinstance(values, dict):
-            for val in values.values():
-                if str(val or "").strip():
-                    results.append(str(val))
-            return results
-        if str(values or "").strip():
-            results.append(str(values))
-        return results
-
-    amount_like_values: List[str] = []
-    for field_name in ("total", "amount_credited"):
-        amount_like_values.extend(_iter_amount_like_values((mapped_item or {}).get(field_name)))
-
-    numeric_amounts = sum(1 for v in amount_like_values if _looks_money(v))
-    textual_amounts = len(amount_like_values) - numeric_amounts
-
-    if missing_identifiers >= 2 and (money_count <= 1 or (numeric_amounts == 0 and textual_amounts > 0)):
-        return True
-
-    if missing_identifiers == 3 and numeric_amounts <= 1:
-        return True
-
-    return False
-
-
 def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], candidates: List[str], small_table_penalty: float = 2.5) -> List[Dict[str, Any]]:
-    # When multiple tables exist per page, choose the grid that best matches configured headers/date patterns
+    """
+    Choose the best table per page when multiple candidates exist.
+
+    Tables are scored using:
+    - header candidate matches
+    - how many early rows look like dates
+    - overall table size
+    """
     if not tables_with_pages:
         return []
     cand_set = {c.strip().lower() for c in candidates if c}
@@ -264,13 +148,14 @@ def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], can
         by_page.setdefault(int(t["page"]), []).append(t["grid"])
     selected: List[Dict[str, Any]] = []
     for page, grids in sorted(by_page.items()):
+        logger.debug("Evaluating tables for page", page=page, table_count=len(grids))
         best_grid, best_score = None, float("-inf")
-        for grid in grids:
+        for grid_idx, grid in enumerate(grids):
             if not grid:
                 continue
             hdr_idx, header_row = best_header_row(grid, list(cand_set))
             data_rows = grid[hdr_idx + 1 :]
-            header_norm = [norm(h) for h in header_row]
+            header_norm = [_norm(h) for h in header_row]
             header_hits = sum(
                 1
                 for h in header_norm
@@ -279,18 +164,29 @@ def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], can
             date_hits = sum(
                 1 for r in data_rows[:10] if r and date_re.match((r[0] or "").strip())
             )
-            size_bonus = len(grid) * (len(grid[0]) if grid and grid[0] else 0)
+            rows = len(grid)
+            cols = len(grid[0]) if grid and grid[0] else 0
+            size_bonus = rows * cols
             penalty = small_table_penalty if len(data_rows) <= 1 else 0.0
             score = header_hits * 10 + date_hits * 2 + size_bonus * 0.001 - penalty
+            logger.debug("Table score", page=page, table_index=grid_idx, rows=rows, cols=cols, header_hits=header_hits, date_hits=date_hits,penalty=penalty, score=score)
             if score > best_score:
                 best_score, best_grid = score, grid
         if best_grid is None:
             best_grid = max(grids, key=lambda g: (len(g), len(g[0]) if g else 0))
         selected.append({"page": page, "grid": best_grid})
+        logger.debug("Selected table for page", page=page, rows=len(best_grid), cols=len(best_grid[0]) if best_grid and best_grid[0] else 0, best_score=best_score)
     return selected
 
 
 def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, contact_id: str, statement_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Convert Textract table grids into structured statement JSON.
+
+    Uses contact-specific config to map headers to fields, parse dates, and
+    extract totals. Returns a dict that matches `SupplierStatement.model_dump()`,
+    with optional `_flags` metadata describing extraction issues.
+    """
     # Main transformation: map Textract tables into structured statement items using contact-specific config
     contact_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
 
@@ -321,11 +217,7 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
             date_format = template_date_format
     if not date_format:
         raise ValueError("date_format must be configured for this contact")
-    allowed_fields = set(StatementItem.model_fields.keys()) - {
-        "raw",
-        "statement_item_id",
-        "item_type",
-    }
+    allowed_fields = set(StatementItem.model_fields.keys()) - {"raw", "statement_item_id", "item_type"}
     for field, value in items_template.items():
         if field == "raw" and isinstance(value, dict):
             raw_map = value
@@ -342,8 +234,14 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
     candidates = list(simple_map.values())
     candidates.extend(list(raw_map.keys()))
     candidates.extend([v for v in raw_map.values() if v])
+    logger.debug(
+        "Table mapping config", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, candidate_headers=len(candidates),
+        simple_map_fields=len(simple_map), raw_map_fields=len(raw_map), total_candidates=len(total_candidates),
+    )
 
+    # Pick the most relevant table per page before mapping rows to fields.
     selected = select_relevant_tables_per_page(tables_with_pages, candidates=candidates)
+    logger.debug("Selected tables", count=len(selected))
 
     items: List[StatementItem] = []
     item_flags: List[List[str]] = []
@@ -353,6 +251,7 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
     for _page_number, entry in enumerate(selected, start=1):
         grid = entry["grid"]
         grid = _dedupe_grid_columns(grid)
+        logger.debug("Processing table grid", page=entry["page"],rows=len(grid), cols=len(grid[0]) if grid and grid[0] else 0)
 
         header_row: List[str]
         col_index: Dict[str, int]
@@ -377,6 +276,8 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
                 header_detected = True
             else:
                 data_rows = grid[start_idx:]
+
+        logger.debug("Header detection result", page=entry["page"], header_detected=header_detected,header_len=len(header_row), data_rows=len(data_rows))
 
         if header_detected:
             try:
@@ -404,18 +305,20 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
             except Exception as e:
                 logger.info("[table_to_json] failed to persist raw headers", error=e)
 
+        # Pre-compute which columns should be interpreted as "total" values.
         configured_amount_headers: List[Tuple[Optional[int], str]] = []
         for cand in total_candidates:
             clean = cand.strip()
             if not clean:
                 continue
-            idx = col_index.get(norm(clean))
+            idx = col_index.get(_norm(clean))
             configured_amount_headers.append((idx, clean))
 
         for i_row, r in enumerate(data_rows, start=1):
             if not any((c or "").strip() for c in r):
                 continue
 
+            # Build a raw row map keyed by the header text.
             full_raw: Dict[str, Any] = {}
             for col_idx, header_value in enumerate(header_row):
                 label = str(header_value or "").strip() or f"column_{col_idx}"
@@ -432,12 +335,8 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
 
             extracted_simple: Dict[str, Any] = {}
             for field, header_name in simple_map.items():
-                idx = col_index.get(norm(header_name))
-                actual_header = (
-                    header_row[idx]
-                    if idx is not None and idx < len(header_row)
-                    else header_name
-                )
+                idx = col_index.get(_norm(header_name))
+                actual_header = (header_row[idx] if idx is not None and idx < len(header_row) else header_name)
                 cell = get_by_header(r, col_index, header_name)
                 value: Any = cell
                 if field in {"date", "due_date"}:
@@ -459,12 +358,8 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
             extracted_raw: Dict[str, Any] = {}
             for raw_key, raw_src_header in (raw_map or {}).items():
                 chosen_header = raw_src_header or raw_key
-                idx = col_index.get(norm(chosen_header))
-                actual_header = (
-                    header_row[idx]
-                    if idx is not None and idx < len(header_row)
-                    else chosen_header
-                )
+                idx = col_index.get(_norm(chosen_header))
+                actual_header = (header_row[idx] if idx is not None and idx < len(header_row) else chosen_header)
                 canonical_header = str(actual_header or chosen_header)
                 val = get_by_header(r, col_index, chosen_header)
                 raw_obj[canonical_header] = val
@@ -491,8 +386,6 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
             item_counter += 1
             row_obj["statement_item_id"] = _generate_statement_item_id(statement_id, item_counter)
             stmt_item = StatementItem(**row_obj)
-
-            earliest, latest = _update_date_range(stmt_item.date, stmt_item.due_date)
             items.append(stmt_item)
 
             raw_extracted = extracted_raw or {}
@@ -513,12 +406,9 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
     for flist in item_flags:
         combined_flags.extend(flist)
 
+    # Derive earliest/latest dates across all items.
     earliest_date, latest_date = _derive_date_range(items)
-    statement = SupplierStatement(
-        statement_items=items,
-        earliest_item_date=earliest_date,
-        latest_item_date=latest_date,
-    )
+    statement = SupplierStatement(statement_items=items, earliest_item_date=earliest_date, latest_item_date=latest_date)
 
     output = statement.model_dump()
     if combined_flags:
@@ -528,7 +418,7 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
 
 
 def _derive_date_range(items: List[StatementItem]) -> Tuple[Optional[str], Optional[str]]:
-    # Compute min/max dates across all statement items
+    """Compute min/max dates across all statement items."""
     dates = []
     for item in items:
         if item.date:
@@ -539,21 +429,8 @@ def _derive_date_range(items: List[StatementItem]) -> Tuple[Optional[str], Optio
     return dates_sorted[0], dates_sorted[-1]
 
 
-def _update_date_range(date_val: Optional[str], due_date: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    # Track earliest/latest dates seen within the current row
-    earliest_date: Optional[str] = None
-    latest_date: Optional[str] = None
-    for d in (date_val, due_date):
-        if d:
-            if earliest_date is None or d < earliest_date:
-                earliest_date = d
-            if latest_date is None or d > latest_date:
-                latest_date = d
-    return earliest_date, latest_date
-
-
 def _clean_currency(value: Any) -> str:
-    # Strip currency adornments and whitespace, leaving a numeric-like string
+    """Strip currency adornments and whitespace, leaving a numeric-like string."""
     if value is None:
         return ""
     text = str(value).strip()
@@ -570,7 +447,7 @@ def _clean_currency(value: Any) -> str:
 
 
 def _to_number(value: Any) -> Optional[float]:
-    # Convert cleaned numeric string to float when possible
+    """Convert cleaned numeric string to float when possible."""
     if value is None:
         return None
     text = str(value).strip()
@@ -583,7 +460,7 @@ def _to_number(value: Any) -> Optional[float]:
 
 
 def _first_nonempty_row_index(grid: List[List[str]]) -> int:
-    # Find the first row with any non-empty cell
+    """Find the first row with any non-empty cell."""
     for idx, row in enumerate(grid):
         if any((c or "").strip() for c in row):
             return idx
@@ -591,10 +468,10 @@ def _first_nonempty_row_index(grid: List[List[str]]) -> int:
 
 
 def _rows_match_header(row: List[str], header: List[str]) -> bool:
-    # Check whether a row resembles the header (used when carrying header across pages)
+    """Check whether a row resembles the header (used when carrying header across pages)."""
     if not row or not header:
         return False
-    header_norm = [norm(h) for h in header]
-    row_norm = [norm(c) for c in row]
+    header_norm = [_norm(h) for h in header]
+    row_norm = [_norm(c) for c in row]
     overlap = sum(1 for c in row_norm if c and c in header_norm)
     return overlap >= max(1, len(header_norm) // 2)
