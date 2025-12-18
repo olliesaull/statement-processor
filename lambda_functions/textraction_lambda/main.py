@@ -1,14 +1,25 @@
+"""
+Lambda entry point for statement textraction.
+
+This handler:
+- Validates the StepFunctions payload with Pydantic
+- Normalizes identifiers and resolves the source bucket
+- Delegates to `core.textract_statement.run_textraction`
+- Returns a structured response for downstream state handling
+"""
+
 from typing import Any, Dict
 
 from pydantic import ValidationError
 
 from config import S3_BUCKET_NAME, logger
-from core.textract_statement import run_textraction
 from core.models import TextractionEvent
+from core.textract_statement import run_textraction
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    # Entry point for AWS Lambda: validate input and orchestrate textraction
+    """Validate the incoming event and orchestrate the textraction run."""
+    # Entry point for AWS Lambda: validate input and orchestrate textraction.
     logger.info("Textraction lambda invoked", event_keys=list(event.keys()) if isinstance(event, dict) else [])
 
     try:
@@ -26,6 +37,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     pdf_key = payload.pdf_key
     json_key = payload.json_key
     pdf_bucket = payload.pdf_bucket or S3_BUCKET_NAME
+
+    logger.debug("Resolved textraction inputs", job_id=job_id, tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, pdf_bucket=pdf_bucket)
 
     try:
         result = run_textraction(job_id=job_id, bucket=pdf_bucket, pdf_key=pdf_key, json_key=json_key, tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id)

@@ -47,7 +47,7 @@ graph and reconstructs a clean 2D grid per table so later stages can map headers
 to fields and emit structured statement JSON.
 """
 
-from typing import Any, Dict, List, TypedDict, Optional
+from typing import Any, Dict, List, Optional, TypedDict, cast
 
 from config import logger, textract_client
 
@@ -157,7 +157,13 @@ def _extract_tables_from_blocks(blocks: List[Dict[str, Any]]) -> List[TableOnPag
     Returns a list of `TableOnPage` entries sorted by page.
     """
     # Build an index for quick lookup
-    block_map = {b.get("Id"): b for b in blocks if isinstance(b, dict)}
+    block_map: Dict[str, Dict[str, Any]] = {}
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        block_id = block.get("Id")
+        if isinstance(block_id, str):
+            block_map[block_id] = block
     tables: List[TableOnPage] = []
 
     # We only care about `TABLE` blocks; everything else is reached via relationships.
@@ -214,7 +220,8 @@ def analyze_tables_job(job_id: str) -> List[TableOnPage]:
             params["NextToken"] = next_token
         # Textract paginates; keep calling until `NextToken` is absent.
         resp = textract_client.get_document_analysis(**params)
-        blocks.extend(resp.get("Blocks", []))
+        raw_blocks = cast(List[Dict[str, Any]], resp.get("Blocks", []))
+        blocks.extend(raw_blocks)
         next_token = resp.get("NextToken")
         if not next_token:
             break

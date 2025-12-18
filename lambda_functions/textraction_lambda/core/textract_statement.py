@@ -120,7 +120,7 @@ def _persist_statement_items(
             if not isinstance(it, dict):
                 continue
             sid = it.get("StatementID")
-            if not sid:
+            if not isinstance(sid, str) or not sid:
                 continue
             keys_to_delete.append(sid)
             completed_val = str(it.get("Completed", "false")).strip().lower()

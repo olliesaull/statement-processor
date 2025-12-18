@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 
 import boto3
 from aws_lambda_powertools.logging import Logger
@@ -24,6 +23,6 @@ s3_client: S3Client = session.client("s3")
 textract_client: TextractClient = session.client("textract")
 ddb: DynamoDBServiceResource = session.resource("dynamodb")
 
-tenant_statements_table: Optional[Table] = ddb.Table(TENANT_STATEMENTS_TABLE_NAME) if TENANT_STATEMENTS_TABLE_NAME else None
-tenant_contacts_config_table: Optional[Table] = ddb.Table(TENANT_CONTACTS_CONFIG_TABLE_NAME) if TENANT_CONTACTS_CONFIG_TABLE_NAME else None
-tenant_data_table: Optional[Table] = ddb.Table(TENANT_DATA_TABLE_NAME) if TENANT_DATA_TABLE_NAME else None
+tenant_statements_table: Table = ddb.Table(TENANT_STATEMENTS_TABLE_NAME)
+tenant_contacts_config_table: Table = ddb.Table(TENANT_CONTACTS_CONFIG_TABLE_NAME)
+tenant_data_table: Table = ddb.Table(TENANT_DATA_TABLE_NAME)

@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from config import logger
 from core.date_utils import parse_with_format
+from core.extraction import TableOnPage
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem, SupplierStatement
 
@@ -231,8 +232,8 @@ def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: List[str])
             cfg_existing = {}
 
         updated = False
-        root_raw = cfg_existing.get("raw") if isinstance(cfg_existing.get("raw"), dict) else {}
-        root_raw = dict(root_raw)
+        raw_val = cfg_existing.get("raw")
+        root_raw: Dict[str, Any] = dict(raw_val) if isinstance(raw_val, dict) else {}
         for h in header_row:
             hh = str(h or "").strip()
             if not hh:
@@ -332,7 +333,7 @@ def _map_row_to_item(
     return stmt_item, flags, extracted_simple, raw_extracted
 
 
-def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], candidates: List[str], small_table_penalty: float = 2.5) -> List[Dict[str, Any]]:
+def select_relevant_tables_per_page(tables_with_pages: List["TableOnPage"], candidates: List[str], small_table_penalty: float = 2.5) -> List["TableOnPage"]:
     """
     Choose the best table per page when multiple candidates exist.
 
@@ -348,7 +349,7 @@ def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], can
     by_page: Dict[int, List[List[List[str]]]] = {}
     for t in tables_with_pages:
         by_page.setdefault(int(t["page"]), []).append(t["grid"])
-    selected: List[Dict[str, Any]] = []
+    selected: List["TableOnPage"] = []
     for page, grids in sorted(by_page.items()):
         logger.debug("Evaluating tables for page", page=page, table_count=len(grids))
         best_grid, best_score = None, float("-inf")
@@ -381,7 +382,7 @@ def select_relevant_tables_per_page(tables_with_pages: List[Dict[str, Any]], can
     return selected
 
 
-def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, contact_id: str,statement_id: Optional[str] = None) -> Dict[str, Any]:
+def table_to_json(tables_with_pages: List["TableOnPage"], tenant_id: str, contact_id: str,statement_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Convert Textract table grids into structured statement JSON.
 
@@ -405,7 +406,7 @@ def table_to_json(tables_with_pages: List[Dict[str, Any]], tenant_id: str, conta
     logger.debug("Selected tables", count=len(selected))
 
     items: List[StatementItem] = []
-    item_flags: List[List[str]] = []
+    item_flags: List[List[Dict[str, Any]]] = []
     item_counter = 0
     primary_header_row: Optional[List[str]] = None
     primary_col_index: Optional[Dict[str, int]] = None

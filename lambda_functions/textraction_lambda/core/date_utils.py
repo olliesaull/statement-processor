@@ -19,7 +19,6 @@ from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 from config import logger
 
-
 # Order matters: match longer tokens before shorter ones so "MMMM" wins over "MM".
 TOKEN_ORDER: Sequence[str] = (
     "YYYY",
@@ -337,7 +336,7 @@ def common_formats(samples: Iterable[str], top_k: int = 5) -> List[str]:
                 cleaned.append(c)
         return "".join(cleaned)
 
-    normalized = Counter()
+    normalized: Counter[str] = Counter()
     for s in samples:
         template = "".join("Y" if c.isdigit() else "M" if c.isalpha() else c for c in s)
         normalized[normalize_template(template)] += 1

@@ -8,7 +8,7 @@ These are small, focused schemas that:
 
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # `total` values can arrive as numbers or numeric-looking strings; we normalize them into a simple union.
 Number = Union[int, float, str]
@@ -66,10 +66,11 @@ class StatementItem(BaseModel):
         def _coerce_val(val: Any) -> Number:
             return cls._coerce_number(val)
 
+        coerced: Dict[str, Number] = {}
+
         if v is None:
             return {}
         if isinstance(v, dict):
-            coerced: Dict[str, Number] = {}
             for key, value in v.items():
                 label = str(key or "").strip()
                 if not label:
@@ -77,7 +78,6 @@ class StatementItem(BaseModel):
                 coerced[label] = _coerce_val(value)
             return coerced
         if isinstance(v, list):
-            coerced: Dict[str, Number] = {}
             for entry in v:
                 if not isinstance(entry, dict):
                     continue

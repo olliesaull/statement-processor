@@ -236,7 +236,8 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
     # JSON -> PDF: check each extracted reference appears somewhere in the PDF text.
     norm_pdf_text = extract_normalized_pdf_text(pdf_input)
     logger.debug("Extracted normalized PDF text", chars=len(norm_pdf_text))
-    found, not_found = [], []
+    found: List[Dict[str, Any]] = []
+    not_found: List[Dict[str, Any]] = []
     for i, raw in raw_refs:
         norm_ref = _normalise(raw)
         (found if norm_ref in norm_pdf_text else not_found).append({"index": i, "reference": raw})
