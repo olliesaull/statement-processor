@@ -1,3 +1,5 @@
+"""Shared AWS clients and environment-derived settings."""
+
 import os
 
 import boto3

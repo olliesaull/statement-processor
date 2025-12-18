@@ -17,7 +17,7 @@ from core.models import TextractionEvent
 from core.textract_statement import run_textraction
 
 
-def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:  # pylint: disable=unused-argument
     """Validate the incoming event and orchestrate the textraction run."""
     # Entry point for AWS Lambda: validate input and orchestrate textraction.
     logger.info("Textraction lambda invoked", event_keys=list(event.keys()) if isinstance(event, dict) else [])
@@ -45,6 +45,6 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         logger.info("Textraction complete", job_id=job_id, tenant_id=tenant_id, statement_id=statement_id, json_key=json_key)
         # Return a structured success payload so the state machine can persist the JSON key/job tracking (for logging + associating textraction with this execution).
         return {"status": "ok", "jobId": job_id, "jsonKey": json_key, "result": result}
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Textraction lambda failed", job_id=job_id, tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
         return {"status": "error", "message": str(exc)} # Mark StepFunction execution as failed.

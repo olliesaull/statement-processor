@@ -42,7 +42,7 @@ def _normalise(s: str) -> str:
     return re.sub(r"[\s\-_/\.]", "", s)
 
 
-def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, min_samples_for_prefixing: int = 3, coverage_threshold: float = 0.6) -> re.Pattern:
+def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, min_samples_for_prefixing: int = 3, coverage_threshold: float = 0.6) -> re.Pattern:  # pylint: disable=too-many-locals,too-many-branches
     """
     Learn a regex that matches the "family" of reference tokens seen in JSON.
 
@@ -117,7 +117,7 @@ def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, 
             parts.append(pat)
 
     if leftovers:
-        parts.append("(?:%s)" % "|".join(re.escape(s) for s in leftovers))
+        parts.append(f"(?:{'|'.join(re.escape(s) for s in leftovers)})")
 
     return re.compile("(?:" + "|".join(parts) + ")")
 
@@ -140,7 +140,7 @@ def _to_pdf_open_arg(pdf_input: PdfInput) -> Union[str, io.BytesIO, Any]:
     if hasattr(pdf_input, "read"):
         try:
             pdf_input.seek(0)
-        except Exception:
+        except (AttributeError, OSError, ValueError):
             pass
         return pdf_input
 
@@ -162,7 +162,7 @@ def extract_normalized_pdf_text(pdf_input: PdfInput) -> str:
     return _normalise("\n".join(chunks))
 
 
-def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern, ngram_max: int = 5, hard_seps: str = ":.") -> Set[str]:
+def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern, ngram_max: int = 5, hard_seps: str = ":.") -> Set[str]:  # pylint: disable=too-many-locals
     """
     Scan PDF text for tokens that match a learned reference regex.
 
@@ -185,10 +185,10 @@ def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern
             for m in re.finditer(r"[A-Z0-9]+", upper):
                 spans.append((m.group(0), m.start(), m.end()))
 
-            L = len(spans)
-            up_to = min(ngram_max, L)
+            span_count = len(spans)
+            up_to = min(ngram_max, span_count)
             for n in range(1, up_to + 1):
-                for i in range(0, L - n + 1):
+                for i in range(0, span_count - n + 1):
                     start = spans[i][1]
                     end = spans[i + n - 1][2]
                     original_segment = upper[start:end]
@@ -203,7 +203,7 @@ def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern
     return cands
 
 
-def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dict], ref_field: str = "reference") -> Dict:
+def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dict], ref_field: str = "reference") -> Dict:  # pylint: disable=too-many-locals
     """
     Cross-check extracted reference values against the source PDF text.
 

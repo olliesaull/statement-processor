@@ -131,7 +131,7 @@ def get_by_header(row: List[str], col_index: Dict[str, int], header_label: str) 
     return (row[idx] or "").strip()
 
 
-def _load_contact_mapping(tenant_id: str, contact_id: str) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], List[str], str]:
+def _load_contact_mapping(tenant_id: str, contact_id: str) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], List[str], str]:  # pylint: disable=too-many-branches
     """
     Load contact-specific mapping config and normalize it for table extraction.
 
@@ -228,7 +228,7 @@ def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: List[str])
         cfg_existing: Dict[str, Any] = {}
         try:
             cfg_existing = get_contact_config(tenant_id, contact_id)
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             cfg_existing = {}
 
         updated = False
@@ -246,11 +246,11 @@ def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: List[str])
             new_cfg = dict(cfg_existing)
             new_cfg["raw"] = root_raw
             set_contact_config(tenant_id, contact_id, new_cfg)
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.info("[table_to_json] failed to persist raw headers", error=e)
 
 
-def _map_row_to_item(
+def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
     row: List[str], header_row: List[str], col_index: Dict[str, int], items_template: Dict[str, Any],simple_map: Dict[str, str],
     raw_map: Dict[str, str], configured_amount_headers: List[Tuple[Optional[int], str]], date_format: str, statement_id: Optional[str], item_counter: int,
 ) -> Tuple[StatementItem, List[str], Dict[str, Any], Dict[str, Any]]:
@@ -333,7 +333,7 @@ def _map_row_to_item(
     return stmt_item, flags, extracted_simple, raw_extracted
 
 
-def select_relevant_tables_per_page(tables_with_pages: List["TableOnPage"], candidates: List[str], small_table_penalty: float = 2.5) -> List["TableOnPage"]:
+def select_relevant_tables_per_page(tables_with_pages: List["TableOnPage"], candidates: List[str], small_table_penalty: float = 2.5) -> List["TableOnPage"]:  # pylint: disable=too-many-locals
     """
     Choose the best table per page when multiple candidates exist.
 
@@ -382,7 +382,7 @@ def select_relevant_tables_per_page(tables_with_pages: List["TableOnPage"], cand
     return selected
 
 
-def table_to_json(tables_with_pages: List["TableOnPage"], tenant_id: str, contact_id: str,statement_id: Optional[str] = None) -> Dict[str, Any]:
+def table_to_json(tables_with_pages: List["TableOnPage"], tenant_id: str, contact_id: str,statement_id: Optional[str] = None) -> Dict[str, Any]:  # pylint: disable=too-many-locals
     """
     Convert Textract table grids into structured statement JSON.
 

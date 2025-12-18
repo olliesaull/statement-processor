@@ -110,7 +110,7 @@ def _has_text(value: Any) -> bool:
     return str(value).strip() != ""
 
 
-def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_based_index: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_based_index: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:  # pylint: disable=too-many-locals,too-many-branches
     """
     Flag suspicious statement items (and optionally remove them).
 

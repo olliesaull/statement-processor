@@ -139,7 +139,7 @@ def _extract_text_for_block(block_map: Dict[str, Dict[str, Any]], block: Dict[st
     return " ".join(texts)
 
 
-def _extract_tables_from_blocks(blocks: List[Dict[str, Any]]) -> List[TableOnPage]:
+def _extract_tables_from_blocks(blocks: List[Dict[str, Any]]) -> List[TableOnPage]:  # pylint: disable=too-many-locals
     """
     Reconstruct table grids from the flat `Blocks` list returned by Textract.
 
@@ -241,7 +241,7 @@ def get_tables_for_job(job_id: str) -> Dict[str, List[TableOnPage]]:
     result: Dict[str, List[TableOnPage]] = {}
     try:
         result[job_id] = analyze_tables_job(job_id)
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         # Failures are logged and swallowed so the caller can decide how to handle missing tables.
         logger.exception("Textract result fetch failed", job_id=job_id, error=str(exc), exc_info=True)
     return result

@@ -53,7 +53,7 @@ MONTH_ABBR_TO_NUM = {abbr.lower(): idx for idx, abbr in enumerate(calendar.month
 MONTH_NAME_TO_NUM["sept"] = 9
 
 
-def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]:
+def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]:  # pylint: disable=too-many-branches,too-many-return-statements,too-many-locals
     """
     Parse ``value`` using the custom Supplier Date Format tokens.
 
@@ -69,7 +69,7 @@ def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]
 
     # Compile the template into a regex and metadata used during extraction.
     compiled = _prepare_template(template)
-    regex, group_order, tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal = compiled
+    regex, group_order, _, has_textual_month, numeric_month, numeric_day, uses_ordinal = compiled
     match = regex.match(s)
     if not match:
         logger.debug("Date value did not match template", value=s, template=template)
@@ -192,7 +192,7 @@ def _coerce_to_iso_string(value: Any) -> Optional[str]:
     return dt.strftime("%Y-%m-%d")
 
 
-def _coerce_to_datetime(value: Any) -> Optional[datetime]:
+def _coerce_to_datetime(value: Any) -> Optional[datetime]:  # pylint: disable=too-many-branches,too-many-return-statements
     """Best-effort conversion of input values to a date-only datetime."""
     if isinstance(value, datetime):
         return datetime(value.year, value.month, value.day)
@@ -205,14 +205,14 @@ def _coerce_to_datetime(value: Any) -> Optional[datetime]:
         if len(s) >= 10 and s[4] == "-" and s[7] == "-":
             return datetime.strptime(s[:10], "%Y-%m-%d")
         return datetime.strptime(s, "%Y-%m-%d")
-    except Exception:
+    except (ValueError, TypeError):
         try:
             return datetime.fromisoformat(s)
-        except Exception:
+        except (ValueError, TypeError):
             return None
 
 
-def _format_tokens(tokens: Sequence, dt: datetime) -> str:
+def _format_tokens(tokens: Sequence, dt: datetime) -> str: # pylint: disable=too-many-branches
     """Format a datetime by expanding template tokens into string parts."""
     parts: List[str] = []
     for kind, value in tokens:

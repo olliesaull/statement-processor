@@ -61,7 +61,8 @@ class StatementItem(BaseModel):
             return v
 
     @field_validator("total", mode="before")
-    def _coerce_total(cls, v: Any) -> Dict[str, Number]:  # type: ignore[no-untyped-def]
+    @classmethod
+    def _coerce_total(cls, v: Any) -> Dict[str, Number]:
         # Normalize `total` into a simple `{label: value}` mapping regardless of the input shape.
         def _coerce_val(val: Any) -> Number:
             return cls._coerce_number(val)

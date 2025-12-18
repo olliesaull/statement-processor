@@ -1,3 +1,5 @@
+"""DynamoDB helpers for loading and updating tenant contact config."""
+
 from typing import Any, Dict
 
 from botocore.exceptions import ClientError
@@ -6,6 +8,7 @@ from config import logger, tenant_contacts_config_table
 
 
 def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
+    """Fetch a contact's config payload from DynamoDB."""
     logger.debug("Fetching contact config", tenant_id=tenant_id, contact_id=contact_id)
     attr_name = "config"
     if tenant_contacts_config_table is None:
@@ -17,7 +20,7 @@ def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
             ExpressionAttributeNames={"#cfg": attr_name},
         )
     except ClientError as exc:
-        raise RuntimeError(f"DynamoDB error fetching config: {exc}")
+        raise RuntimeError(f"DynamoDB error fetching config: {exc}") from exc
 
     item = resp.get("Item") if isinstance(resp, dict) else None
     if not item or attr_name not in item:
@@ -45,4 +48,4 @@ def set_contact_config(tenant_id: str, contact_id: str, config: Dict[str, Any]) 
             ExpressionAttributeValues={":cfg": config},
         )
     except ClientError as exc:
-        raise RuntimeError(f"DynamoDB error updating config: {exc}")
+        raise RuntimeError(f"DynamoDB error updating config: {exc}") from exc

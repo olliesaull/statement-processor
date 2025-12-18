@@ -42,7 +42,7 @@ from core.validation.anomaly_detection import apply_outlier_flags
 from core.validation.validate_item_count import validate_references_roundtrip
 
 
-def _sanitize_for_dynamodb(value: Any) -> Any:
+def _sanitize_for_dynamodb(value: Any) -> Any:  # pylint: disable=too-many-return-statements
     """
     Convert extracted values into DynamoDB-friendly types.
 
@@ -85,7 +85,7 @@ def _sanitize_for_dynamodb(value: Any) -> Any:
     return value
 
 
-def _persist_statement_items(
+def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     tenant_id: str, contact_id: Optional[str], statement_id: Optional[str], items: List[Dict[str, Any]],
     *, earliest_item_date: Optional[str] = None, latest_item_date: Optional[str] = None) -> None:
     """
@@ -135,7 +135,7 @@ def _persist_statement_items(
         header_resp = tenant_statements_table.get_item(Key={"TenantID": tenant_id, "StatementID": statement_id})
         header_item = header_resp.get("Item") if isinstance(header_resp, dict) else None
         header_completed = (str(header_item.get("Completed", "false")).strip().lower() == "true" if header_item else False)
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Failed to fetch statement header completion flag", tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
         header_completed = False
 
@@ -199,7 +199,7 @@ def _persist_statement_items(
             )
 
 
-def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenant_id: str, contact_id: str, statement_id: str) -> Dict[str, Any]:
+def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenant_id: str, contact_id: str, statement_id: str) -> Dict[str, Any]:  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     """
     End-to-end processing for a single statement Textract job.
 
@@ -230,7 +230,7 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
             tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, items=statement.get("statement_items", []) or [],
             earliest_item_date=statement.get("earliest_item_date"), latest_item_date=statement.get("latest_item_date"),
         )
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Failed to persist statement items", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id, error=str(exc))
 
     try:
@@ -239,7 +239,7 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
         pdf_bytes = obj["Body"].read()
         statement_items = statement.get("statement_items", []) or []
         validate_references_roundtrip(pdf_bytes, statement_items)
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Reference validation skipped", key=key, tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
 
     # Flag outliers without removing them, so downstream consumers can inspect anomalies
@@ -262,7 +262,7 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
                 UpdateExpression="SET JobId = :jobId",
                 ExpressionAttributeValues={":jobId": job_id},
             )
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Failed to store job id on statement", statement_id=statement_id, tenant_id=tenant_id, error=str(exc), exc_info=True)
 
     # Convenience for callers: derive a friendly filename from the PDF key.

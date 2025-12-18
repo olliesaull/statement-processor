@@ -1,3 +1,5 @@
+"""Custom exceptions used by the statement processing Lambda."""
+
 from typing import Any, Dict, Optional
 
 
