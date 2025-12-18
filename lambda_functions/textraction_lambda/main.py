@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from pydantic import ValidationError
 
@@ -28,10 +28,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     pdf_bucket = payload.pdf_bucket or S3_BUCKET_NAME
 
     try:
-        result = run_textraction(
-            job_id=job_id, bucket=pdf_bucket, pdf_key=pdf_key, json_key=json_key, 
-            tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id
-        )
+        result = run_textraction(job_id=job_id, bucket=pdf_bucket, pdf_key=pdf_key, json_key=json_key, tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id)
         logger.info("Textraction complete", job_id=job_id, tenant_id=tenant_id, statement_id=statement_id, json_key=json_key)
         # Return a structured success payload so the state machine can persist the JSON key/job tracking (for logging + associating textraction with this execution).
         return {"status": "ok", "jobId": job_id, "jsonKey": json_key, "result": result}
