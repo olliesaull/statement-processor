@@ -382,7 +382,7 @@ def select_relevant_tables_per_page(tables_with_pages: List["TableOnPage"], cand
     return selected
 
 
-def table_to_json(tables_with_pages: List["TableOnPage"], tenant_id: str, contact_id: str,statement_id: Optional[str] = None) -> Dict[str, Any]:  # pylint: disable=too-many-locals
+def table_to_json(tables_with_pages: List["TableOnPage"], tenant_id: str, contact_id: str,statement_id: Optional[str] = None) -> Dict[str, Any]:  # pylint: disable=too-many-locals,too-many-statements
     """
     Convert Textract table grids into structured statement JSON.
 
@@ -406,6 +406,7 @@ def table_to_json(tables_with_pages: List["TableOnPage"], tenant_id: str, contac
     logger.debug("Selected tables", count=len(selected))
 
     items: List[StatementItem] = []
+    per_item_flags: List[List[str]] = []
     item_flags: List[List[Dict[str, Any]]] = []
     item_counter = 0
     primary_header_row: Optional[List[str]] = None
@@ -446,6 +447,7 @@ def table_to_json(tables_with_pages: List["TableOnPage"], tenant_id: str, contac
                 configured_amount_headers=configured_amount_headers, date_format=date_format, statement_id=statement_id, item_counter=item_counter,
             )
             items.append(stmt_item)
+            per_item_flags.append(flags)
 
             item_flags.append(
                 [
@@ -467,6 +469,17 @@ def table_to_json(tables_with_pages: List["TableOnPage"], tenant_id: str, contac
     statement = SupplierStatement(statement_items=items, earliest_item_date=earliest_date, latest_item_date=latest_date)
 
     output = statement.model_dump()
+
+    # Attach per-item flags for UI compatibility (the UI reads `item["_flags"]`).
+    # Keep flags as a simple list of strings, preserving insertion order and removing duplicates.
+    out_items = output.get("statement_items") or []
+    if isinstance(out_items, list):
+        for idx, flags in enumerate(per_item_flags):
+            if idx >= len(out_items) or not flags:
+                continue
+            if isinstance(out_items[idx], dict):
+                out_items[idx]["_flags"] = list(dict.fromkeys(flags))
+
     if combined_flags:
         output["_flags"] = combined_flags
 
