@@ -23,6 +23,7 @@ from flask_caching import Cache
 from flask_session import Session
 from flask_wtf.csrf import CSRFProtect
 from openpyxl import Workbook
+from openpyxl.styles import Border, Font, PatternFill, Side
 from werkzeug.utils import secure_filename
 
 import cache_provider
@@ -729,6 +730,37 @@ def statement(statement_id: str):
         worksheet.title = "Statement"
         worksheet.append(excel_headers)
 
+        fill_success = PatternFill(fill_type="solid", fgColor="C6EFCE")
+        fill_danger = PatternFill(fill_type="solid", fgColor="FFC7CE")
+        fill_warning = PatternFill(fill_type="solid", fgColor="FFEB9C")
+        font_completed = Font(color="808080")
+        mismatch_side = Side(style="thin", color="E6B8B7")
+        mismatch_border = Border(left=mismatch_side, right=mismatch_side, top=mismatch_side, bottom=mismatch_side)
+        divider_side = Side(style="medium", color="808080")
+        statement_col_count = len(header_labels)
+        statement_end_col = 1 + statement_col_count
+        xero_start_col = statement_end_col + 1
+
+        legend = workbook.create_sheet(title="Legend")
+        legend.column_dimensions["A"].width = 26
+        legend.column_dimensions["B"].width = 18
+        legend.append(["Legend", ""])
+        legend["A1"].font = Font(bold=True)
+        legend.append(["Match", ""])
+        legend["B2"].fill = fill_success
+        legend.append(["Mismatch", ""])
+        legend["B3"].fill = fill_danger
+        legend.append(["Flagged anomaly", ""])
+        legend["B4"].fill = fill_warning
+        legend.append(["Cell mismatch (matched rows)", ""])
+        legend["B5"].border = mismatch_border
+        legend.append(["Completed (faded)", ""])
+        legend["A7"].font = font_completed
+
+        if statement_col_count:
+            worksheet.cell(row=1, column=statement_end_col).border = Border(right=divider_side)
+            worksheet.cell(row=1, column=xero_start_col).border = Border(left=divider_side)
+
         row_count = max(len(rows_by_header), len(right_rows_by_header))
         for idx in range(row_count):
             left_row = rows_by_header[idx] if idx < len(rows_by_header) else {}
@@ -746,12 +778,50 @@ def statement(statement_id: str):
             status_label = ""
             item = items[idx] if idx < len(items) else {}
             statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
+            is_item_completed = False
             if statement_item_id:
-                status_label = "Completed" if item_status_map.get(statement_item_id, False) else "Incomplete"
+                is_item_completed = item_status_map.get(statement_item_id, False)
+                status_label = "Completed" if is_item_completed else "Incomplete"
             # Providing status in the sheet lets users filter finished work out quickly.
             row_values.append(status_label)
 
             worksheet.append(row_values)
+
+            # Apply the same row colouring rules as the UI:
+            # - anomalous rows: warning (based on per-item `_flags`)
+            # - otherwise: green for "match", red for "mismatch"
+            raw_flags = item.get("_flags") if isinstance(item, dict) else None
+            flag_list = raw_flags if isinstance(raw_flags, list) else []
+            anomalous = any(isinstance(f, str) and f.strip() in {"ml-outlier", "invalid-date"} for f in flag_list)
+            row_match = row_matches[idx] if idx < len(row_matches) else False
+
+            fill = fill_warning if anomalous else (fill_success if row_match else fill_danger)
+            current_row = worksheet.max_row
+            for col in range(1, len(excel_headers) + 1):
+                cell = worksheet.cell(row=current_row, column=col)
+                cell.fill = fill
+                if is_item_completed:
+                    cell.font = font_completed
+
+            # Highlight per-cell mismatches for matched rows (mirrors the "!" indicator in the UI).
+            if statement_col_count:
+                worksheet.cell(row=current_row, column=statement_end_col).border = Border(right=divider_side)
+                worksheet.cell(row=current_row, column=xero_start_col).border = Border(left=divider_side)
+
+            if row_match and idx < len(row_comparisons):
+                comparisons = row_comparisons[idx] or []
+                col_count = len(header_labels)
+                for col_idx, comparison in enumerate(comparisons[:col_count]):
+                    if getattr(comparison, "matches", True):
+                        continue
+                    for target_col in (2 + col_idx, 2 + col_count + col_idx):
+                        cell = worksheet.cell(row=current_row, column=target_col)
+                        if target_col == statement_end_col:
+                            cell.border = Border(left=mismatch_side, right=divider_side, top=mismatch_side, bottom=mismatch_side)
+                        elif target_col == xero_start_col:
+                            cell.border = Border(left=divider_side, right=mismatch_side, top=mismatch_side, bottom=mismatch_side)
+                        else:
+                            cell.border = mismatch_border
 
         output = BytesIO()
         workbook.save(output)
