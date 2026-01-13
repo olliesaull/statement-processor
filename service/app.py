@@ -982,18 +982,6 @@ def select_tenant():
     return redirect(url_for("tenant_management"))
 
 
-@app.route("/tenants/sync", methods=["POST"])
-@active_tenant_required("Please select a tenant before synchronising.", flash_key="tenant_message")
-@xero_token_required
-@route_handler_logging
-def sync_tenant():
-    tenant_id = session.get("xero_tenant_id")
-
-    session["tenant_message"] = "Tenant data is refreshed on demand; no manual sync is required."
-    logger.info("Manual tenant sync requested", tenant_id=tenant_id)
-    return redirect(url_for("tenant_management"))
-
-
 @app.route("/tenants/disconnect", methods=["POST"])
 @xero_token_required
 @route_handler_logging

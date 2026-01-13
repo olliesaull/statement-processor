@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -57,10 +57,3 @@ class StatementItem(BaseModel):
                 coerced[label] = _coerce_val(entry.get("value"))
             return coerced
         return {}
-
-
-class SupplierStatement(BaseModel):
-    """Top-level container for extracted statement rows."""
-    statement_items: List[StatementItem] = Field(default_factory=list)
-    earliest_item_date: Optional[str] = None
-    latest_item_date: Optional[str] = None

@@ -357,14 +357,6 @@ def fmt_invoice_data(inv):
     }
 
 
-def get_contact_for_statement(tenant_id: str, statement_id: str) -> Optional[str]:
-    """Get the contact ID for a given statement ID."""
-    record = get_statement_record(tenant_id, statement_id)
-    if record:
-        return record.get("ContactID")
-    return None
-
-
 def get_incomplete_statements() -> List[Dict[str, Any]]:
     """Return statements for the active tenant that are not completed."""
     tenant_id = session.get("xero_tenant_id")
