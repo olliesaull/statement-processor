@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from flask import session
 from xero_python.exceptions import AccountingBadRequestException
@@ -404,63 +404,6 @@ def _coerce_invoice_list(payload: Any) -> List[Dict[str, Any]]:
 
     invoices.sort(key=lambda inv: str(inv.get("number") or "").casefold())
     return invoices
-
-
-def _build_invoice_lookup_by_number(invoices: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """Build mapping of invoice number -> list of invoices sharing that number."""
-    lookup: Dict[str, List[Dict[str, Any]]] = {}
-    for inv in invoices:
-        num = inv.get("number") if isinstance(inv, dict) else None
-        key = str(num).strip() if num is not None else ""
-        if not key:
-            continue
-        lookup.setdefault(key, []).append(inv)
-    return lookup
-
-
-def get_invoices_by_numbers(invoice_numbers: Iterable[Any]) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    Fetch invoices for a list of invoice numbers from the locally cached dataset.
-    Returns a dict keyed by invoice number: { "INV-001": [{...}, {...}], ... }
-    """
-    tenant_id = session.get("xero_tenant_id")
-    if not tenant_id:
-        logger.info("Skipping invoice number lookup; tenant not selected")
-        return {}
-
-    if not invoice_numbers:
-        return {}
-
-    # normalize & de-dupe while preserving order (helps batching)
-    normalized = []
-    seen = set()
-    for n in (str(x).strip() for x in invoice_numbers if str(x).strip()):
-        if n not in seen:
-            seen.add(n)
-            normalized.append(n)
-
-    try:
-        cached = load_local_dataset(XeroType.INVOICES, tenant_id=tenant_id) or []
-        if not cached:
-            logger.info("No cached invoices available", tenant_id=tenant_id)
-            return {}
-
-        invoices = _coerce_invoice_list(cached)
-        lookup = _build_invoice_lookup_by_number(invoices)
-
-        result: Dict[str, List[Dict[str, Any]]] = {}
-        for number in normalized:
-            matches = lookup.get(number)
-            if matches:
-                result[number] = matches
-
-        returned = sum(len(v) for v in result.values())
-        logger.info("Fetched invoices by numbers", tenant_id=tenant_id, requested=len(normalized), returned=returned)
-        return result
-
-    except Exception:
-        logger.exception("Failed to load invoices by numbers from cache", tenant_id=tenant_id)
-        return {}
 
 
 def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:

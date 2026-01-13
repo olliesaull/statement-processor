@@ -38,7 +38,6 @@ from config import (
 )
 from core.date_utils import coerce_datetime_with_template, format_iso_with
 from core.models_comparison import CellComparison
-from core.transform import equal
 from tenant_data_repository import TenantDataRepository, TenantStatus
 
 # MIME/extension guards for uploads
@@ -86,6 +85,34 @@ def get_xero_api_client(oauth_token: Optional[dict] = None) -> AccountingApi:
 
     return AccountingApi(api_client)
 
+def _norm_number(x: Any) -> Optional[Decimal]:
+    """Return Decimal if x looks numeric (incl. currency/commas); else None."""
+    if x is None:
+        return None
+    if isinstance(x, (int, float, Decimal)):
+        try:
+            return Decimal(str(x))
+        except InvalidOperation:
+            return None
+    s = str(x).strip()
+    if not s:
+        return None
+    # strip currency symbols/letters, keep digits . , -
+    s = _NON_NUMERIC_RE.sub("", s).replace(",", "")
+    try:
+        return Decimal(s)
+    except InvalidOperation:
+        return None
+
+
+def _equal(a: Any, b: Any) -> bool:
+    """Numeric-aware equality; otherwise trimmed string equality."""
+    da, db = _norm_number(a), _norm_number(b)
+    if da is not None or db is not None:
+        return da == db
+    sa = "" if a is None else str(a).strip()
+    sb = "" if b is None else str(b).strip()
+    return sa.casefold() == sb.casefold()
 
 def _query_statements_by_completed(tenant_id: Optional[str], completed_value: str) -> List[Dict[str, Any]]:
     """Query statements for a tenant filtered by the Completed flag via GSI."""
@@ -1053,7 +1080,7 @@ def build_row_comparisons(left_rows: List[Dict[str, str]], right_rows: List[Dict
                 a, b = _norm_id_text(left_val), _norm_id_text(right_val)
                 matches = bool(a and b and (a == b or a in b or b in a))
             else:
-                matches = equal(left_val, right_val)
+                matches = _equal(left_val, right_val)
             canonical = (header_to_field or {}).get(header)
             row_cells.append(
                 CellComparison(

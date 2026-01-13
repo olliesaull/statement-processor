@@ -295,8 +295,8 @@ class StatementProcessorStack(Stack):
             self,
             "Statement Processor Website",
             instance_role=statement_processor_instance_role,
-            memory=apprunner_alpha.Memory.FOUR_GB,
-            cpu=apprunner_alpha.Cpu.ONE_VCPU,
+            memory=apprunner_alpha.Memory.ONE_GB,
+            cpu=apprunner_alpha.Cpu.QUARTER_VCPU,
             service_name=APP_RUNNER_SERVICE_NAME,
             source=apprunner_alpha.Source.from_asset(
                 asset=apprunner_asset,
