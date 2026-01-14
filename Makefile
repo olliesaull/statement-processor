@@ -3,7 +3,7 @@
 # Keeps lint/type-check commands centralized for service and lambda_functions.
 #
 
-.PHONY: help update-venvs lint-all type-check-all
+.PHONY: help update-venvs format-all lint-all type-check-all
 
 # Top-level directories to target.
 SERVICE_DIR := service
@@ -25,6 +25,7 @@ help:
 	@echo "  update-venvs            Update dependencies in each service/lambda venv"
 	@echo ""
 	@echo "🔍 Code Quality:"
+	@echo "  format-all              Format code and sort imports with Ruff"
 	@echo "  lint-all                Run pylint on all Lambdas and service (sequential, clearer output)"
 	@echo "  type-check-all          Run mypy on all Lambdas and service (sequential, clearer output)"
 
@@ -33,6 +34,17 @@ update-venvs:
 	@echo "⬆️  Updating venv dependencies..."
 	@./update_dependencies.sh
 	@echo "✅ All venvs updated"
+
+# Format all code with Ruff (includes import sorting).
+format-all:
+	@echo "🎨 Formatting code and sorting imports with Ruff..."
+	@for dir in $(SERVICE_DIR) $(LAMBDA_DIRS); do \
+		if [ -d "$$dir" ]; then \
+			echo "Formatting: $$dir"; \
+			bash -c "cd $$dir && source venv/bin/activate && ruff format . && ruff check --select I,W --fix . 2>/dev/null || true"; \
+		fi; \
+	done
+	@echo "✅ Ruff formatting complete"
 
 # Sequential linting for service + each lambda directory.
 lint-all:
