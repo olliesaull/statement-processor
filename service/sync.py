@@ -1,4 +1,12 @@
-"""Module for getting Xero data and storing it in S3"""
+"""
+Sync Xero datasets to local cache and S3.
+
+This module:
+- fetches contacts, invoices, payments, and credit notes from Xero
+- merges incremental results with cached data
+- writes datasets locally and uploads them to S3
+- updates tenant sync status in DynamoDB and cache
+"""
 
 import json
 import os
@@ -17,29 +25,40 @@ from xero_python.accounting import AccountingApi
 from tenant_data_repository import TenantDataRepository, TenantStatus
 
 STAGE = os.getenv("STAGE")
+# Local cache used to merge incremental syncs with previously downloaded data.
 LOCAL_DATA_DIR = "./tmp/data" if STAGE == "dev" else "/tmp/data"
 
 
-def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, resource: XeroType, start_message: str, done_message: str, modified_since: Optional[datetime] = None) -> bool:
+def _sync_resource(
+    api: AccountingApi,
+    tenant_id: str,
+    fetcher: Callable[..., Any],
+    resource: XeroType,
+    start_message: str,
+    done_message: str,
+    modified_since: Optional[datetime] = None,
+) -> bool:
+    """Fetch, cache, and upload a single Xero dataset."""
     if not tenant_id:
         logger.error("Missing TenantID")
         return False
 
     logger.info(start_message, tenant_id=tenant_id)
 
-    filename = f"{resource}.json"
+    resource_filename = f"{resource}.json"
 
     try:
-        local_file = f"{LOCAL_DATA_DIR}/{tenant_id}/{filename}"
-        s3_file = f"{tenant_id}/data/{filename}"
+        local_dir = os.path.join(LOCAL_DATA_DIR, tenant_id)
+        local_path = os.path.join(local_dir, resource_filename)
+        s3_key = f"{tenant_id}/data/{resource_filename}"
 
         # Fetch the latest dataset from Xero.
         data = fetcher(tenant_id, api=api, modified_since=modified_since)
 
         existing_payload = None
-        if os.path.exists(local_file):
+        if os.path.exists(local_path):
             try:
-                with open(local_file, encoding="utf-8") as existing_file:
+                with open(local_path, encoding="utf-8") as existing_file:
                     existing_payload = json.load(existing_file)
             except (OSError, json.JSONDecodeError, TypeError) as exc:
                 logger.warning("Failed to load existing dataset", tenant_id=tenant_id, resource=resource, error=str(exc))
@@ -53,23 +72,23 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable, resour
         if payload is None:
             payload = []
 
-        os.makedirs(os.path.dirname(local_file), exist_ok=True)
+        os.makedirs(local_dir, exist_ok=True)
 
-        with open(local_file, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=4, ensure_ascii=False, default=str)
+        with open(local_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=4, ensure_ascii=False, default=str)
 
-        s3_client.upload_file(local_file, S3_BUCKET_NAME, s3_file)
+        s3_client.upload_file(local_path, S3_BUCKET_NAME, s3_key)
 
         record_count = len(payload) if isinstance(payload, (list, dict)) else None
         logger.info(done_message, tenant_id=tenant_id, records=record_count)
         return True
 
     except Exception:
-        logger.exception("Unexpected error syncing resource", tenant_id=tenant_id, resource=filename)
+        logger.exception("Unexpected error syncing resource", tenant_id=tenant_id, resource=resource_filename)
         return False
 
 
-def _resolve_modified_since(record: Optional[dict[str, Any]]) -> Optional[datetime]:
+def _resolve_modified_since(record: Optional[Dict[str, Any]]) -> Optional[datetime]:
     """Return LastSyncTime as a timezone-aware datetime if present."""
     if not record:
         return None
@@ -79,6 +98,7 @@ def _resolve_modified_since(record: Optional[dict[str, Any]]) -> Optional[dateti
         return None
 
     try:
+        # Support raw epoch seconds/milliseconds or numeric strings.
         if isinstance(raw_value, (Decimal, int, float)):
             timestamp = float(raw_value)
         elif isinstance(raw_value, str) and raw_value.strip():
@@ -107,9 +127,9 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
     Combine newly fetched records with any previously cached dataset.
     When we only pull a delta, this keeps the local/S3 files authoritative.
     """
-    if delta is None: # Nothing changed
+    if delta is None:  # Nothing changed
         return existing
-    if existing is None: # Only new data exists (initial load)
+    if existing is None:  # Only new data exists (initial load)
         return delta
     if isinstance(delta, (list, dict)) and not delta:
         return existing
@@ -171,18 +191,22 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
 
 
 def sync_contacts(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+    """Sync contact data from Xero."""
     return _sync_resource(api, tenant_id, get_contacts_from_xero, XeroType.CONTACTS, "Syncing contacts", "Synced contacts", modified_since=modified_since)
 
 
 def sync_credit_notes(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+    """Sync credit note data from Xero."""
     return _sync_resource(api, tenant_id, get_credit_notes, XeroType.CREDIT_NOTES, "Syncing credit notes", "Synced credit notes", modified_since=modified_since)
 
 
 def sync_invoices(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+    """Sync invoice data from Xero."""
     return _sync_resource(api, tenant_id, get_invoices, XeroType.INVOICES, "Syncing invoices", "Synced invoices", modified_since=modified_since)
 
 
 def sync_payments(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+    """Sync payment data from Xero."""
     return _sync_resource(api, tenant_id, get_payments, XeroType.PAYMENTS, "Syncing payments", "Synced payments", modified_since=modified_since)
 
 
@@ -216,7 +240,7 @@ def check_load_required(tenant_id: str) -> bool:
 
     except ClientError:
         logger.exception("DynamoDB get_item failed", tenant_id=tenant_id)
-        return True # In case of failure, assume sync is required as a safe fallback
+        return True  # In case of failure, assume sync is required as a safe fallback
 
 
 def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantStatus.FREE, last_sync_time: Optional[int] = None) -> bool:
@@ -245,8 +269,9 @@ def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantSta
         logger.exception("Failed to update tenant sync state", tenant_id=tenant_id)
         return False
 
-def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: Optional[dict] = None):
-    """Entry point for syncing all data."""
+
+def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: Optional[Dict[str, Any]] = None) -> None:
+    """Sync all datasets for a tenant and update tenant status."""
     tenant_record = TenantDataRepository.get_item(tenant_id)
     modified_since: Optional[datetime] = None
     if operation_type != TenantStatus.LOADING and tenant_record:
@@ -256,8 +281,9 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: Optiona
     update_tenant_status(tenant_id, operation_type)
     api = get_xero_api_client(oauth_token)
     all_ok = True
-    for func in (sync_contacts, sync_credit_notes, sync_invoices, sync_payments):
-        if not func(api, tenant_id, modified_since=modified_since):
+    sync_tasks = (sync_contacts, sync_credit_notes, sync_invoices, sync_payments)
+    for sync_func in sync_tasks:
+        if not sync_func(api, tenant_id, modified_since=modified_since):
             all_ok = False
 
     update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=start_time_ms if all_ok else None)

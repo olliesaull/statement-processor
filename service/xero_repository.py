@@ -1,4 +1,11 @@
-"""Module for all Xero data API calls"""
+"""
+Xero data accessors and local/S3 cache helpers.
+
+This module:
+- fetches data from the Xero Accounting API
+- normalizes objects into dicts suitable for storage
+- loads cached datasets from local disk or S3
+"""
 
 import json
 import os
@@ -13,12 +20,15 @@ from xero_python.accounting import AccountingApi
 from config import S3_BUCKET_NAME, logger, s3_client
 from utils import fmt_date, fmt_invoice_data, raise_for_unauthorized, get_xero_api_client
 
-PAGE_SIZE = 100  # Xero max
-STAGE = os.getenv("STAGE")
-LOCAL_DATA_DIR = "./tmp/data" if STAGE == "dev" else "/tmp/data"
+PAGE_SIZE: int = 100  # Xero max
+STAGE: Optional[str] = os.getenv("STAGE")
+# Local cache shared with the sync job for dataset reads.
+LOCAL_DATA_DIR: str = "./tmp/data" if STAGE == "dev" else "/tmp/data"
 
 
 class XeroType(StrEnum):
+    """Dataset identifiers used for cache keys and S3 paths."""
+
     INVOICES = "invoices"
     CREDIT_NOTES = "credit_notes"
     PAYMENTS = "payments"
@@ -41,30 +51,32 @@ def load_local_dataset(resource: XeroType, tenant_id: Optional[str] = None) -> O
         logger.info("Skipping local dataset load; tenant not selected", resource=resource)
         return None
 
-    data_path = os.path.join(LOCAL_DATA_DIR, tenant_id, f"{resource}.json")
+    resource_filename = f"{resource}.json"
+    local_path = os.path.join(LOCAL_DATA_DIR, tenant_id, resource_filename)
+    local_dir = os.path.dirname(local_path)
 
     try:
-        with open(data_path, encoding="utf-8") as handle:
+        with open(local_path, encoding="utf-8") as handle:
             return json.load(handle)
     except FileNotFoundError:
-        logger.info("Local dataset not found", tenant_id=tenant_id, resource=resource, path=data_path)
-        s3_key = f"{tenant_id}/data/{resource}.json"
+        logger.info("Local dataset not found", tenant_id=tenant_id, resource=resource, path=local_path)
+        s3_key = f"{tenant_id}/data/{resource_filename}"
         try:
-            os.makedirs(os.path.dirname(data_path), exist_ok=True)
-            s3_client.download_file(S3_BUCKET_NAME, s3_key, data_path)
-            logger.info("Downloaded file from S3", tenant_id=tenant_id, resource=resource, path=data_path)
-            with open(data_path, encoding="utf-8") as handle:
+            os.makedirs(local_dir, exist_ok=True)
+            s3_client.download_file(S3_BUCKET_NAME, s3_key, local_path)
+            logger.info("Downloaded file from S3", tenant_id=tenant_id, resource=resource, path=local_path)
+            with open(local_path, encoding="utf-8") as handle:
                 return json.load(handle)
         except FileNotFoundError:
-            logger.info("Dataset still missing after S3 download attempt", tenant_id=tenant_id, resource=resource, path=data_path)
+            logger.info("Dataset still missing after S3 download attempt", tenant_id=tenant_id, resource=resource, path=local_path)
         except s3_client.exceptions.NoSuchKey:
             logger.info("Dataset not present in S3", tenant_id=tenant_id, resource=resource, s3_key=s3_key)
         except Exception:
             logger.exception("Failed to download dataset from S3", tenant_id=tenant_id, resource=resource, s3_key=s3_key)
     except json.JSONDecodeError:
-        logger.exception("Failed to parse local dataset", tenant_id=tenant_id, resource=resource, path=data_path)
+        logger.exception("Failed to parse local dataset", tenant_id=tenant_id, resource=resource, path=local_path)
     except Exception:
-        logger.exception("Failed to load local dataset", tenant_id=tenant_id, resource=resource, path=data_path)
+        logger.exception("Failed to load local dataset", tenant_id=tenant_id, resource=resource, path=local_path)
 
     return None
 
@@ -80,7 +92,7 @@ def get_contacts_from_xero(tenant_id: Optional[str] = None, modified_since: Opti
 
     page = 1
     contacts: List[Dict[str, Any]] = []
-    seen_ids: set[str] = set()
+    seen_ids: set[str] = set()  # De-dupe contacts across pages.
 
     try:
         logger.info("Fetching contacts", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
@@ -162,7 +174,7 @@ def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datet
             "xero_tenant_id": tenant_id,
             "order": "UpdatedDateUTC ASC",
             "page_size": PAGE_SIZE,
-            "statuses": ["DRAFT", "SUBMITTED", "AUTHORISED", "PAID"], # Excludes DELETED and VOIDED
+            "statuses": ["DRAFT", "SUBMITTED", "AUTHORISED", "PAID"],  # Excludes DELETED and VOIDED
             # Only fetch supplier bills (exclude ACCREC)
             "where": 'Type=="ACCPAY"',
         }
@@ -215,7 +227,6 @@ def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[d
 
     Args:
         modified_since: Optional datetime to fetch only credit notes modified since this timestamp.
-        page_size: Page size to request (Xero max is 100).
 
     Returns:
         A list of credit note dicts (same shape as previous per-contact function).
@@ -254,10 +265,10 @@ def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[d
                 contact = getattr(note, "contact", None)
 
                 if contact:
-                    _contact_id = getattr(contact, "contact_id", None)
+                    contact_id = getattr(contact, "contact_id", None)
                     contact_name = getattr(contact, "name", None)
                 else:
-                    _contact_id = contact_name = None
+                    contact_id = contact_name = None
 
                 credit_notes.append(
                     {
@@ -271,7 +282,7 @@ def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[d
                         "total": getattr(note, "total", None),
                         "amount_credited": getattr(note, "amount_credited", None),
                         "remaining_credit": getattr(note, "remaining_credit", None),
-                        "contact_id": _contact_id,
+                        "contact_id": contact_id,
                         "contact_name": contact_name,
                     }
                 )
@@ -300,8 +311,6 @@ def get_payments(tenant_id: Optional[str] = None, modified_since: Optional[datet
 
     Args:
         modified_since: Optional datetime to fetch only payments modified since this timestamp.
-        page_size: Page size to request (Xero max is 100).
-        order: Field to order by for stable pagination.
 
     Returns:
         A list of payment dicts (same shape as previous per-contact function).

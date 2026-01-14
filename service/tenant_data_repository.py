@@ -1,3 +1,11 @@
+"""
+Repository helpers for tenant metadata stored in DynamoDB.
+
+Provides:
+- A typed ``TenantStatus`` enum
+- Lookups for individual tenants and bulk status checks
+"""
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import StrEnum
@@ -7,6 +15,8 @@ from config import tenant_data_table
 
 
 class TenantStatus(StrEnum):
+    """Known tenant processing states."""
+
     FREE = "FREE"
     SYNCING = "SYNCING"
     LOADING = "LOADING"
@@ -23,7 +33,6 @@ class TenantDataRepository:
         """Extract a tenant status value from a DynamoDB record."""
         raw_status = item.get("TenantStatus")
 
-        # TODO: Could be useful if _determine_status called elsewhere in code, if not delete later
         if isinstance(raw_status, TenantStatus):
             return raw_status
 
