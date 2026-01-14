@@ -110,7 +110,9 @@ def _has_text(value: Any) -> bool:
     return str(value).strip() != ""
 
 
-def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_based_index: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:  # pylint: disable=too-many-locals,too-many-branches
+def apply_outlier_flags(
+    statement: Dict[str, Any], *, remove: bool = False, one_based_index: bool = False
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:  # pylint: disable=too-many-locals,too-many-branches
     """
     Flag suspicious statement items (and optionally remove them).
 
@@ -122,7 +124,13 @@ def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_
     """
     items = statement.get("statement_items", []) or []
     if not items:
-        return statement, {"total": 0, "flagged": 0, "flagged_items": [], "rules": {}, "field_stats": {}}
+        return statement, {
+            "total": 0,
+            "flagged": 0,
+            "flagged_items": [],
+            "rules": {},
+            "field_stats": {},
+        }
 
     logger.debug("Outlier flagging start", total_items=len(items), remove=remove)
 
@@ -146,7 +154,14 @@ def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_
             keyword = _keyword_hit(number_val)
             if keyword:
                 issues.append("keyword-number")
-                details.append({"field": "number", "issue": "keyword", "keyword": keyword, "value": str(number_val)})
+                details.append(
+                    {
+                        "field": "number",
+                        "issue": "keyword",
+                        "keyword": keyword,
+                        "value": str(number_val),
+                    }
+                )
 
         if _has_text(reference_val):
             keyword = _keyword_hit(reference_val)
@@ -177,7 +192,9 @@ def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_
     flagged_index_set = set(flagged_indices)
     if remove:
         # Removing flagged items is an optional mode; default is to annotate items in-place.
-        statement["statement_items"] = [it for i, it in enumerate(items) if i not in flagged_index_set]
+        statement["statement_items"] = [
+            it for i, it in enumerate(items) if i not in flagged_index_set
+        ]
     else:
         # Add a simple marker to the item itself so downstream consumers can show warnings.
         for idx in flagged_index_set:
@@ -192,5 +209,7 @@ def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_
         "rules": dict(rule_counter),
         "field_stats": {},
     }
-    logger.debug("Outlier flagging complete", flagged=summary["flagged"], rules=summary["rules"])
+    logger.debug(
+        "Outlier flagging complete", flagged=summary["flagged"], rules=summary["rules"]
+    )
     return statement, summary

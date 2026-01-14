@@ -31,6 +31,7 @@ from exceptions import ItemCountDisagreementError
 
 PdfInput = Union[str, bytes, bytearray, io.BytesIO, Any]
 
+
 def _normalise(s: str) -> str:
     """
     Normalize a reference string for tolerant comparisons.
@@ -42,7 +43,12 @@ def _normalise(s: str) -> str:
     return re.sub(r"[\s\-_/\.]", "", s)
 
 
-def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, min_samples_for_prefixing: int = 3, coverage_threshold: float = 0.6) -> re.Pattern:  # pylint: disable=too-many-locals,too-many-branches
+def make_family_regex_from_examples(
+    refs: List[str],
+    digit_prefix_len: int = 3,
+    min_samples_for_prefixing: int = 3,
+    coverage_threshold: float = 0.6,
+) -> re.Pattern:  # pylint: disable=too-many-locals,too-many-branches
     """
     Learn a regex that matches the "family" of reference tokens seen in JSON.
 
@@ -77,21 +83,31 @@ def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, 
 
         if len(tails) < min_samples_for_prefixing or lo == 0:
             if prefix:
-                parts.append(fr"{re.escape(prefix)}\d{{{lo}}}" if lo == hi else fr"{re.escape(prefix)}\d{{{lo},{hi}}}")
+                parts.append(
+                    rf"{re.escape(prefix)}\d{{{lo}}}"
+                    if lo == hi
+                    else rf"{re.escape(prefix)}\d{{{lo},{hi}}}"
+                )
             else:
-                parts.append(fr"\d{{{lo}}}" if lo == hi else fr"\d{{{lo},{hi}}}")
+                parts.append(rf"\d{{{lo}}}" if lo == hi else rf"\d{{{lo},{hi}}}")
             continue
 
         # If we have enough samples, bucket by the first N digits to reduce false positives.
         bucket_counts: Dict[str, int] = {}
         for t in tails:
-            k = t[:min(digit_prefix_len, len(t))]
+            k = t[: min(digit_prefix_len, len(t))]
             bucket_counts[k] = bucket_counts.get(k, 0) + 1
 
         total = len(tails)
-        kept = [k for k, c in bucket_counts.items() if c / total >= (coverage_threshold / max(1, len(bucket_counts))) or c >= 2]
+        kept = [
+            k
+            for k, c in bucket_counts.items()
+            if c / total >= (coverage_threshold / max(1, len(bucket_counts))) or c >= 2
+        ]
         if not kept:
-            for k, _ in sorted(bucket_counts.items(), key=lambda kv: kv[1], reverse=True):
+            for k, _ in sorted(
+                bucket_counts.items(), key=lambda kv: kv[1], reverse=True
+            ):
                 kept.append(k)
                 if sum(bucket_counts[x] for x in kept) / total >= coverage_threshold:
                     break
@@ -99,9 +115,13 @@ def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, 
         covered = sum(bucket_counts.get(k, 0) for k in kept)
         if covered / total < coverage_threshold:
             if prefix:
-                parts.append(fr"{re.escape(prefix)}\d{{{lo}}}" if lo == hi else fr"{re.escape(prefix)}\d{{{lo},{hi}}}")
+                parts.append(
+                    rf"{re.escape(prefix)}\d{{{lo}}}"
+                    if lo == hi
+                    else rf"{re.escape(prefix)}\d{{{lo},{hi}}}"
+                )
             else:
-                parts.append(fr"\d{{{lo}}}" if lo == hi else fr"\d{{{lo},{hi}}}")
+                parts.append(rf"\d{{{lo}}}" if lo == hi else rf"\d{{{lo},{hi}}}")
             continue
 
         # Emit one pattern per kept digit-prefix bucket.
@@ -111,9 +131,9 @@ def make_family_regex_from_examples(refs: List[str], digit_prefix_len: int = 3, 
             rem_lo = max(0, lo_k - len(k))
             rem_hi = max(0, hi_k - len(k))
             if rem_lo == rem_hi:
-                pat = fr"{re.escape(prefix)}{re.escape(k)}\d{{{rem_lo}}}"
+                pat = rf"{re.escape(prefix)}{re.escape(k)}\d{{{rem_lo}}}"
             else:
-                pat = fr"{re.escape(prefix)}{re.escape(k)}\d{{{rem_lo},{rem_hi}}}"
+                pat = rf"{re.escape(prefix)}{re.escape(k)}\d{{{rem_lo},{rem_hi}}}"
             parts.append(pat)
 
     if leftovers:
@@ -162,7 +182,9 @@ def extract_normalized_pdf_text(pdf_input: PdfInput) -> str:
     return _normalise("\n".join(chunks))
 
 
-def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern, ngram_max: int = 5, hard_seps: str = ":.") -> Set[str]:  # pylint: disable=too-many-locals
+def extract_pdf_candidates_with_pattern(
+    pdf_input: PdfInput, pattern: re.Pattern, ngram_max: int = 5, hard_seps: str = ":."
+) -> Set[str]:  # pylint: disable=too-many-locals
     """
     Scan PDF text for tokens that match a learned reference regex.
 
@@ -171,13 +193,13 @@ def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern
     consider n-grams of up to `ngram_max` consecutive tokens, take the original
     substring spanning those tokens, normalize it, and check it against `pattern`.
 
-    `hard_seps` are characters that cause us to skip a span entirely (e.g. ":" or ".") 
+    `hard_seps` are characters that cause us to skip a span entirely (e.g. ":" or ".")
     to reduce false positives from things like timestamps, section labels, etc.
     """
     cands: Set[str] = set()
     with pdfplumber.open(_to_pdf_open_arg(pdf_input)) as pdf:
         for page in pdf.pages:
-            text = (page.extract_text() or "")
+            text = page.extract_text() or ""
             upper = text.upper()
 
             # Build token spans so we can reconstruct contiguous substrings later.
@@ -203,12 +225,14 @@ def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern
     return cands
 
 
-def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dict], ref_field: str = "reference") -> Dict:  # pylint: disable=too-many-locals
+def validate_references_roundtrip(
+    pdf_input: PdfInput, statement_items: List[Dict], ref_field: str = "reference"
+) -> Dict:  # pylint: disable=too-many-locals
     """
     Cross-check extracted reference values against the source PDF text.
 
     - JSON -> PDF: each non-empty `ref_field` value in `statement_items` should be findable in the normalized PDF text.
-    - PDF -> JSON: we learn a reference-family regex from the JSON examples and scan the PDF for other matching candidates; 
+    - PDF -> JSON: we learn a reference-family regex from the JSON examples and scan the PDF for other matching candidates;
       any candidates not present in the JSON set are treated as suspicious/missing.
 
     If mismatches are detected, raises `ItemCountDisagreementError` with a summary. Returns a small summary dict on success.
@@ -222,16 +246,28 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
 
     if not has_text:
         # Without extractable text, pdfplumber-based validation will generate false mismatches.
-        logger.warning("PDF appears to be image-only (scanned). Skipping reference validation.")
+        logger.warning(
+            "PDF appears to be image-only (scanned). Skipping reference validation."
+        )
         return {"checked": 0, "pdf_candidates": 0}
 
-    logger.debug("Reference validation start", total_items=len(statement_items), ref_field=ref_field)
+    logger.debug(
+        "Reference validation start",
+        total_items=len(statement_items),
+        ref_field=ref_field,
+    )
 
     # Collect non-empty references from the extracted JSON.
-    raw_refs = [(i, (it.get(ref_field) or "").strip()) for i, it in enumerate(statement_items)]
+    raw_refs = [
+        (i, (it.get(ref_field) or "").strip()) for i, it in enumerate(statement_items)
+    ]
     raw_refs = [(i, r) for i, r in raw_refs if r]
     json_norm_set = {_normalise(r) for _, r in raw_refs}
-    logger.debug("Collected JSON references", total_refs=len(raw_refs), unique_refs=len(json_norm_set))
+    logger.debug(
+        "Collected JSON references",
+        total_refs=len(raw_refs),
+        unique_refs=len(json_norm_set),
+    )
 
     # JSON -> PDF: check each extracted reference appears somewhere in the PDF text.
     norm_pdf_text = extract_normalized_pdf_text(pdf_input)
@@ -240,7 +276,9 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
     not_found: List[Dict[str, Any]] = []
     for i, raw in raw_refs:
         norm_ref = _normalise(raw)
-        (found if norm_ref in norm_pdf_text else not_found).append({"index": i, "reference": raw})
+        (found if norm_ref in norm_pdf_text else not_found).append(
+            {"index": i, "reference": raw}
+        )
 
     # PDF -> JSON: learn a regex from the JSON examples and scan the PDF for other candidates.
     learned_rx = make_family_regex_from_examples([r for _, r in raw_refs])
@@ -249,8 +287,17 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
     pdf_only_norm = sorted(pdf_candidates_norm - json_norm_set)
 
     total_checked = len(found) + len(not_found)
-    logger.info("JSON -> PDF summary", total_checked=total_checked, found=len(found), not_found=len(not_found))
-    logger.info("PDF -> JSON summary", pdf_candidates=len(pdf_candidates_norm), pdf_only=len(pdf_only_norm))
+    logger.info(
+        "JSON -> PDF summary",
+        total_checked=total_checked,
+        found=len(found),
+        not_found=len(not_found),
+    )
+    logger.info(
+        "PDF -> JSON summary",
+        pdf_candidates=len(pdf_candidates_norm),
+        pdf_only=len(pdf_only_norm),
+    )
 
     if not_found or pdf_only_norm:
         summary = {
@@ -260,6 +307,8 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
             "pdf_candidates": len(pdf_candidates_norm),
             "pdf_only_refs": pdf_only_norm,
         }
-        raise ItemCountDisagreementError(len(found), len(json_norm_set), summary=summary)
+        raise ItemCountDisagreementError(
+            len(found), len(json_norm_set), summary=summary
+        )
 
     return {"checked": total_checked, "pdf_candidates": len(pdf_candidates_norm)}

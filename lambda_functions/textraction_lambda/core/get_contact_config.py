@@ -24,7 +24,9 @@ def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
 
     item = resp.get("Item") if isinstance(resp, dict) else None
     if not item or attr_name not in item:
-        raise KeyError(f"Config not found for TenantID={tenant_id}, ContactID={contact_id}")
+        raise KeyError(
+            f"Config not found for TenantID={tenant_id}, ContactID={contact_id}"
+        )
 
     cfg = item[attr_name]
     if not isinstance(cfg, dict):
@@ -39,7 +41,12 @@ def set_contact_config(tenant_id: str, contact_id: str, config: Dict[str, Any]) 
         raise RuntimeError("Contact config table not configured")
     if not isinstance(config, dict):
         raise TypeError("config must be a dict")
-    logger.debug("Updating contact config", tenant_id=tenant_id, contact_id=contact_id, keys=list(config.keys()))
+    logger.debug(
+        "Updating contact config",
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        keys=list(config.keys()),
+    )
     try:
         tenant_contacts_config_table.update_item(
             Key={"TenantID": tenant_id, "ContactID": contact_id},

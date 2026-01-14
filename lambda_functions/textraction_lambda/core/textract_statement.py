@@ -23,7 +23,7 @@ And it produces:
 5) Flag suspicious rows (e.g. "balance brought forward") without removing them (`core/validation/anomaly_detection.py`).
 6) Upload the final JSON to S3 and record the Textract `job_id` on the statement header.
 
-This module deliberately treats some steps as "best effort" (e.g. validation and item persistence are wrapped in try/except) 
+This module deliberately treats some steps as "best effort" (e.g. validation and item persistence are wrapped in try/except)
 so that JSON generation/upload can still succeed even if auxiliary steps fail.
 """
 
@@ -86,8 +86,14 @@ def _sanitize_for_dynamodb(value: Any) -> Any:  # pylint: disable=too-many-retur
 
 
 def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
-    tenant_id: str, contact_id: Optional[str], statement_id: Optional[str], items: List[Dict[str, Any]],
-    *, earliest_item_date: Optional[str] = None, latest_item_date: Optional[str] = None) -> None:
+    tenant_id: str,
+    contact_id: Optional[str],
+    statement_id: Optional[str],
+    items: List[Dict[str, Any]],
+    *,
+    earliest_item_date: Optional[str] = None,
+    latest_item_date: Optional[str] = None,
+) -> None:
     """
     Persist extracted statement line items into the tenant statements DynamoDB table.
 
@@ -109,7 +115,8 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
     keys_to_delete: List[str] = []
     existing_status: Dict[str, bool] = {}
     query_kwargs: Dict[str, Any] = {
-        "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("StatementID").begins_with(f"{statement_id}#item-"),
+        "KeyConditionExpression": Key("TenantID").eq(tenant_id)
+        & Key("StatementID").begins_with(f"{statement_id}#item-"),
         "ProjectionExpression": "#sid, #completed",
         "ExpressionAttributeNames": {"#sid": "StatementID", "#completed": "Completed"},
     }
@@ -132,11 +139,23 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
 
     try:
         # Read the statement header to use its completion flag as a default for new rows.
-        header_resp = tenant_statements_table.get_item(Key={"TenantID": tenant_id, "StatementID": statement_id})
+        header_resp = tenant_statements_table.get_item(
+            Key={"TenantID": tenant_id, "StatementID": statement_id}
+        )
         header_item = header_resp.get("Item") if isinstance(header_resp, dict) else None
-        header_completed = (str(header_item.get("Completed", "false")).strip().lower() == "true" if header_item else False)
+        header_completed = (
+            str(header_item.get("Completed", "false")).strip().lower() == "true"
+            if header_item
+            else False
+        )
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Failed to fetch statement header completion flag", tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
+        logger.warning(
+            "Failed to fetch statement header completion flag",
+            tenant_id=tenant_id,
+            statement_id=statement_id,
+            error=str(exc),
+            exc_info=True,
+        )
         header_completed = False
 
     if keys_to_delete:
@@ -157,7 +176,11 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
                 continue
 
             # Sanitize values so they can be stored safely in DynamoDB (numbers as Decimal, etc.).
-            sanitized_payload = {key: _sanitize_for_dynamodb(value) for key, value in item.items() if value is not None}
+            sanitized_payload = {
+                key: _sanitize_for_dynamodb(value)
+                for key, value in item.items()
+                if value is not None
+            }
             sanitized_payload["statement_item_id"] = item_id
 
             record: Dict[str, Any] = {
@@ -167,7 +190,9 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
                 "ParentStatementID": statement_id,
                 "RecordType": "statement_item",
                 # Preserve per-item completion flags if they already exist; otherwise inherit from header.
-                "Completed": "true" if existing_status.get(item_id, header_completed) else "false",
+                "Completed": "true"
+                if existing_status.get(item_id, header_completed)
+                else "false",
             }
             if contact_id:
                 record["ContactID"] = contact_id
@@ -199,7 +224,15 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
             )
 
 
-def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenant_id: str, contact_id: str, statement_id: str) -> Dict[str, Any]:  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+def run_textraction(
+    job_id: str,
+    bucket: str,
+    pdf_key: str,
+    json_key: str,
+    tenant_id: str,
+    contact_id: str,
+    statement_id: str,
+) -> Dict[str, Any]:  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     """
     End-to-end processing for a single statement Textract job.
 
@@ -216,22 +249,39 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
     # `get_tables_for_job` returns a dict keyed by job id; we currently only ever fetch one job.
     tables_wp = next(iter(tables_by_key.values())) if tables_by_key else []
 
-    key = pdf_key # The PDF S3 object key; passed through for provenance (not currently used by `table_to_json` itself).
+    key = pdf_key  # The PDF S3 object key; passed through for provenance (not currently used by `table_to_json` itself).
 
     logger.info("Textract statement processing", job_id=job_id, key=key)
     # Convert grids into a structured statement using contact-specific mapping/config (see `core/transform.py`).
-    statement = table_to_json(tables_wp, tenant_id, contact_id, statement_id=statement_id)
+    statement = table_to_json(
+        tables_wp, tenant_id, contact_id, statement_id=statement_id
+    )
     item_count = len(statement.get("statement_items", []) or [])
-    logger.info("Built statement JSON", job_id=job_id, statement_id=statement_id, items=item_count)
+    logger.info(
+        "Built statement JSON",
+        job_id=job_id,
+        statement_id=statement_id,
+        items=item_count,
+    )
 
     try:
         # Persist items to DynamoDB (delete + rewrite); failures here should not prevent JSON output.
         _persist_statement_items(
-            tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, items=statement.get("statement_items", []) or [],
-            earliest_item_date=statement.get("earliest_item_date"), latest_item_date=statement.get("latest_item_date"),
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            statement_id=statement_id,
+            items=statement.get("statement_items", []) or [],
+            earliest_item_date=statement.get("earliest_item_date"),
+            latest_item_date=statement.get("latest_item_date"),
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.exception("Failed to persist statement items", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id, error=str(exc))
+        logger.exception(
+            "Failed to persist statement items",
+            statement_id=statement_id,
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            error=str(exc),
+        )
 
     try:
         # Best-effort validation: compare extracted reference strings with text found in the PDF (via pdfplumber).
@@ -240,18 +290,31 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
         statement_items = statement.get("statement_items", []) or []
         validate_references_roundtrip(pdf_bytes, statement_items)
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Reference validation skipped", key=key, tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
+        logger.warning(
+            "Reference validation skipped",
+            key=key,
+            tenant_id=tenant_id,
+            statement_id=statement_id,
+            error=str(exc),
+            exc_info=True,
+        )
 
     # Flag outliers without removing them, so downstream consumers can inspect anomalies
-    statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True)
+    statement, summary = apply_outlier_flags(
+        statement, remove=False, one_based_index=True
+    )
     logger.info("Performed anomaly detection", summary=json.dumps(summary, indent=2))
 
     # Upload the enriched JSON back to S3 for the caller to consume
     # StepFunctions passes `jsonKey` into this Lambda; writing to that key is how we publish the output artifact.
-    buf = io.BytesIO(json.dumps(statement, ensure_ascii=False, indent=2).encode("utf-8"))
+    buf = io.BytesIO(
+        json.dumps(statement, ensure_ascii=False, indent=2).encode("utf-8")
+    )
     buf.seek(0)
 
-    s3_client.put_object(Bucket=bucket or S3_BUCKET_NAME, Key=json_key, Body=buf.getvalue())
+    s3_client.put_object(
+        Bucket=bucket or S3_BUCKET_NAME, Key=json_key, Body=buf.getvalue()
+    )
     logger.info("Uploaded statement JSON", bucket=bucket, json_key=json_key)
 
     if tenant_statements_table is not None:
@@ -263,7 +326,13 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
                 ExpressionAttributeValues={":jobId": job_id},
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning("Failed to store job id on statement", statement_id=statement_id, tenant_id=tenant_id, error=str(exc), exc_info=True)
+            logger.warning(
+                "Failed to store job id on statement",
+                statement_id=statement_id,
+                tenant_id=tenant_id,
+                error=str(exc),
+                exc_info=True,
+            )
 
     # Convenience for callers: derive a friendly filename from the PDF key.
     filename = f"{Path(key).stem}.json"

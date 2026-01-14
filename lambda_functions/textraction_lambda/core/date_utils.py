@@ -48,8 +48,12 @@ TOKEN_REGEX = {
 }
 
 # Month lookups are case-insensitive and include common abbreviations.
-MONTH_NAME_TO_NUM = {name.lower(): idx for idx, name in enumerate(calendar.month_name) if name}
-MONTH_ABBR_TO_NUM = {abbr.lower(): idx for idx, abbr in enumerate(calendar.month_abbr) if abbr}
+MONTH_NAME_TO_NUM = {
+    name.lower(): idx for idx, name in enumerate(calendar.month_name) if name
+}
+MONTH_ABBR_TO_NUM = {
+    abbr.lower(): idx for idx, abbr in enumerate(calendar.month_abbr) if abbr
+}
 MONTH_NAME_TO_NUM["sept"] = 9
 
 
@@ -69,7 +73,15 @@ def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]
 
     # Compile the template into a regex and metadata used during extraction.
     compiled = _prepare_template(template)
-    regex, group_order, _, has_textual_month, numeric_month, numeric_day, uses_ordinal = compiled
+    (
+        regex,
+        group_order,
+        _,
+        has_textual_month,
+        numeric_month,
+        numeric_day,
+        uses_ordinal,
+    ) = compiled
     match = regex.match(s)
     if not match:
         logger.debug("Date value did not match template", value=s, template=template)
@@ -89,7 +101,9 @@ def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]
             elif token in {"MMMM", "MMM"}:
                 month = _month_from_name(raw)
                 if month is None:
-                    raise ValueError(f"Unknown month name '{raw}' for format '{template}'")
+                    raise ValueError(
+                        f"Unknown month name '{raw}' for format '{template}'"
+                    )
                 _set_component(components, "month", month)
             elif token in {"MM", "M"}:
                 _set_component(components, "month", int(raw))
@@ -101,7 +115,12 @@ def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]
                 # Weekday tokens are ignored; they don't affect the date components.
                 continue
     except ValueError as exc:
-        logger.warning("Failed to parse date using template", value=s, template=template, error=str(exc))
+        logger.warning(
+            "Failed to parse date using template",
+            value=s,
+            template=template,
+            error=str(exc),
+        )
         raise
 
     if {"year", "month", "day"} - components.keys():
@@ -141,7 +160,9 @@ def format_iso_with(value: Any, template: Optional[str]) -> str:
     return _format_tokens(tokens, dt)
 
 
-def coerce_datetime_with_template(value: Any, template: Optional[str]) -> Optional[datetime]:
+def coerce_datetime_with_template(
+    value: Any, template: Optional[str]
+) -> Optional[datetime]:
     """Try parsing with a template first, then fall back to ISO coercion."""
     parsed: Optional[datetime] = None
     if template:
@@ -212,7 +233,7 @@ def _coerce_to_datetime(value: Any) -> Optional[datetime]:  # pylint: disable=to
             return None
 
 
-def _format_tokens(tokens: Sequence, dt: datetime) -> str: # pylint: disable=too-many-branches
+def _format_tokens(tokens: Sequence, dt: datetime) -> str:  # pylint: disable=too-many-branches
     """Format a datetime by expanding template tokens into string parts."""
     parts: List[str] = []
     for kind, value in tokens:
@@ -255,7 +276,9 @@ def _format_ordinal(day: int) -> str:
 
 def _prepare_template(template: str):
     """Tokenize and compile a date template for parsing/formatting."""
-    tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal = _tokenize_format(template)
+    tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal = (
+        _tokenize_format(template)
+    )
     return _compile(tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal)
 
 
@@ -298,8 +321,15 @@ def _tokenize_format(template: str):
     return tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal
 
 
-def _compile(tokens: Sequence, has_textual_month: bool, numeric_month: bool, numeric_day: bool, uses_ordinal: bool):
+def _compile(
+    tokens: Sequence,
+    has_textual_month: bool,
+    numeric_month: bool,
+    numeric_day: bool,
+    uses_ordinal: bool,
+):
     """Build a regex from tokens and preserve metadata needed during parsing."""
+
     def name_gen():
         idx = 0
         while True:
@@ -319,11 +349,20 @@ def _compile(tokens: Sequence, has_textual_month: bool, numeric_month: bool, num
             regex_parts.append(re.escape(str(value)))
 
     regex = re.compile("".join(regex_parts) + r"$")
-    return regex, group_order, tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal
+    return (
+        regex,
+        group_order,
+        tokens,
+        has_textual_month,
+        numeric_month,
+        numeric_day,
+        uses_ordinal,
+    )
 
 
 def common_formats(samples: Iterable[str], top_k: int = 5) -> List[str]:
     """Summarize the most common character-level date templates from samples."""
+
     def normalize_template(template: str) -> str:
         # Collapse letters/digits while retaining separators for pattern grouping.
         cleaned = []
