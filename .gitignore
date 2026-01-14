@@ -9,6 +9,5 @@
 .idea/
 *.pdf
 *.PDF
-**/*.sh
 .env
 *.json
