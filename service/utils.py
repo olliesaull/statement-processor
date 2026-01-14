@@ -37,7 +37,7 @@ from config import (
     tenant_statements_table,
 )
 from core.date_utils import coerce_datetime_with_template, format_iso_with
-from core.models_comparison import CellComparison
+from core.models import CellComparison
 from tenant_data_repository import TenantDataRepository, TenantStatus
 
 # MIME/extension guards for uploads

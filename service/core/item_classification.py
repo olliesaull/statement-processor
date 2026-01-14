@@ -1,3 +1,14 @@
+"""
+Heuristics for classifying statement rows.
+
+The classifier uses:
+- Configured column labels (from contact mapping config)
+- Presence of debit/credit values in a row
+- Text matching against synonym lists (invoice/credit/payment)
+
+It is intentionally best-effort and falls back to a default type when evidence is weak.
+"""
+
 from __future__ import annotations
 
 import difflib
@@ -13,12 +24,14 @@ _NUMERIC_CHARS_RE = re.compile(r"[^0-9\-\.,()]")
 
 
 def _normalize_label(label: Any) -> str:
+    """Lowercase and drop non-alphanumeric characters for label matching."""
     if label is None:
         return ""
     return "".join(ch.lower() for ch in str(label) if ch.isalnum())
 
 
 def _flatten_labels(value: Any) -> List[str]:
+    """Extract a list of non-empty strings from a value that may be a list or scalar."""
     if isinstance(value, str):
         stripped = value.strip()
         return [stripped] if stripped else []
@@ -32,14 +45,17 @@ def _flatten_labels(value: Any) -> List[str]:
 
 
 def _is_debit_norm(norm: str) -> bool:
+    """Return True when the normalized label looks like a debit column."""
     return any(norm.startswith(hint) or norm.endswith(hint) for hint in _DEBIT_HINTS)
 
 
 def _is_credit_norm(norm: str) -> bool:
+    """Return True when the normalized label looks like a credit column."""
     return any(norm.startswith(hint) or norm.endswith(hint) for hint in _CREDIT_HINTS)
 
 
 def _coerce_decimal(value: Any) -> Optional[Decimal]:
+    """Parse a value into a Decimal, handling commas/parentheses for negatives."""
     if value is None:
         return None
     if isinstance(value, Decimal):
@@ -68,11 +84,13 @@ def _coerce_decimal(value: Any) -> Optional[Decimal]:
 
 
 def _has_amount(value: Any) -> bool:
+    """Return True when a value parses to a non-zero Decimal."""
     dec = _coerce_decimal(value)
     return dec is not None and dec != 0
 
 
 def _extract_total_template(contact_config: Optional[Dict[str, Any]]) -> Any:
+    """Locate the `total` configuration template in the contact config payload."""
     if not isinstance(contact_config, dict):
         return None
     statement_items = contact_config.get("statement_items")
@@ -88,6 +106,7 @@ def _extract_total_template(contact_config: Optional[Dict[str, Any]]) -> Any:
 
 
 def _collect_config_amount_labels(contact_config: Optional[Dict[str, Any]]) -> Tuple[Set[str], Set[str]]:
+    """Collect normalized debit/credit labels from contact config."""
     total_cfg = _extract_total_template(contact_config)
     debit_norms: Set[str] = set()
     credit_norms: Set[str] = set()
@@ -123,6 +142,7 @@ def _collect_config_amount_labels(contact_config: Optional[Dict[str, Any]]) -> T
 
 
 def _iter_total_entries(total_entries: Any) -> Iterable[Tuple[str, Any]]:
+    """Yield (label, value) pairs from dict or list-style total data."""
     if isinstance(total_entries, dict):
         for label, value in total_entries.items():
             if isinstance(label, str):
@@ -135,7 +155,17 @@ def _iter_total_entries(total_entries: Any) -> Iterable[Tuple[str, Any]]:
                     yield label, item.get("value")
 
 
-def _evaluate_amount_hint(raw_row: Dict[str, Any], total_entries: Any, contact_config: Optional[Dict[str, Any]]) -> Tuple[Optional[str], bool, bool, List[str], List[str]]:
+def _evaluate_amount_hint(
+    raw_row: Dict[str, Any],
+    total_entries: Any,
+    contact_config: Optional[Dict[str, Any]],
+) -> Tuple[Optional[str], bool, bool, List[str], List[str]]:
+    """
+    Infer debit/credit signals and return a type hint plus evidence details.
+
+    Returns:
+        (amount_hint, debit_has_value, credit_has_value, debit_labels_used, credit_labels_used)
+    """
     debit_norms, credit_norms = _collect_config_amount_labels(contact_config)
 
     for key in (raw_row or {}).keys():
@@ -209,16 +239,22 @@ def _evaluate_amount_hint(raw_row: Dict[str, Any], total_entries: Any, contact_c
 
 
 def _default_type(candidate_types: Set[str]) -> str:
+    """Pick the first preferred type from the candidate set."""
     for option in ("invoice", "payment", "credit_note"):
         if option in candidate_types:
             return option
     return "invoice"
 
 
-def guess_statement_item_type(raw_row: Dict[str, Any], total_entries: Optional[Dict[str, Any]] = None, contact_config: Optional[Dict[str, Any]] = None) -> str:
+def guess_statement_item_type(
+    raw_row: Dict[str, Any],
+    total_entries: Optional[Dict[str, Any]] = None,
+    contact_config: Optional[Dict[str, Any]] = None,
+) -> str:
     """Heuristically classify a row as ``invoice``, ``credit_note``, or ``payment``."""
-
-    amount_hint, debit_has_value, credit_has_value, debit_labels, credit_labels = _evaluate_amount_hint(raw_row or {}, total_entries, contact_config)
+    amount_hint, debit_has_value, credit_has_value, debit_labels, credit_labels = _evaluate_amount_hint(
+        raw_row or {}, total_entries, contact_config
+    )
 
     candidate_types: Set[str] = {"invoice", "credit_note", "payment"}
     if amount_hint == "invoice":
@@ -231,7 +267,16 @@ def guess_statement_item_type(raw_row: Dict[str, Any], total_entries: Optional[D
     values = (raw_row or {}).values()
     joined_text = " ".join(str(v) for v in values if v)
     if not joined_text.strip():
-        logger.debug("Statement item classification", best_type=default_type, reason="no_text", amount_hint=amount_hint, debit=debit_has_value, credit=credit_has_value, debit_labels=debit_labels, credit_labels=credit_labels)
+        logger.debug(
+            "Statement item classification",
+            best_type=default_type,
+            reason="no_text",
+            amount_hint=amount_hint,
+            debit=debit_has_value,
+            credit=credit_has_value,
+            debit_labels=debit_labels,
+            credit_labels=credit_labels,
+        )
         return default_type
 
     def _compact(s: str) -> str:
@@ -240,7 +285,16 @@ def guess_statement_item_type(raw_row: Dict[str, Any], total_entries: Optional[D
     tokens = [_compact(tok) for tok in re.findall(r"[A-Za-z0-9]+", joined_text.upper())]
     tokens = [t for t in tokens if t]
     if not tokens:
-        logger.debug("Statement item classification", best_type=default_type, reason="no_tokens", amount_hint=amount_hint, debit=debit_has_value, credit=credit_has_value, debit_labels=debit_labels, credit_labels=credit_labels)
+        logger.debug(
+            "Statement item classification",
+            best_type=default_type,
+            reason="no_tokens",
+            amount_hint=amount_hint,
+            debit=debit_has_value,
+            credit=credit_has_value,
+            debit_labels=debit_labels,
+            credit_labels=credit_labels,
+        )
         return default_type
 
     type_synonyms: Dict[str, List[str]] = {
@@ -267,7 +321,12 @@ def guess_statement_item_type(raw_row: Dict[str, Any], total_entries: Optional[D
             if syn_norm in joined_compact:
                 if 1.0 >= type_best:
                     type_best = 1.0
-                    type_details[doc_type] = {"synonym": syn_norm, "token": None, "score": 1.0, "source": "joined_text"}
+                    type_details[doc_type] = {
+                        "synonym": syn_norm,
+                        "token": None,
+                        "score": 1.0,
+                        "source": "joined_text",
+                    }
                 continue
 
             for token in tokens:
@@ -293,9 +352,17 @@ def guess_statement_item_type(raw_row: Dict[str, Any], total_entries: Optional[D
 
     best_detail = type_details.get(best_type, {})
     logger.debug(
-        "Statement item classification", best_type=best_type, best_score=round(best_score, 4), min_confidence=min_confidence.get(best_type, 0.0), 
-        amount_hint=amount_hint, debit=debit_has_value, credit=credit_has_value, matched_synonym=best_detail.get("synonym"), 
-        matched_token=best_detail.get("token"), match_source=best_detail.get("source"), raw_keys=list((raw_row or {}).keys())
+        "Statement item classification",
+        best_type=best_type,
+        best_score=round(best_score, 4),
+        min_confidence=min_confidence.get(best_type, 0.0),
+        amount_hint=amount_hint,
+        debit=debit_has_value,
+        credit=credit_has_value,
+        matched_synonym=best_detail.get("synonym"),
+        matched_token=best_detail.get("token"),
+        match_source=best_detail.get("source"),
+        raw_keys=list((raw_row or {}).keys()),
     )
 
     if best_score < min_confidence.get(best_type, 0.0):

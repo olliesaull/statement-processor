@@ -1,3 +1,12 @@
+"""
+Date parsing/formatting helpers for statement ingestion and display.
+
+This module supports:
+- Parsing dates using supplier-configured templates (Moment-style tokens).
+- Formatting ISO dates using the same templates.
+- Safe coercion when input data is already normalized or partially formatted.
+"""
+
 from __future__ import annotations
 
 import calendar
@@ -48,7 +57,7 @@ MONTH_NAME_TO_NUM["sept"] = 9  # common alternative abbreviation
 
 
 def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]:
-    """Parse ``value`` using the custom Supplier Date Format tokens."""
+    """Parse ``value`` using the custom supplier date-format tokens."""
     if value is None:
         return None
     if not template:
@@ -57,8 +66,8 @@ def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]
     if not s:
         return None
 
-    compiled = _prepare_template(template)
-    regex, group_order, tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal = compiled
+    prepared = _prepare_template(template)
+    regex, group_order, tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal = prepared
     match = regex.match(s)
     if not match:
         return None
@@ -108,7 +117,7 @@ def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]
 
 
 def format_iso_with(value: Any, template: Optional[str]) -> str:
-    """Format a stored ISO date using the Supplier Date Format tokens."""
+    """Format a stored ISO date using the supplier date-format tokens."""
     if value is None:
         return ""
     if not template:
@@ -145,12 +154,14 @@ def coerce_datetime_with_template(value: Any, template: Optional[str]) -> Option
 
 
 def _set_component(components: dict[str, int], key: str, value: int) -> None:
+    """Set a date component, raising if conflicting values are encountered."""
     if key in components and components[key] != value:
         raise ValueError(f"Conflicting values for {key}: {components[key]} vs {value}")
     components[key] = value
 
 
 def _parse_ordinal(value: str) -> int:
+    """Parse ordinal day strings like ``1st`` or ``22nd``."""
     match = re.match(r"(\d{1,2})(st|nd|rd|th)$", value, flags=re.IGNORECASE)
     if not match:
         raise ValueError(f"Invalid ordinal day '{value}'")
@@ -158,6 +169,7 @@ def _parse_ordinal(value: str) -> int:
 
 
 def _month_from_name(value: str) -> Optional[int]:
+    """Translate a month name/abbreviation into a month number."""
     txt = value.strip().lower()
     if txt in MONTH_NAME_TO_NUM:
         return MONTH_NAME_TO_NUM[txt]
@@ -170,6 +182,7 @@ def _month_from_name(value: str) -> Optional[int]:
 
 
 def _coerce_to_iso_string(value: Any) -> Optional[str]:
+    """Coerce input into ``YYYY-MM-DD`` if possible."""
     dt = _coerce_to_datetime(value)
     if dt is None:
         return None
@@ -177,6 +190,7 @@ def _coerce_to_iso_string(value: Any) -> Optional[str]:
 
 
 def _coerce_to_datetime(value: Any) -> Optional[datetime]:
+    """Best-effort coercion of input into a ``datetime``."""
     if isinstance(value, datetime):
         return datetime(value.year, value.month, value.day)
     if isinstance(value, date):
@@ -196,6 +210,7 @@ def _coerce_to_datetime(value: Any) -> Optional[datetime]:
 
 
 def _format_tokens(tokens: Sequence, dt: datetime) -> str:
+    """Render a tokenized template using the given ``datetime``."""
     parts: List[str] = []
     for kind, value in tokens:
         if kind == "literal":
@@ -210,6 +225,7 @@ def _format_tokens(tokens: Sequence, dt: datetime) -> str:
 
 
 def _format_token(token: str, dt: datetime) -> str:
+    """Format a single token value."""
     if token == "YYYY":
         return f"{dt.year:04d}"
     if token == "YY":
@@ -234,6 +250,7 @@ def _format_token(token: str, dt: datetime) -> str:
 
 
 def _ordinal(day: int) -> str:
+    """Return the ordinal suffix for a day of month."""
     if 10 <= day % 100 <= 20:
         suffix = "th"
     else:
@@ -243,6 +260,7 @@ def _ordinal(day: int) -> str:
 
 @lru_cache(maxsize=128)
 def _prepare_template(template: str):
+    """Normalize and tokenize a date template into a compiled regex and token stream."""
     normalized = _normalize_template(template)
     tokens = _tokenize(normalized)
     group_order: List[Tuple[str, str]] = []
@@ -262,6 +280,7 @@ def _tokens_to_regex(
     group_order: List[Tuple[str, str]],
     counts: Counter,
 ) -> str:
+    """Convert parsed tokens into a regex pattern string."""
     parts: List[str] = []
     for kind, value in tokens:
         if kind == "literal":
@@ -284,6 +303,7 @@ def _tokens_to_regex(
 
 
 def _iter_tokens(tokens: Sequence) -> Iterable[str]:
+    """Yield token names used in a nested token structure."""
     for kind, value in tokens:
         if kind == "token" and value in TOKEN_REGEX:
             yield value
@@ -292,6 +312,7 @@ def _iter_tokens(tokens: Sequence) -> Iterable[str]:
 
 
 def _tokenize(template: str) -> Tuple:
+    """Tokenize a template string into literals, tokens, and optional segments."""
     tokens: List[Tuple[str, Any]] = []
     i = 0
     length = len(template)
@@ -319,6 +340,7 @@ def _tokenize(template: str) -> Tuple:
 
 
 def _normalize_template(template: str) -> str:
+    """Normalize strftime-style tokens to custom template tokens."""
     replacements = [
         ("%-d", "D"),
         ("%#d", "D"),

@@ -1,35 +1,43 @@
+"""
+DynamoDB accessors for contact-specific statement mapping config.
+
+These helpers read/write the JSON config stored on the tenant contact row.
+"""
+
 from typing import Any, Dict
 
 from botocore.exceptions import ClientError
 
 from config import tenant_contacts_config_table
 
+CONFIG_ATTR = "config"
+
 
 def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
     """
     Fetch contact-specific statement mapping config from DynamoDB.
 
-    :param tenant_id: TenantID partition key value
-    :param contact_id: ContactID sort key value
-    :return: Config dict
+    Raises:
+        RuntimeError: When DynamoDB read fails.
+        KeyError: When the contact has no config attribute.
+        TypeError: When the config attribute is not a dict.
     """
-    attr_name = "config"
     try:
         resp = tenant_contacts_config_table.get_item(
             Key={"TenantID": tenant_id, "ContactID": contact_id},
             ProjectionExpression="#cfg",
-            ExpressionAttributeNames={"#cfg": attr_name},
+            ExpressionAttributeNames={"#cfg": CONFIG_ATTR},
         )
-    except ClientError as e:
-        raise RuntimeError(f"DynamoDB error fetching config: {e}")
+    except ClientError as exc:
+        raise RuntimeError(f"DynamoDB error fetching config for TenantID={tenant_id}, ContactID={contact_id}") from exc
 
-    item = resp.get("Item")
-    if not item or attr_name not in item:
+    item = resp.get("Item") if isinstance(resp, dict) else None
+    if not isinstance(item, dict) or CONFIG_ATTR not in item:
         raise KeyError(f"Config not found for TenantID={tenant_id}, ContactID={contact_id}")
 
-    cfg = item[attr_name]
+    cfg = item[CONFIG_ATTR]
     if not isinstance(cfg, dict):
-        raise TypeError(f"Config attribute '{attr_name}' is not a dict: {type(cfg)}")
+        raise TypeError(f"Config attribute '{CONFIG_ATTR}' is not a dict: {type(cfg)}")
 
     return cfg
 
@@ -42,8 +50,8 @@ def set_contact_config(tenant_id: str, contact_id: str, config: Dict[str, Any]) 
         tenant_contacts_config_table.update_item(
             Key={"TenantID": tenant_id, "ContactID": contact_id},
             UpdateExpression="SET #cfg = :cfg",
-            ExpressionAttributeNames={"#cfg": "config"},
+            ExpressionAttributeNames={"#cfg": CONFIG_ATTR},
             ExpressionAttributeValues={":cfg": config},
         )
-    except ClientError as e:
-        raise RuntimeError(f"DynamoDB error updating config: {e}")
+    except ClientError as exc:
+        raise RuntimeError(f"DynamoDB error updating config for TenantID={tenant_id}, ContactID={contact_id}") from exc
