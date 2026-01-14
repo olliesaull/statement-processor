@@ -14,11 +14,16 @@ from enum import StrEnum
 from typing import Any, Dict, List, Optional
 
 from flask import session
-from xero_python.exceptions import AccountingBadRequestException
 from xero_python.accounting import AccountingApi
+from xero_python.exceptions import AccountingBadRequestException
 
 from config import S3_BUCKET_NAME, logger, s3_client
-from utils import fmt_date, fmt_invoice_data, raise_for_unauthorized, get_xero_api_client
+from utils import (
+    fmt_date,
+    fmt_invoice_data,
+    get_xero_api_client,
+    raise_for_unauthorized,
+)
 
 PAGE_SIZE: int = 100  # Xero max
 STAGE: Optional[str] = os.getenv("STAGE")
@@ -59,29 +64,68 @@ def load_local_dataset(resource: XeroType, tenant_id: Optional[str] = None) -> O
         with open(local_path, encoding="utf-8") as handle:
             return json.load(handle)
     except FileNotFoundError:
-        logger.info("Local dataset not found", tenant_id=tenant_id, resource=resource, path=local_path)
+        logger.info(
+            "Local dataset not found",
+            tenant_id=tenant_id,
+            resource=resource,
+            path=local_path,
+        )
         s3_key = f"{tenant_id}/data/{resource_filename}"
         try:
             os.makedirs(local_dir, exist_ok=True)
             s3_client.download_file(S3_BUCKET_NAME, s3_key, local_path)
-            logger.info("Downloaded file from S3", tenant_id=tenant_id, resource=resource, path=local_path)
+            logger.info(
+                "Downloaded file from S3",
+                tenant_id=tenant_id,
+                resource=resource,
+                path=local_path,
+            )
             with open(local_path, encoding="utf-8") as handle:
                 return json.load(handle)
         except FileNotFoundError:
-            logger.info("Dataset still missing after S3 download attempt", tenant_id=tenant_id, resource=resource, path=local_path)
+            logger.info(
+                "Dataset still missing after S3 download attempt",
+                tenant_id=tenant_id,
+                resource=resource,
+                path=local_path,
+            )
         except s3_client.exceptions.NoSuchKey:
-            logger.info("Dataset not present in S3", tenant_id=tenant_id, resource=resource, s3_key=s3_key)
+            logger.info(
+                "Dataset not present in S3",
+                tenant_id=tenant_id,
+                resource=resource,
+                s3_key=s3_key,
+            )
         except Exception:
-            logger.exception("Failed to download dataset from S3", tenant_id=tenant_id, resource=resource, s3_key=s3_key)
+            logger.exception(
+                "Failed to download dataset from S3",
+                tenant_id=tenant_id,
+                resource=resource,
+                s3_key=s3_key,
+            )
     except json.JSONDecodeError:
-        logger.exception("Failed to parse local dataset", tenant_id=tenant_id, resource=resource, path=local_path)
+        logger.exception(
+            "Failed to parse local dataset",
+            tenant_id=tenant_id,
+            resource=resource,
+            path=local_path,
+        )
     except Exception:
-        logger.exception("Failed to load local dataset", tenant_id=tenant_id, resource=resource, path=local_path)
+        logger.exception(
+            "Failed to load local dataset",
+            tenant_id=tenant_id,
+            resource=resource,
+            path=local_path,
+        )
 
     return None
 
 
-def get_contacts_from_xero(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
+def get_contacts_from_xero(
+    tenant_id: Optional[str] = None,
+    modified_since: Optional[datetime] = None,
+    api: Optional[AccountingApi] = None,
+) -> List[Dict[str, Any]]:
     """Fetch contacts directly from Xero ordered by name."""
     tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id:
@@ -95,10 +139,19 @@ def get_contacts_from_xero(tenant_id: Optional[str] = None, modified_since: Opti
     seen_ids: set[str] = set()  # De-dupe contacts across pages.
 
     try:
-        logger.info("Fetching contacts", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
+        logger.info(
+            "Fetching contacts",
+            tenant_id=tenant_id,
+            modified_since=str(modified_since) if modified_since else None,
+        )
 
         while True:
-            kwargs = {"xero_tenant_id": tenant_id, "page": page, "include_archived": True, "page_size": PAGE_SIZE}
+            kwargs = {
+                "xero_tenant_id": tenant_id,
+                "page": page,
+                "include_archived": True,
+                "page_size": PAGE_SIZE,
+            }
             if modified_since:
                 kwargs["if_modified_since"] = modified_since
 
@@ -133,7 +186,12 @@ def get_contacts_from_xero(tenant_id: Optional[str] = None, modified_since: Opti
                     }
                 )
 
-            logger.debug("Fetched contact page", tenant_id=tenant_id, page=page, returned=len(batch))
+            logger.debug(
+                "Fetched contact page",
+                tenant_id=tenant_id,
+                page=page,
+                returned=len(batch),
+            )
 
             if len(batch) < PAGE_SIZE:
                 break
@@ -152,7 +210,11 @@ def get_contacts_from_xero(tenant_id: Optional[str] = None, modified_since: Opti
     return []
 
 
-def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
+def get_invoices(
+    tenant_id: Optional[str] = None,
+    modified_since: Optional[datetime] = None,
+    api: Optional[AccountingApi] = None,
+) -> List[Dict[str, Any]]:
     """Get all supplier bills (ACCPAY) from Xero, across all pages."""
 
     tenant_id = tenant_id or session.get("xero_tenant_id")
@@ -168,13 +230,22 @@ def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datet
     extras: List[Dict[str, Any]] = []
 
     try:
-        logger.info("Fetching all invoices (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
+        logger.info(
+            "Fetching all invoices (paged)",
+            tenant_id=tenant_id,
+            modified_since=str(modified_since) if modified_since else None,
+        )
 
         kwargs = {
             "xero_tenant_id": tenant_id,
             "order": "UpdatedDateUTC ASC",
             "page_size": PAGE_SIZE,
-            "statuses": ["DRAFT", "SUBMITTED", "AUTHORISED", "PAID"],  # Excludes DELETED and VOIDED
+            "statuses": [
+                "DRAFT",
+                "SUBMITTED",
+                "AUTHORISED",
+                "PAID",
+            ],  # Excludes DELETED and VOIDED
             # Only fetch supplier bills (exclude ACCREC)
             "where": 'Type=="ACCPAY"',
         }
@@ -186,11 +257,16 @@ def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datet
             kwargs["page"] = page
             result = client.get_invoices(**kwargs)
 
-            invs = (result.invoices or [])
+            invs = result.invoices or []
             batch_count = len(invs)
             total_returned += batch_count
 
-            logger.debug("Fetched invoice page", tenant_id=tenant_id, page=page, returned=batch_count)
+            logger.debug(
+                "Fetched invoice page",
+                tenant_id=tenant_id,
+                page=page,
+                returned=batch_count,
+            )
 
             for inv in invs:
                 rec = fmt_invoice_data(inv)
@@ -208,7 +284,13 @@ def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datet
 
         invoices: List[Dict[str, Any]] = list(by_id.values()) + extras
         invoices.sort(key=lambda inv: str(inv.get("number") or "").casefold())
-        logger.info("Fetched all invoices", tenant_id=tenant_id, pages=page, returned=total_returned, unique_ids=len(by_id) if by_id else len(invoices))
+        logger.info(
+            "Fetched all invoices",
+            tenant_id=tenant_id,
+            pages=page,
+            returned=total_returned,
+            unique_ids=len(by_id) if by_id else len(invoices),
+        )
         return invoices
 
     except AccountingBadRequestException as e:
@@ -221,7 +303,11 @@ def get_invoices(tenant_id: Optional[str] = None, modified_since: Optional[datet
         return []
 
 
-def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
+def get_credit_notes(
+    tenant_id: Optional[str] = None,
+    modified_since: Optional[datetime] = None,
+    api: Optional[AccountingApi] = None,
+) -> List[Dict[str, Any]]:
     """
     Get all supplier credit notes (ACCPAYCREDIT) across all pages (no contact filter).
 
@@ -241,7 +327,11 @@ def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[d
     credit_notes: List[Dict[str, Any]] = []
 
     try:
-        logger.info("Fetching all credit notes (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
+        logger.info(
+            "Fetching all credit notes (paged)",
+            tenant_id=tenant_id,
+            modified_since=str(modified_since) if modified_since else None,
+        )
 
         kwargs = {
             "xero_tenant_id": tenant_id,
@@ -287,13 +377,23 @@ def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[d
                     }
                 )
 
-            logger.debug("Fetched credit note page", tenant_id=tenant_id, page=page, returned=len(batch))
+            logger.debug(
+                "Fetched credit note page",
+                tenant_id=tenant_id,
+                page=page,
+                returned=len(batch),
+            )
 
             if len(batch) < PAGE_SIZE:
                 break
             page += 1
 
-        logger.info("Fetched all credit notes", tenant_id=tenant_id, pages=page, returned=len(credit_notes))
+        logger.info(
+            "Fetched all credit notes",
+            tenant_id=tenant_id,
+            pages=page,
+            returned=len(credit_notes),
+        )
         return credit_notes
 
     except AccountingBadRequestException as e:
@@ -305,7 +405,11 @@ def get_credit_notes(tenant_id: Optional[str] = None, modified_since: Optional[d
     return []
 
 
-def get_payments(tenant_id: Optional[str] = None, modified_since: Optional[datetime] = None, api: Optional[AccountingApi] = None) -> List[Dict[str, Any]]:
+def get_payments(
+    tenant_id: Optional[str] = None,
+    modified_since: Optional[datetime] = None,
+    api: Optional[AccountingApi] = None,
+) -> List[Dict[str, Any]]:
     """
     Get all payments across all pages (no contact filter).
 
@@ -325,9 +429,17 @@ def get_payments(tenant_id: Optional[str] = None, modified_since: Optional[datet
     payments: List[Dict[str, Any]] = []
 
     try:
-        logger.info("Fetching all payments (paged)", tenant_id=tenant_id, modified_since=str(modified_since) if modified_since else None)
+        logger.info(
+            "Fetching all payments (paged)",
+            tenant_id=tenant_id,
+            modified_since=str(modified_since) if modified_since else None,
+        )
 
-        kwargs = {"xero_tenant_id": tenant_id, "order": "UpdatedDateUTC ASC", "page_size": PAGE_SIZE}
+        kwargs = {
+            "xero_tenant_id": tenant_id,
+            "order": "UpdatedDateUTC ASC",
+            "page_size": PAGE_SIZE,
+        }
 
         if modified_since:
             kwargs["if_modified_since"] = modified_since
@@ -361,13 +473,23 @@ def get_payments(tenant_id: Optional[str] = None, modified_since: Optional[datet
                     }
                 )
 
-            logger.debug("Fetched payment page", tenant_id=tenant_id, page=page, returned=len(batch))
+            logger.debug(
+                "Fetched payment page",
+                tenant_id=tenant_id,
+                page=page,
+                returned=len(batch),
+            )
 
             if len(batch) < PAGE_SIZE:
                 break
             page += 1
 
-        logger.info("Fetched all payments", tenant_id=tenant_id, pages=page, returned=len(payments))
+        logger.info(
+            "Fetched all payments",
+            tenant_id=tenant_id,
+            pages=page,
+            returned=len(payments),
+        )
         return payments
 
     except AccountingBadRequestException as e:
@@ -430,11 +552,20 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
 
         invoices_all = _coerce_invoice_list(cached)
         invoices = [inv for inv in invoices_all if inv.get("contact_id") == contact_id]
-        logger.info("Fetched invoices for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(invoices))
+        logger.info(
+            "Fetched invoices for contact",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            returned=len(invoices),
+        )
         return invoices
 
     except Exception:
-        logger.exception("Failed to load invoices for contact from cache", tenant_id=tenant_id, contact_id=contact_id)
+        logger.exception(
+            "Failed to load invoices for contact from cache",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+        )
         return []
 
 
@@ -451,11 +582,20 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
             return []
 
         credit_notes = [note for note in cached if note.get("contact_id") == contact_id]
-        logger.info("Fetched credit notes for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(credit_notes))
+        logger.info(
+            "Fetched credit notes for contact",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            returned=len(credit_notes),
+        )
         return credit_notes
 
     except Exception:
-        logger.exception("Failed to load credit notes for contact from cache", tenant_id=tenant_id, contact_id=contact_id)
+        logger.exception(
+            "Failed to load credit notes for contact from cache",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+        )
         return []
 
 
@@ -472,9 +612,18 @@ def get_payments_by_contact(contact_id: str) -> List[Dict[str, Any]]:
             return []
 
         payments = [payment for payment in cached if payment.get("contact_id") == contact_id]
-        logger.info("Fetched payments for contact", tenant_id=tenant_id, contact_id=contact_id, returned=len(payments))
+        logger.info(
+            "Fetched payments for contact",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            returned=len(payments),
+        )
         return payments
 
     except Exception:
-        logger.exception("Failed to load payments for contact from cache", tenant_id=tenant_id, contact_id=contact_id)
+        logger.exception(
+            "Failed to load payments for contact from cache",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+        )
         return []

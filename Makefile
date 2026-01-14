@@ -3,7 +3,7 @@
 # Keeps lint/type-check commands centralized for service and lambda_functions.
 #
 
-.PHONY: help update-venvs format-all lint-all type-check-all
+.PHONY: help rebuild-venvs update-venvs format-all lint-all type-check-all clean
 
 # Top-level directories to target.
 SERVICE_DIR := service
@@ -22,14 +22,23 @@ help:
 	@echo "=========================================="
 	@echo ""
 	@echo "📦 Dependency Management:"
+	@echo "  rebuild-venvs           Rebuild all venvs from scratch"
 	@echo "  update-venvs            Update dependencies in each service/lambda venv"
 	@echo ""
 	@echo "🔍 Code Quality:"
 	@echo "  format-all              Format code and sort imports with Ruff"
 	@echo "  lint-all                Run pylint on all Lambdas and service (sequential, clearer output)"
 	@echo "  type-check-all          Run mypy on all Lambdas and service (sequential, clearer output)"
+	@echo ""
+	@echo "🧹 Cleanup:"
+	@echo "  clean                   Remove Python caches and build artifacts"
 
 # Update or create venvs and install requirements (mirrors numerint/environments).
+rebuild-venvs:
+	@echo "🔄 Rebuilding all venvs..."
+	@./update_dependencies.sh --rebuild
+	@echo "✅ All venvs rebuilt"
+
 update-venvs:
 	@echo "⬆️  Updating venv dependencies..."
 	@./update_dependencies.sh
@@ -65,3 +74,14 @@ type-check-all:
 			bash -c "cd $$dir && source venv/bin/activate && $(PY_FIND) | xargs mypy --ignore-missing-imports --check-untyped-defs 2>/dev/null || true"; \
 		fi; \
 	done
+
+# Clean common Python caches and generated files.
+clean:
+	@echo "🧹 Cleaning generated files..."
+	find . -type f -name "*.pyc" -delete
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.zip" -delete
+	@echo "✅ Cleanup complete"

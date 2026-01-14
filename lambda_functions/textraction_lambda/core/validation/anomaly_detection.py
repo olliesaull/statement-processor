@@ -110,9 +110,7 @@ def _has_text(value: Any) -> bool:
     return str(value).strip() != ""
 
 
-def apply_outlier_flags(
-    statement: Dict[str, Any], *, remove: bool = False, one_based_index: bool = False
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:  # pylint: disable=too-many-locals,too-many-branches
+def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_based_index: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:  # pylint: disable=too-many-locals,too-many-branches
     """
     Flag suspicious statement items (and optionally remove them).
 
@@ -192,9 +190,7 @@ def apply_outlier_flags(
     flagged_index_set = set(flagged_indices)
     if remove:
         # Removing flagged items is an optional mode; default is to annotate items in-place.
-        statement["statement_items"] = [
-            it for i, it in enumerate(items) if i not in flagged_index_set
-        ]
+        statement["statement_items"] = [it for i, it in enumerate(items) if i not in flagged_index_set]
     else:
         # Add a simple marker to the item itself so downstream consumers can show warnings.
         for idx in flagged_index_set:
@@ -209,7 +205,5 @@ def apply_outlier_flags(
         "rules": dict(rule_counter),
         "field_stats": {},
     }
-    logger.debug(
-        "Outlier flagging complete", flagged=summary["flagged"], rules=summary["rules"]
-    )
+    logger.debug("Outlier flagging complete", flagged=summary["flagged"], rules=summary["rules"])
     return statement, summary

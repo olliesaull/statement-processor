@@ -45,6 +45,7 @@ class StatementItem(BaseModel):
     @classmethod
     def _coerce_total(cls, v: Any) -> Dict[str, Number]:
         """Normalize `total` into a `{label: value}` mapping regardless of input shape."""
+
         def _coerce_val(val: Any) -> Number:
             return cls._coerce_number(val)
 

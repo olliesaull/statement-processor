@@ -43,8 +43,19 @@ from tenant_data_repository import TenantDataRepository, TenantStatus
 # MIME/extension guards for uploads
 ALLOWED_EXTENSIONS = {".pdf", ".PDF"}
 SCOPES = [
-    "offline_access", "openid", "profile", "email", "accounting.transactions", "accounting.reports.read", "accounting.journals.read",
-    "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
+    "offline_access",
+    "openid",
+    "profile",
+    "email",
+    "accounting.transactions",
+    "accounting.reports.read",
+    "accounting.journals.read",
+    "accounting.settings",
+    "accounting.contacts",
+    "accounting.attachments",
+    "assets",
+    "projects",
+    "files.read",
 ]
 _DDB_UPDATE_MAX_WORKERS = max(4, min(16, (os.cpu_count() or 4)))
 
@@ -65,6 +76,7 @@ def get_xero_api_client(oauth_token: Optional[dict] = None) -> AccountingApi:
         token_getter = get_xero_oauth2_token
         token_saver = save_xero_oauth2_token
     else:
+
         def token_getter() -> Optional[dict]:
             return oauth_token
 
@@ -84,6 +96,7 @@ def get_xero_api_client(oauth_token: Optional[dict] = None) -> AccountingApi:
         api_client.set_oauth2_token(oauth_token)
 
     return AccountingApi(api_client)
+
 
 def _norm_number(x: Any) -> Optional[Decimal]:
     """Return Decimal if x looks numeric (incl. currency/commas); else None."""
@@ -114,6 +127,7 @@ def _equal(a: Any, b: Any) -> bool:
     sb = "" if b is None else str(b).strip()
     return sa.casefold() == sb.casefold()
 
+
 def _query_statements_by_completed(tenant_id: Optional[str], completed_value: str) -> List[Dict[str, Any]]:
     """Query statements for a tenant filtered by the Completed flag via GSI."""
     if not tenant_id:
@@ -126,19 +140,34 @@ def _query_statements_by_completed(tenant_id: Optional[str], completed_value: st
         "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("Completed").eq(completed_value),
         "FilterExpression": Attr("RecordType").not_exists() | Attr("RecordType").eq("statement"),
     }
-    logger.info("Querying statements by completion", tenant_id=tenant_id, completed=completed_value)
+    logger.info(
+        "Querying statements by completion",
+        tenant_id=tenant_id,
+        completed=completed_value,
+    )
 
     while True:
         resp = tenant_statements_table.query(**kwargs)
         batch = resp.get("Items", [])
         items.extend(batch)
         lek = resp.get("LastEvaluatedKey")
-        logger.debug("Fetched statement batch", tenant_id=tenant_id, completed=completed_value, batch=len(batch), has_more=bool(lek))
+        logger.debug(
+            "Fetched statement batch",
+            tenant_id=tenant_id,
+            completed=completed_value,
+            batch=len(batch),
+            has_more=bool(lek),
+        )
         if not lek:
             break
         kwargs["ExclusiveStartKey"] = lek
 
-    logger.info("Collected statements by completion", tenant_id=tenant_id, completed=completed_value, count=len(items))
+    logger.info(
+        "Collected statements by completion",
+        tenant_id=tenant_id,
+        completed=completed_value,
+        count=len(items),
+    )
     return items
 
 
@@ -152,8 +181,14 @@ def get_statement_record(tenant_id: str, statement_id: str) -> Optional[Dict[str
         }
     )
     item = response.get("Item")
-    logger.debug("Statement record fetched", tenant_id=tenant_id, statement_id=statement_id, found=bool(item))
+    logger.debug(
+        "Statement record fetched",
+        tenant_id=tenant_id,
+        statement_id=statement_id,
+        found=bool(item),
+    )
     return item
+
 
 def scope_str() -> str:
     """Return Xero OAuth scopes as a space-separated string."""
@@ -162,6 +197,7 @@ def scope_str() -> str:
 
 class RedirectToLogin(HTTPException):
     """HTTP exception that produces a redirect to the login route."""
+
     code = 302
 
     def __init__(self) -> None:
@@ -189,7 +225,10 @@ def raise_for_unauthorized(error: Exception) -> None:
             continue
 
         if status_code in {401, 403}:
-            logger.info("Xero API returned unauthorized/forbidden; redirecting to login", status_code=status_code)
+            logger.info(
+                "Xero API returned unauthorized/forbidden; redirecting to login",
+                status_code=status_code,
+            )
             raise RedirectToLogin()
 
 
@@ -218,7 +257,11 @@ def get_cached_tenant_status(tenant_id: str) -> Optional[TenantStatus]:
         try:
             status_enum = TenantStatus(status)
         except ValueError:
-            logger.warning("Encountered unexpected tenant status value", tenant_id=tenant_id, status=status)
+            logger.warning(
+                "Encountered unexpected tenant status value",
+                tenant_id=tenant_id,
+                status=status,
+            )
             return None
 
         cache_provider.set_tenant_status_cache(tenant_id, status_enum)
@@ -230,12 +273,17 @@ def get_cached_tenant_status(tenant_id: str) -> Optional[TenantStatus]:
 
 def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
     """Ensure a valid (non-expired) Xero token and active tenant before route access."""
+
     @wraps(f)
     def decorated_function(*args: Any, **kwargs: Any):
         tenant_id = session.get("xero_tenant_id")
         token = get_xero_oauth2_token()
         if not tenant_id or not token:
-            logger.info("Missing Xero token or tenant; redirecting", route=request.path, tenant_id=tenant_id)
+            logger.info(
+                "Missing Xero token or tenant; redirecting",
+                route=request.path,
+                tenant_id=tenant_id,
+            )
             return redirect(url_for("login"))
 
         try:
@@ -244,7 +292,11 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
             expires_at = 0.0
 
         if expires_at and time.time() > expires_at:
-            logger.info("Xero token expired; redirecting", route=request.path, tenant_id=tenant_id)
+            logger.info(
+                "Xero token expired; redirecting",
+                route=request.path,
+                tenant_id=tenant_id,
+            )
             return redirect(url_for("login"))
 
         return f(*args, **kwargs)
@@ -252,8 +304,13 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
     return decorated_function
 
 
-def active_tenant_required(message: str = "Please select a tenant before continuing.", redirect_endpoint: str = "tenant_management", flash_key: str = "tenant_error") -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+def active_tenant_required(
+    message: str = "Please select a tenant before continuing.",
+    redirect_endpoint: str = "tenant_management",
+    flash_key: str = "tenant_error",
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Ensure the user has an active tenant selected; otherwise redirect with a message."""
+
     def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(f)
         def wrapped(*args: Any, **kwargs: Any):
@@ -273,13 +330,18 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
     Redirect users away from routes while their active tenant is still loading.
     Uses the in-process cache first and falls back to DynamoDB for safety.
     """
+
     @wraps(f)
     def decorated_function(*args: Any, **kwargs: Any):
         tenant_id = session.get("xero_tenant_id")
         if tenant_id:
             status = get_cached_tenant_status(tenant_id)
             if status == TenantStatus.LOADING:
-                logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id)
+                logger.info(
+                    "Blocking route during load",
+                    route=request.path,
+                    tenant_id=tenant_id,
+                )
                 session["tenant_error"] = "Please wait for the initial load to finish before navigating away."
                 return redirect(url_for("tenant_management"))
 
@@ -287,18 +349,30 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
 
     return decorated_function
 
+
 def route_handler_logging(function):
     @wraps(function)
     def decorator(*args, **kwargs):
         tenant_id = session.get("xero_tenant_id")
-        logger.info("Entering route", route=request.path, event_type="USER_TRAIL", path=request.path, tenant_id=tenant_id)
+        logger.info(
+            "Entering route",
+            route=request.path,
+            event_type="USER_TRAIL",
+            path=request.path,
+            tenant_id=tenant_id,
+        )
 
         return function(*args, **kwargs)
 
     return decorator
 
 
-def persist_item_types_to_dynamo(tenant_id: Optional[str], classification_updates: Dict[str, str], *, max_workers: Optional[int] = None) -> None:
+def persist_item_types_to_dynamo(
+    tenant_id: Optional[str],
+    classification_updates: Dict[str, str],
+    *,
+    max_workers: Optional[int] = None,
+) -> None:
     """Update DynamoDB item types using a thread pool to hide network latency."""
     if not tenant_id or not classification_updates:
         return
@@ -316,7 +390,13 @@ def persist_item_types_to_dynamo(tenant_id: Optional[str], classification_update
                 ExpressionAttributeValues={":item_type": new_type},
             )
         except ClientError as exc:
-            logger.exception("Failed to persist item type to DynamoDB", tenant_id=tenant_id, statement_id=statement_item_id, item_type=new_type, error=str(exc))
+            logger.exception(
+                "Failed to persist item type to DynamoDB",
+                tenant_id=tenant_id,
+                statement_id=statement_item_id,
+                item_type=new_type,
+                error=str(exc),
+            )
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         executor.map(_update, items)
@@ -390,7 +470,11 @@ def get_statement_item_status_map(tenant_id: str, statement_id: str) -> Dict[str
     if not tenant_id or not statement_id:
         return {}
 
-    logger.info("Fetching statement item statuses", tenant_id=tenant_id, statement_id=statement_id)
+    logger.info(
+        "Fetching statement item statuses",
+        tenant_id=tenant_id,
+        statement_id=statement_id,
+    )
     statuses: Dict[str, bool] = {}
     prefix = f"{statement_id}#item-"
     kwargs: Dict[str, Any] = {
@@ -413,7 +497,12 @@ def get_statement_item_status_map(tenant_id: str, statement_id: str) -> Dict[str
             break
         kwargs["ExclusiveStartKey"] = lek
 
-    logger.info("Fetched statement item statuses", tenant_id=tenant_id, statement_id=statement_id, count=len(statuses))
+    logger.info(
+        "Fetched statement item statuses",
+        tenant_id=tenant_id,
+        statement_id=statement_id,
+        count=len(statuses),
+    )
     return statuses
 
 
@@ -477,18 +566,43 @@ def delete_statement_data(tenant_id: str, statement_id: str) -> None:
         query_kwargs["ExclusiveStartKey"] = lek
 
     # Remove S3 artifacts
-    s3_keys = [statement_pdf_s3_key(tenant_id, statement_id), statement_json_s3_key(tenant_id, statement_id)]
+    s3_keys = [
+        statement_pdf_s3_key(tenant_id, statement_id),
+        statement_json_s3_key(tenant_id, statement_id),
+    ]
     for key in s3_keys:
         try:
             s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=key)
-            logger.info("Deleted statement S3 object", tenant_id=tenant_id, statement_id=statement_id, s3_key=key)
+            logger.info(
+                "Deleted statement S3 object",
+                tenant_id=tenant_id,
+                statement_id=statement_id,
+                s3_key=key,
+            )
         except s3_client.exceptions.NoSuchKey:
-            logger.info("Statement S3 object already missing", tenant_id=tenant_id, statement_id=statement_id, s3_key=key)
+            logger.info(
+                "Statement S3 object already missing",
+                tenant_id=tenant_id,
+                statement_id=statement_id,
+                s3_key=key,
+            )
         except Exception as exc:
-            logger.exception("Failed to delete statement S3 object", tenant_id=tenant_id, statement_id=statement_id, s3_key=key, error=exc)
+            logger.exception(
+                "Failed to delete statement S3 object",
+                tenant_id=tenant_id,
+                statement_id=statement_id,
+                s3_key=key,
+                error=exc,
+            )
             raise
 
-    logger.info("Statement deletion complete", tenant_id=tenant_id, statement_id=statement_id, items_deleted=deleted_items, s3_objects=len(s3_keys))
+    logger.info(
+        "Statement deletion complete",
+        tenant_id=tenant_id,
+        statement_id=statement_id,
+        items_deleted=deleted_items,
+        s3_objects=len(s3_keys),
+    )
 
 
 def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
@@ -507,7 +621,12 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
         # Ensure we don't overwrite an existing statement for this tenant.
         # NOTE: Table key schema is (TenantID, StatementID). Using StatementID here is intentional.
         tenant_statements_table.put_item(Item=item, ConditionExpression=Attr("StatementID").not_exists())
-        logger.info("Statement added to table", tenant_id=tenant_id, statement_id=entry["statement_id"], contact_id=entry.get("contact_id"))
+        logger.info(
+            "Statement added to table",
+            tenant_id=tenant_id,
+            statement_id=entry["statement_id"],
+            contact_id=entry.get("contact_id"),
+        )
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             # Using single-quotes to simplify nested quotes in f-string
@@ -597,7 +716,11 @@ def start_textraction_state_machine(
 ) -> bool:
     """Kick off the Step Functions textraction workflow."""
     if not TEXTRACTION_STATE_MACHINE_ARN:
-        logger.error("Textraction state machine ARN not configured; skipping execution", tenant_id=tenant_id, statement_id=statement_id)
+        logger.error(
+            "Textraction state machine ARN not configured; skipping execution",
+            tenant_id=tenant_id,
+            statement_id=statement_id,
+        )
         return False
 
     payload = {
@@ -655,6 +778,7 @@ def start_textraction_state_machine(
         )
         return False
 
+
 # -----------------------------
 # Helpers for statement view
 # -----------------------------
@@ -662,7 +786,11 @@ def start_textraction_state_machine(
 _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
 
 
-def _normalize_separators(value: Any, decimal_separator: Optional[str] = None, thousands_separator: Optional[str] = None) -> Optional[str]:
+def _normalize_separators(
+    value: Any,
+    decimal_separator: Optional[str] = None,
+    thousands_separator: Optional[str] = None,
+) -> Optional[str]:
     """Normalize a raw numeric string using configured separators."""
     if value is None or value == "":
         return None
@@ -687,22 +815,43 @@ def _normalize_separators(value: Any, decimal_separator: Optional[str] = None, t
     return cleaned
 
 
-def _to_decimal(x: Any, *, decimal_separator: Optional[str] = None, thousands_separator: Optional[str] = None) -> Optional[Decimal]:
+def _to_decimal(
+    x: Any,
+    *,
+    decimal_separator: Optional[str] = None,
+    thousands_separator: Optional[str] = None,
+) -> Optional[Decimal]:
     if x is None or x == "":
         return None
     normalized = _normalize_separators(x, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
     if normalized is None:
         if isinstance(x, str) and x.strip():
-            logger.warning("Unable to normalize numeric value", raw_value=x, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
+            logger.warning(
+                "Unable to normalize numeric value",
+                raw_value=x,
+                decimal_separator=decimal_separator,
+                thousands_separator=thousands_separator,
+            )
         return None
     try:
         return Decimal(normalized)
     except InvalidOperation:
-        logger.warning("Unable to parse numeric value", raw_value=x, normalized_value=normalized, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
+        logger.warning(
+            "Unable to parse numeric value",
+            raw_value=x,
+            normalized_value=normalized,
+            decimal_separator=decimal_separator,
+            thousands_separator=thousands_separator,
+        )
         return None
 
 
-def format_money(x: Any, *, decimal_separator: Optional[str] = None, thousands_separator: Optional[str] = None) -> str:
+def format_money(
+    x: Any,
+    *,
+    decimal_separator: Optional[str] = None,
+    thousands_separator: Optional[str] = None,
+) -> str:
     """Format a number with thousands separators and 2 decimals.
 
     Returns empty string for empty input; returns original string if not numeric.
@@ -711,6 +860,7 @@ def format_money(x: Any, *, decimal_separator: Optional[str] = None, thousands_s
     if d is None:
         return "" if x in (None, "") else str(x)
     return f"{d:,.2f}"
+
 
 def get_items_template_from_config(contact_config: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -750,7 +900,9 @@ _DEFAULT_DECIMAL_SEPARATOR = "."
 _DEFAULT_THOUSANDS_SEPARATOR = ","
 
 
-def get_number_separators_from_config(contact_config: Dict[str, Any]) -> Tuple[str, str]:
+def get_number_separators_from_config(
+    contact_config: Dict[str, Any],
+) -> Tuple[str, str]:
     """Return (decimal_separator, thousands_separator) with sensible defaults."""
     if not isinstance(contact_config, dict):
         return _DEFAULT_DECIMAL_SEPARATOR, _DEFAULT_THOUSANDS_SEPARATOR
@@ -766,7 +918,10 @@ def get_number_separators_from_config(contact_config: Dict[str, Any]) -> Tuple[s
     if thou not in _ALLOWED_THOUSANDS_SEPARATORS:
         thou = _DEFAULT_THOUSANDS_SEPARATOR
 
-    return dec or _DEFAULT_DECIMAL_SEPARATOR, thou if thou is not None else _DEFAULT_THOUSANDS_SEPARATOR
+    return (
+        dec or _DEFAULT_DECIMAL_SEPARATOR,
+        thou if thou is not None else _DEFAULT_THOUSANDS_SEPARATOR,
+    )
 
 
 def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
@@ -815,7 +970,10 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     preferred_field_order = ["date", "due_date", "number", "total"]
     ordered_headers: List[str] = []
     for canonical_field in preferred_field_order:
-        header_match = next((hdr for hdr in display_headers if header_to_field.get(hdr) == canonical_field), None)
+        header_match = next(
+            (hdr for hdr in display_headers if header_to_field.get(hdr) == canonical_field),
+            None,
+        )
         if header_match:
             ordered_headers.append(header_match)
     # Keep any remaining statement-mapped headers in their existing order (currently are not any but keeping for future).
@@ -858,7 +1016,12 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     return display_headers, rows_by_header, header_to_field, item_number_header
 
 
-def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Dict[str, str]], item_number_header: Optional[str], invoices: List[Dict]) -> Dict[str, Dict]:
+def match_invoices_to_statement_items(
+    items: List[Dict],
+    rows_by_header: List[Dict[str, str]],
+    item_number_header: Optional[str],
+    invoices: List[Dict],
+) -> Dict[str, Dict]:
     """
     Build mapping from statement invoice number -> { invoice, statement_item, match_type, match_score, matched_invoice_number }.
 
@@ -902,7 +1065,13 @@ def match_invoices_to_statement_items(items: List[Dict], rows_by_header: List[Di
                 "match_score": 1.0,
                 "matched_invoice_number": key,
             }
-            logger.info("Exact match", statement_number=key, invoice_number=key, statement_item=stmt_item, xero_item=inv)
+            logger.info(
+                "Exact match",
+                statement_number=key,
+                invoice_number=key,
+                statement_item=stmt_item,
+                xero_item=inv,
+            )
             # Track used invoice to exclude from fuzzy matching pool
             inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
             if inv_id:
@@ -1007,7 +1176,7 @@ def build_right_rows(
 
     for r in rows_by_header:
         inv_no = (r.get(item_number_header) or "").strip() if item_number_header else ""
-        rec = (matched_map.get(inv_no, {}) or {})
+        rec = matched_map.get(inv_no, {}) or {}
         inv = rec.get("invoice", {}) if isinstance(rec, dict) else {}
 
         inv_total = inv.get("total")
@@ -1053,7 +1222,12 @@ def build_right_rows(
     return right_rows
 
 
-def build_row_comparisons(left_rows: List[Dict[str, str]], right_rows: List[Dict[str, str]], display_headers: List[str], header_to_field: Optional[Dict[str, str]] = None) -> List[List[CellComparison]]:
+def build_row_comparisons(
+    left_rows: List[Dict[str, str]],
+    right_rows: List[Dict[str, str]],
+    display_headers: List[str],
+    header_to_field: Optional[Dict[str, str]] = None,
+) -> List[List[CellComparison]]:
     """
     Build per-cell comparison objects for each row.
     """
@@ -1066,9 +1240,11 @@ def build_row_comparisons(left_rows: List[Dict[str, str]], right_rows: List[Dict
             # For the canonical invoice number column, treat values as IDs and
             # consider them matching if one normalized string contains the other.
             if header_to_field and header_to_field.get(header) == "number":
+
                 def _norm_id_text(x: Any) -> str:
                     s = "" if x is None else str(x).strip()
                     return "".join(ch for ch in s.upper() if ch.isalnum())
+
                 a, b = _norm_id_text(left_val), _norm_id_text(right_val)
                 matches = bool(a and b and (a == b or a in b or b in a))
             else:

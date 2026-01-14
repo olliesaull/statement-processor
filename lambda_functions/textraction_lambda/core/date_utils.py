@@ -48,12 +48,8 @@ TOKEN_REGEX = {
 }
 
 # Month lookups are case-insensitive and include common abbreviations.
-MONTH_NAME_TO_NUM = {
-    name.lower(): idx for idx, name in enumerate(calendar.month_name) if name
-}
-MONTH_ABBR_TO_NUM = {
-    abbr.lower(): idx for idx, abbr in enumerate(calendar.month_abbr) if abbr
-}
+MONTH_NAME_TO_NUM = {name.lower(): idx for idx, name in enumerate(calendar.month_name) if name}
+MONTH_ABBR_TO_NUM = {abbr.lower(): idx for idx, abbr in enumerate(calendar.month_abbr) if abbr}
 MONTH_NAME_TO_NUM["sept"] = 9
 
 
@@ -101,9 +97,7 @@ def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]
             elif token in {"MMMM", "MMM"}:
                 month = _month_from_name(raw)
                 if month is None:
-                    raise ValueError(
-                        f"Unknown month name '{raw}' for format '{template}'"
-                    )
+                    raise ValueError(f"Unknown month name '{raw}' for format '{template}'")
                 _set_component(components, "month", month)
             elif token in {"MM", "M"}:
                 _set_component(components, "month", int(raw))
@@ -160,9 +154,7 @@ def format_iso_with(value: Any, template: Optional[str]) -> str:
     return _format_tokens(tokens, dt)
 
 
-def coerce_datetime_with_template(
-    value: Any, template: Optional[str]
-) -> Optional[datetime]:
+def coerce_datetime_with_template(value: Any, template: Optional[str]) -> Optional[datetime]:
     """Try parsing with a template first, then fall back to ISO coercion."""
     parsed: Optional[datetime] = None
     if template:
@@ -276,9 +268,7 @@ def _format_ordinal(day: int) -> str:
 
 def _prepare_template(template: str):
     """Tokenize and compile a date template for parsing/formatting."""
-    tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal = (
-        _tokenize_format(template)
-    )
+    tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal = _tokenize_format(template)
     return _compile(tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal)
 
 

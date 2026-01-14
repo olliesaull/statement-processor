@@ -71,10 +71,7 @@ def _dedupe_grid_columns(grid: List[List[str]]) -> List[List[str]]:
     keep: List[int] = []
     for idx in range(len(grid[0])):
         header = _norm(grid[0][idx]) if idx < len(grid[0]) else ""
-        column_values = tuple(
-            _normalize_table_cell(row[idx] if idx < len(row) else "")
-            for row in grid[1:]
-        )
+        column_values = tuple(_normalize_table_cell(row[idx] if idx < len(row) else "") for row in grid[1:])
         signature = (header, column_values)
         if signature in seen:
             continue
@@ -85,9 +82,7 @@ def _dedupe_grid_columns(grid: List[List[str]]) -> List[List[str]]:
     return [[row[i] if i < len(row) else "" for i in keep] for row in grid]
 
 
-def best_header_row(
-    grid: List[List[str]], candidate_headers: List[str], lookahead: int = 5
-) -> Tuple[int, List[str]]:
+def best_header_row(grid: List[List[str]], candidate_headers: List[str], lookahead: int = 5) -> Tuple[int, List[str]]:
     """
     Pick the most likely header row by matching configured candidates.
 
@@ -103,9 +98,7 @@ def best_header_row(
                     lookahead_rows=len(grid),
                 )
                 return idx, row
-        logger.debug(
-            "Header row defaulted to first row (no candidates)", selected_index=0
-        )
+        logger.debug("Header row defaulted to first row (no candidates)", selected_index=0)
         return 0, grid[0] if grid else []
     best_idx, best_score = 0, -1
     lookahead_rows = min(lookahead, len(grid))
@@ -148,9 +141,7 @@ def get_by_header(row: List[str], col_index: Dict[str, int], header_label: str) 
     return (row[idx] or "").strip()
 
 
-def _load_contact_mapping(
-    tenant_id: str, contact_id: str
-) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], List[str], str]:  # pylint: disable=too-many-branches
+def _load_contact_mapping(tenant_id: str, contact_id: str) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], List[str], str]:  # pylint: disable=too-many-branches
     """
     Load contact-specific mapping config and normalize it for table extraction.
 
@@ -161,9 +152,7 @@ def _load_contact_mapping(
     - total_candidates: header labels that should be interpreted as totals
     - date_format: required parsing format for dates
     """
-    contact_cfg: Dict[str, Any] = get_contact_config(
-        tenant_id=tenant_id, contact_id=contact_id
-    )
+    contact_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
 
     template_date_format: Optional[str] = None
     if isinstance(contact_cfg, dict):
@@ -177,9 +166,7 @@ def _load_contact_mapping(
     else:
         items_template = {}
 
-    template_date_format = (
-        items_template.get("date_format") if isinstance(items_template, dict) else None
-    )
+    template_date_format = items_template.get("date_format") if isinstance(items_template, dict) else None
 
     items_template.pop("date_format", None)
     items_template.pop("decimal_separator", None)
@@ -209,9 +196,7 @@ def _load_contact_mapping(
     total_candidates: List[str] = []
     total_cfg = items_template.get("total")
     if isinstance(total_cfg, list):
-        total_candidates = [
-            str(x).strip() for x in total_cfg if isinstance(x, str) and x.strip()
-        ]
+        total_candidates = [str(x).strip() for x in total_cfg if isinstance(x, str) and x.strip()]
     elif isinstance(total_cfg, str) and total_cfg.strip():
         total_candidates = [total_cfg.strip()]
 
@@ -261,9 +246,7 @@ def _prepare_header_context(
     )
 
 
-def _persist_raw_headers(
-    tenant_id: str, contact_id: str, header_row: List[str]
-) -> None:
+def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: List[str]) -> None:
     """Persist newly-seen raw headers to contact config for future mapping."""
     try:
         cfg_existing: Dict[str, Any] = {}
@@ -327,20 +310,14 @@ def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-
     extracted_simple: Dict[str, Any] = {}
     for field, header_name in simple_map.items():
         idx = col_index.get(_norm(header_name))
-        actual_header = (
-            header_row[idx]
-            if idx is not None and idx < len(header_row)
-            else header_name
-        )
+        actual_header = header_row[idx] if idx is not None and idx < len(header_row) else header_name
         cell = get_by_header(row, col_index, header_name)
         value: Any = cell
         if field in {"date", "due_date"}:
             try:
                 parsed = parse_with_format(cell, date_format)
             except ValueError as err:
-                raise ValueError(
-                    f"Failed to parse '{cell}' using format '{date_format}'"
-                ) from err
+                raise ValueError(f"Failed to parse '{cell}' using format '{date_format}'") from err
             if parsed is not None:
                 value = parsed.strftime("%Y-%m-%d")
             elif field == "date" and str(cell or "").strip():
@@ -354,11 +331,7 @@ def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-
     for raw_key, raw_src_header in (raw_map or {}).items():
         chosen_header = raw_src_header or raw_key
         idx = col_index.get(_norm(chosen_header))
-        actual_header = (
-            header_row[idx]
-            if idx is not None and idx < len(header_row)
-            else chosen_header
-        )
+        actual_header = header_row[idx] if idx is not None and idx < len(header_row) else chosen_header
         canonical_header = str(actual_header or chosen_header)
         val = get_by_header(row, col_index, chosen_header)
         raw_obj[canonical_header] = val
@@ -382,9 +355,7 @@ def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-
         total_entries[header_label] = num
     row_obj["total"] = total_entries
 
-    row_obj["statement_item_id"] = _generate_statement_item_id(
-        statement_id, item_counter
-    )
+    row_obj["statement_item_id"] = _generate_statement_item_id(statement_id, item_counter)
     stmt_item = StatementItem(**row_obj)
 
     raw_extracted = extracted_raw or {}
@@ -427,14 +398,8 @@ def select_relevant_tables_per_page(
             hdr_idx, header_row = best_header_row(grid, list(cand_set))
             data_rows = grid[hdr_idx + 1 :]
             header_norm = [_norm(h) for h in header_row]
-            header_hits = sum(
-                1
-                for h in header_norm
-                if h in cand_set or any(c in h or h in c for c in cand_set)
-            )
-            date_hits = sum(
-                1 for r in data_rows[:10] if r and date_re.match((r[0] or "").strip())
-            )
+            header_hits = sum(1 for h in header_norm if h in cand_set or any(c in h or h in c for c in cand_set))
+            date_hits = sum(1 for r in data_rows[:10] if r and date_re.match((r[0] or "").strip()))
             rows = len(grid)
             cols = len(grid[0]) if grid and grid[0] else 0
             size_bonus = rows * cols
@@ -480,9 +445,7 @@ def table_to_json(
     with optional `_flags` metadata describing extraction issues.
     """
     # Main transformation: map Textract tables into structured statement items using contact-specific config
-    items_template, simple_map, raw_map, total_candidates, date_format = (
-        _load_contact_mapping(tenant_id=tenant_id, contact_id=contact_id)
-    )
+    items_template, simple_map, raw_map, total_candidates, date_format = _load_contact_mapping(tenant_id=tenant_id, contact_id=contact_id)
 
     candidates = list(simple_map.values())
     candidates.extend(list(raw_map.keys()))
@@ -530,9 +493,7 @@ def table_to_json(
             header_detected,
             primary_header_row,
             primary_col_index,
-        ) = _prepare_header_context(
-            grid, candidates, primary_header_row, primary_col_index
-        )
+        ) = _prepare_header_context(grid, candidates, primary_header_row, primary_col_index)
 
         logger.debug(
             "Header detection result",

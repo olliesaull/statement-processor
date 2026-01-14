@@ -105,7 +105,9 @@ def _extract_total_template(contact_config: Optional[Dict[str, Any]]) -> Any:
     return source.get("total")
 
 
-def _collect_config_amount_labels(contact_config: Optional[Dict[str, Any]]) -> Tuple[Set[str], Set[str]]:
+def _collect_config_amount_labels(
+    contact_config: Optional[Dict[str, Any]],
+) -> Tuple[Set[str], Set[str]]:
     """Collect normalized debit/credit labels from contact config."""
     total_cfg = _extract_total_template(contact_config)
     debit_norms: Set[str] = set()
@@ -205,11 +207,7 @@ def _evaluate_amount_hint(
                 credit_labels_used.append(label)
 
     if not debit_has_value:
-        inverse_raw = {
-            _normalize_label(key): (key, val)
-            for key, val in (raw_row or {}).items()
-            if isinstance(key, str)
-        }
+        inverse_raw = {_normalize_label(key): (key, val) for key, val in (raw_row or {}).items() if isinstance(key, str)}
         for norm in debit_norms:
             match = inverse_raw.get(norm)
             if match and _has_amount(match[1]):
@@ -218,11 +216,7 @@ def _evaluate_amount_hint(
                 break
 
     if not credit_has_value:
-        inverse_raw = {
-            _normalize_label(key): (key, val)
-            for key, val in (raw_row or {}).items()
-            if isinstance(key, str)
-        }
+        inverse_raw = {_normalize_label(key): (key, val) for key, val in (raw_row or {}).items() if isinstance(key, str)}
         for norm in credit_norms:
             match = inverse_raw.get(norm)
             if match and _has_amount(match[1]):
@@ -235,7 +229,13 @@ def _evaluate_amount_hint(
     if credit_has_value and not debit_has_value:
         return "credit", False, True, debit_labels_used, credit_labels_used
 
-    return None, debit_has_value, credit_has_value, debit_labels_used, credit_labels_used
+    return (
+        None,
+        debit_has_value,
+        credit_has_value,
+        debit_labels_used,
+        credit_labels_used,
+    )
 
 
 def _default_type(candidate_types: Set[str]) -> str:
@@ -252,9 +252,7 @@ def guess_statement_item_type(
     contact_config: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Heuristically classify a row as ``invoice``, ``credit_note``, or ``payment``."""
-    amount_hint, debit_has_value, credit_has_value, debit_labels, credit_labels = _evaluate_amount_hint(
-        raw_row or {}, total_entries, contact_config
-    )
+    amount_hint, debit_has_value, credit_has_value, debit_labels, credit_labels = _evaluate_amount_hint(raw_row or {}, total_entries, contact_config)
 
     candidate_types: Set[str] = {"invoice", "credit_note", "payment"}
     if amount_hint == "invoice":
@@ -298,7 +296,16 @@ def guess_statement_item_type(
         return default_type
 
     type_synonyms: Dict[str, List[str]] = {
-        "payment": ["payment", "paid", "receipt", "remittance", "banktransfer", "directdebit", "ddpayment", "cashreceipt"],
+        "payment": [
+            "payment",
+            "paid",
+            "receipt",
+            "remittance",
+            "banktransfer",
+            "directdebit",
+            "ddpayment",
+            "cashreceipt",
+        ],
         "credit_note": ["creditnote", "credit", "creditmemo", "crn", "cr", "cn"],
         "invoice": ["invoice", "inv", "taxinvoice", "bill"],
     }
@@ -342,7 +349,12 @@ def guess_statement_item_type(
 
                 if score > type_best:
                     type_best = score
-                    type_details[doc_type] = {"synonym": syn_norm, "token": token, "score": score, "source": "token"}
+                    type_details[doc_type] = {
+                        "synonym": syn_norm,
+                        "token": token,
+                        "score": score,
+                        "source": "token",
+                    }
 
         if type_best > best_score:
             best_score = type_best

@@ -58,14 +58,14 @@ from utils import (
     is_allowed_pdf,
     mark_statement_completed,
     match_invoices_to_statement_items,
+    persist_item_types_to_dynamo,
     prepare_display_mappings,
     route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
-    start_textraction_state_machine,
     set_all_statement_items_completed,
     set_statement_item_completed,
-    persist_item_types_to_dynamo,
+    start_textraction_state_machine,
     statement_json_s3_key,
     statement_pdf_s3_key,
     upload_statement_to_s3,
@@ -200,7 +200,7 @@ def trigger_tenant_sync(tenant_id: str):
         return jsonify({"error": "Missing OAuth token"}), 400
 
     try:
-        _executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token) # TODO: Perhaps worth checking if there is row in DDB/files in S3
+        _executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token)  # TODO: Perhaps worth checking if there is row in DDB/files in S3
         logger.info("Manual tenant sync triggered", tenant_id=tenant_id)
         return jsonify({"started": True}), 202
     except Exception as exc:
@@ -225,9 +225,23 @@ def tenant_management():
     error = session.pop("tenant_error", None)
 
     active_tenant = next((t for t in tenants if t.get("tenantId") == active_tenant_id), None)
-    logger.info("Rendering tenant_management page", active_tenant_id=active_tenant_id, tenants=len(tenants), has_message=bool(message), has_error=bool(error), authenticated=bool(session.get("access_token")))
+    logger.info(
+        "Rendering tenant_management page",
+        active_tenant_id=active_tenant_id,
+        tenants=len(tenants),
+        has_message=bool(message),
+        has_error=bool(error),
+        authenticated=bool(session.get("access_token")),
+    )
 
-    return render_template("tenant_management.html", tenants=tenants, active_tenant_id=active_tenant_id, active_tenant=active_tenant, message=message, error=error)
+    return render_template(
+        "tenant_management.html",
+        tenants=tenants,
+        active_tenant_id=active_tenant_id,
+        active_tenant=active_tenant,
+        message=message,
+        error=error,
+    )
 
 
 @app.route("/favicon.ico")
@@ -251,14 +265,23 @@ def upload_statements():
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     success_count: Optional[int] = None
     error_messages: List[str] = []
-    logger.info("Rendering upload statements", tenant_id=tenant_id, available_contacts=len(contacts_list))
+    logger.info(
+        "Rendering upload statements",
+        tenant_id=tenant_id,
+        available_contacts=len(contacts_list),
+    )
 
     uploads_ok = 0
     if request.method == "POST":
         files = [f for f in request.files.getlist("statements") if f and f.filename]
         names = request.form.getlist("contact_names")
         uploads_ok = 0
-        logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
+        logger.info(
+            "Upload statements submitted",
+            tenant_id=tenant_id,
+            files=len(files),
+            names=len(names),
+        )
         if not files:
             logger.info("Please add at least one statement (PDF).")
         elif len(files) != len(names):
@@ -276,23 +299,49 @@ def upload_statements():
                 contact_name = contact.strip()
                 contact_id: Optional[str] = contact_lookup.get(contact_name)
                 if not contact_id:
-                    logger.warning("Upload blocked; contact not found", tenant_id=tenant_id, contact_name=contact_name, statement_filename=f.filename)
+                    logger.warning(
+                        "Upload blocked; contact not found",
+                        tenant_id=tenant_id,
+                        contact_name=contact_name,
+                        statement_filename=f.filename,
+                    )
                     error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")
                     continue
 
                 try:
                     get_contact_config(tenant_id, contact_id)
                 except KeyError:
-                    logger.warning("Upload blocked; contact config missing", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=f.filename)
+                    logger.warning(
+                        "Upload blocked; contact config missing",
+                        tenant_id=tenant_id,
+                        contact_id=contact_id,
+                        contact_name=contact_name,
+                        statement_filename=f.filename,
+                    )
                     error_messages.append(f"Contact '{contact_name}' does not have a statement config yet. Please configure it before uploading.")
                     continue
                 except Exception as exc:
-                    logger.exception("Upload blocked; config lookup failed", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=f.filename, error=exc)
+                    logger.exception(
+                        "Upload blocked; config lookup failed",
+                        tenant_id=tenant_id,
+                        contact_id=contact_id,
+                        contact_name=contact_name,
+                        statement_filename=f.filename,
+                        error=exc,
+                    )
                     error_messages.append(f"Could not load the config for '{contact_name}'. Please try again later.")
                     continue
 
                 statement_id = str(uuid.uuid4())
-                logger.info("Preparing statement upload", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_id=statement_id, statement_filename=f.filename, bytes=file_bytes)
+                logger.info(
+                    "Preparing statement upload",
+                    tenant_id=tenant_id,
+                    contact_id=contact_id,
+                    contact_name=contact_name,
+                    statement_id=statement_id,
+                    statement_filename=f.filename,
+                    bytes=file_bytes,
+                )
 
                 entry = {
                     "statement_id": statement_id,
@@ -304,13 +353,30 @@ def upload_statements():
                 # Upload pdf statement to S3
                 pdf_statement_key = statement_pdf_s3_key(tenant_id, statement_id)
                 upload_statement_to_s3(fs_like=f, key=pdf_statement_key)
-                logger.info("Uploaded statement PDF", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, s3_key=pdf_statement_key)
+                logger.info(
+                    "Uploaded statement PDF",
+                    tenant_id=tenant_id,
+                    contact_id=contact_id,
+                    statement_id=statement_id,
+                    s3_key=pdf_statement_key,
+                )
 
                 # Upload statement to ddb
                 add_statement_to_table(tenant_id, entry)
-                logger.info("Registered statement metadata", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, table_entry=entry)
+                logger.info(
+                    "Registered statement metadata",
+                    tenant_id=tenant_id,
+                    contact_id=contact_id,
+                    statement_id=statement_id,
+                    table_entry=entry,
+                )
 
-                logger.info("Statement submitted", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id)
+                logger.info(
+                    "Statement submitted",
+                    statement_id=statement_id,
+                    tenant_id=tenant_id,
+                    contact_id=contact_id,
+                )
 
                 # Kick off background textraction so it's ready by the time the user views it
                 json_statement_key = statement_json_s3_key(tenant_id, statement_id)
@@ -344,9 +410,19 @@ def upload_statements():
 
         if uploads_ok:
             success_count = uploads_ok
-        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=[msg for msg in error_messages])
+        logger.info(
+            "Upload statements processed",
+            tenant_id=tenant_id,
+            succeeded=uploads_ok,
+            errors=[msg for msg in error_messages],
+        )
 
-    return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages)
+    return render_template(
+        "upload_statements.html",
+        contacts=contacts_list,
+        success_count=success_count,
+        error_messages=error_messages,
+    )
 
 
 @app.route("/instructions")
@@ -354,6 +430,7 @@ def upload_statements():
 @route_handler_logging
 def instructions():
     return render_template("instructions.html")
+
 
 @app.route("/statements")
 @active_tenant_required("Please select a tenant to view statements.")
@@ -444,11 +521,24 @@ def statements():
 
     sort_links = {
         "contact": url_for("statements", **dict(base_args, sort="contact", dir=next_dir_for("contact"))),
-        "date_range": url_for("statements", **dict(base_args, sort="date_range", dir=next_dir_for("date_range"))),
-        "uploaded": url_for("statements", **dict(base_args, sort="uploaded", dir=next_dir_for("uploaded"))),
+        "date_range": url_for(
+            "statements",
+            **dict(base_args, sort="date_range", dir=next_dir_for("date_range")),
+        ),
+        "uploaded": url_for(
+            "statements",
+            **dict(base_args, sort="uploaded", dir=next_dir_for("uploaded")),
+        ),
     }
 
-    logger.info("Rendering statements", tenant_id=tenant_id, view=view, sort=sort_key, direction=current_dir, statements=len(statement_rows))
+    logger.info(
+        "Rendering statements",
+        tenant_id=tenant_id,
+        view=view,
+        sort=sort_key,
+        direction=current_dir,
+        statements=len(statement_rows),
+    )
 
     return render_template(
         "statements.html",
@@ -473,10 +563,16 @@ def delete_statement(statement_id: str):
         delete_statement_data(tenant_id, statement_id)
         session["statements_message"] = "Statement deleted."
     except Exception as exc:
-        logger.exception("Failed to delete statement", tenant_id=tenant_id, statement_id=statement_id, error=exc)
+        logger.exception(
+            "Failed to delete statement",
+            tenant_id=tenant_id,
+            statement_id=statement_id,
+            error=exc,
+        )
         session["tenant_error"] = "Unable to delete the statement. Please try again."
 
     return redirect(url_for("statements"))
+
 
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @active_tenant_required("Please select a tenant to view statements.")
@@ -496,7 +592,14 @@ def statement(statement_id: str):
         items_view = "incomplete"
     show_payments_raw = (request.values.get("show_payments") or "true").strip().lower()
     show_payments = show_payments_raw in {"true", "1", "yes", "on"}
-    logger.info("Statement detail requested", tenant_id=tenant_id, statement_id=statement_id, items_view=items_view, show_payments=show_payments, method=request.method)
+    logger.info(
+        "Statement detail requested",
+        tenant_id=tenant_id,
+        statement_id=statement_id,
+        items_view=items_view,
+        show_payments=show_payments,
+        method=request.method,
+    )
 
     contact_name = ""
     if record:
@@ -516,12 +619,29 @@ def statement(statement_id: str):
                 try:
                     set_all_statement_items_completed(tenant_id, statement_id, completed_flag)
                 except Exception as exc:
-                    logger.exception("Failed to toggle all statement items", statement_id=statement_id, tenant_id=tenant_id, desired_state=completed_flag, error=exc)
+                    logger.exception(
+                        "Failed to toggle all statement items",
+                        statement_id=statement_id,
+                        tenant_id=tenant_id,
+                        desired_state=completed_flag,
+                        error=exc,
+                    )
 
-                session["statements_message"] = ("Statement marked as complete." if completed_flag else "Statement marked as incomplete.")
-                logger.info("Statement completion updated", tenant_id=tenant_id, statement_id=statement_id, completed=completed_flag)
+                session["statements_message"] = "Statement marked as complete." if completed_flag else "Statement marked as incomplete."
+                logger.info(
+                    "Statement completion updated",
+                    tenant_id=tenant_id,
+                    statement_id=statement_id,
+                    completed=completed_flag,
+                )
             except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception("Failed to toggle statement completion", statement_id=statement_id, tenant_id=tenant_id, desired_state=completed_flag, error=exc)
+                logger.exception(
+                    "Failed to toggle statement completion",
+                    statement_id=statement_id,
+                    tenant_id=tenant_id,
+                    desired_state=completed_flag,
+                    error=exc,
+                )
                 abort(500)
             return redirect(url_for("statements"))
 
@@ -531,19 +651,49 @@ def statement(statement_id: str):
                 desired_state = action == "complete_item"
                 try:
                     set_statement_item_completed(tenant_id, statement_item_id, desired_state)
-                    logger.info("Statement item updated", tenant_id=tenant_id, statement_id=statement_id, statement_item_id=statement_item_id, completed=desired_state)
+                    logger.info(
+                        "Statement item updated",
+                        tenant_id=tenant_id,
+                        statement_id=statement_id,
+                        statement_item_id=statement_item_id,
+                        completed=desired_state,
+                    )
                 except Exception as exc:
-                    logger.exception("Failed to toggle statement item completion", statement_id=statement_id, statement_item_id=statement_item_id, tenant_id=tenant_id, desired_state=desired_state, error=exc)
-            return redirect(url_for("statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false"))
+                    logger.exception(
+                        "Failed to toggle statement item completion",
+                        statement_id=statement_id,
+                        statement_item_id=statement_item_id,
+                        tenant_id=tenant_id,
+                        desired_state=desired_state,
+                        error=exc,
+                    )
+            return redirect(
+                url_for(
+                    "statement",
+                    statement_id=statement_id,
+                    items_view=items_view,
+                    show_payments="true" if show_payments else "false",
+                )
+            )
 
     json_statement_key = statement_json_s3_key(tenant_id, statement_id)
 
     contact_id = record.get("ContactID")
     is_completed = str(record.get("Completed", "")).lower() == "true"
     try:
-        data, _ = fetch_json_statement(tenant_id=tenant_id, contact_id=contact_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
+        data, _ = fetch_json_statement(
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            bucket=S3_BUCKET_NAME,
+            json_key=json_statement_key,
+        )
     except StatementJSONNotFoundError:
-        logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
+        logger.info(
+            "Statement JSON pending",
+            tenant_id=tenant_id,
+            statement_id=statement_id,
+            json_key=json_statement_key,
+        )
         return render_template(
             "statement.html",
             statement_id=statement_id,
@@ -571,7 +721,14 @@ def statement(statement_id: str):
     invoices = get_invoices_by_contact(contact_id) or []
     credit_notes = get_credit_notes_by_contact(contact_id) or []
     payments = get_payments_by_contact(contact_id) or []
-    logger.info("Fetched Xero documents", statement_id=statement_id, contact_id=contact_id, invoices=len(invoices), credit_notes=len(credit_notes), payments=len(payments))
+    logger.info(
+        "Fetched Xero documents",
+        statement_id=statement_id,
+        contact_id=contact_id,
+        invoices=len(invoices),
+        credit_notes=len(credit_notes),
+        payments=len(payments),
+    )
 
     docs_for_matching = invoices + credit_notes
     matched_invoice_to_statement_item = match_invoices_to_statement_items(
@@ -593,9 +750,15 @@ def statement(statement_id: str):
             continue
         doc_type = str(doc.get("type") or "").upper()
         if doc.get("credit_note_id") or doc_type.endswith("CREDIT"):
-            match_by_item_id[statement_item_id] = {"type": "credit_note", "source": "credit_note_match"}
+            match_by_item_id[statement_item_id] = {
+                "type": "credit_note",
+                "source": "credit_note_match",
+            }
         else:
-            match_by_item_id[statement_item_id] = {"type": "invoice", "source": "invoice_match"}
+            match_by_item_id[statement_item_id] = {
+                "type": "invoice",
+                "source": "invoice_match",
+            }
 
     invoice_number_by_id: Dict[str, str] = {}
     for inv in invoices:
@@ -659,7 +822,14 @@ def statement(statement_id: str):
             it["item_type"] = new_type
             if statement_item_id:
                 classification_updates[statement_item_id] = new_type
-            logger.info("Statement item type updated", statement_id=statement_id, statement_item_id=statement_item_id, new_type=new_type, previous_type=current_type or "", source=source)
+            logger.info(
+                "Statement item type updated",
+                statement_id=statement_id,
+                statement_item_id=statement_item_id,
+                new_type=new_type,
+                previous_type=current_type or "",
+                source=source,
+            )
 
     item_types = [str((it.get("item_type") if isinstance(it, dict) else "") or "").strip().lower() for it in items]
 
@@ -667,12 +837,24 @@ def statement(statement_id: str):
         try:
             json_payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
             upload_statement_to_s3(BytesIO(json_payload), json_statement_key)
-            logger.info("Persisted statement item types to S3", statement_id=statement_id, updated=len(classification_updates))
+            logger.info(
+                "Persisted statement item types to S3",
+                statement_id=statement_id,
+                updated=len(classification_updates),
+            )
         except Exception as exc:
-            logger.exception("Failed to persist statement JSON", statement_id=statement_id, error=str(exc))
+            logger.exception(
+                "Failed to persist statement JSON",
+                statement_id=statement_id,
+                error=str(exc),
+            )
 
         persist_item_types_to_dynamo(tenant_id, classification_updates)
-        logger.info("Persisted statement item types to DynamoDB", statement_id=statement_id, updated=len(classification_updates))
+        logger.info(
+            "Persisted statement item types to DynamoDB",
+            statement_id=statement_id,
+            updated=len(classification_updates),
+        )
 
     # 3) Build right-hand rows from the matched invoices
     date_fmt = get_date_format_from_config(contact_config)
@@ -735,7 +917,12 @@ def statement(statement_id: str):
         fill_warning = PatternFill(fill_type="solid", fgColor="FFEB9C")
         font_completed = Font(color="808080")
         mismatch_side = Side(style="thin", color="E6B8B7")
-        mismatch_border = Border(left=mismatch_side, right=mismatch_side, top=mismatch_side, bottom=mismatch_side)
+        mismatch_border = Border(
+            left=mismatch_side,
+            right=mismatch_side,
+            top=mismatch_side,
+            bottom=mismatch_side,
+        )
         divider_side = Side(style="medium", color="808080")
         statement_col_count = len(header_labels)
         statement_end_col = 1 + statement_col_count
@@ -817,9 +1004,19 @@ def statement(statement_id: str):
                     for target_col in (2 + col_idx, 2 + col_count + col_idx):
                         cell = worksheet.cell(row=current_row, column=target_col)
                         if target_col == statement_end_col:
-                            cell.border = Border(left=mismatch_side, right=divider_side, top=mismatch_side, bottom=mismatch_side)
+                            cell.border = Border(
+                                left=mismatch_side,
+                                right=divider_side,
+                                top=mismatch_side,
+                                bottom=mismatch_side,
+                            )
                         elif target_col == xero_start_col:
-                            cell.border = Border(left=divider_side, right=mismatch_side, top=mismatch_side, bottom=mismatch_side)
+                            cell.border = Border(
+                                left=divider_side,
+                                right=mismatch_side,
+                                top=mismatch_side,
+                                bottom=mismatch_side,
+                            )
                         else:
                             cell.border = mismatch_border
 
@@ -829,7 +1026,10 @@ def statement(statement_id: str):
         excel_payload = output.getvalue()
         output.close()
 
-        response = app.response_class(excel_payload, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        response = app.response_class(
+            excel_payload,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
         earliest_date_raw = record.get("EarliestItemDate")
         latest_date_raw = record.get("LatestItemDate")
@@ -866,7 +1066,13 @@ def statement(statement_id: str):
         download_name = "_".join(parts) + "_export.xlsx"
 
         response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
-        logger.info("Statement Excel generated", tenant_id=tenant_id, statement_id=statement_id, rows=row_count, excel_filename=download_name)
+        logger.info(
+            "Statement Excel generated",
+            tenant_id=tenant_id,
+            statement_id=statement_id,
+            rows=row_count,
+            excel_filename=download_name,
+        )
         return response
 
     statement_rows: List[Dict[str, Any]] = []
@@ -918,10 +1124,7 @@ def statement(statement_id: str):
                 "matches": row_matches[idx] if idx < len(row_matches) else False,
                 "is_completed": is_item_completed,
                 "flags": flags,
-                "item_type": (
-                    (item.get("item_type") if isinstance(item, dict) else None)
-                    or (item_types[idx] if idx < len(item_types) else "invoice")
-                ),
+                "item_type": ((item.get("item_type") if isinstance(item, dict) else None) or (item_types[idx] if idx < len(item_types) else "invoice")),
                 "xero_invoice_id": xero_invoice_id,
                 "xero_credit_note_id": xero_credit_note_id,
             }
@@ -941,7 +1144,17 @@ def statement(statement_id: str):
     if not show_payments:
         visible_rows = [row for row in visible_rows if row.get("item_type") != "payment"]
 
-    logger.info("Statement detail rendered", tenant_id=tenant_id, statement_id=statement_id, visible=len(visible_rows), total=len(statement_rows), completed=completed_count, incomplete=incomplete_count, items_view=items_view, show_payments=show_payments)
+    logger.info(
+        "Statement detail rendered",
+        tenant_id=tenant_id,
+        statement_id=statement_id,
+        visible=len(visible_rows),
+        total=len(statement_rows),
+        completed=completed_count,
+        incomplete=incomplete_count,
+        items_view=items_view,
+        show_payments=show_payments,
+    )
 
     return render_template(
         "statement.html",
@@ -996,13 +1209,26 @@ def disconnect_tenant():
 
     connection_id = tenant.get("connectionId")
     access_token = session.get("access_token")
-    logger.info("Tenant disconnect submitted", tenant_id=tenant_id, has_connection=bool(connection_id))
+    logger.info(
+        "Tenant disconnect submitted",
+        tenant_id=tenant_id,
+        has_connection=bool(connection_id),
+    )
 
     if connection_id and access_token:
         try:
-            resp = requests.delete(f"https://api.xero.com/connections/{connection_id}", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
+            resp = requests.delete(
+                f"https://api.xero.com/connections/{connection_id}",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=20,
+            )
             if resp.status_code not in (200, 204):
-                logger.error("Failed to disconnect tenant", tenant_id=tenant_id, status_code=resp.status_code, body=resp.text)
+                logger.error(
+                    "Failed to disconnect tenant",
+                    tenant_id=tenant_id,
+                    status_code=resp.status_code,
+                    body=resp.text,
+                )
                 session["tenant_error"] = "Unable to disconnect tenant from Xero."
                 return redirect(url_for("tenant_management"))
         except Exception as exc:
@@ -1024,6 +1250,7 @@ def disconnect_tenant():
         return redirect(url_for("index"))
     return redirect(url_for("tenant_management"))
 
+
 @app.route("/configs", methods=["GET", "POST"])
 @active_tenant_required("Please select a tenant before configuring mappings.")
 @xero_token_required
@@ -1038,7 +1265,6 @@ def configs():
     contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     logger.info("Rendering configs", tenant_id=tenant_id, contacts=len(contacts_list))
-
 
     selected_contact_name: Optional[str] = None
     selected_contact_id: Optional[str] = None
@@ -1102,10 +1328,19 @@ def configs():
             # Load existing config for the chosen contact name
             selected_contact_name = (request.form.get("contact_name") or "").strip()
             selected_contact_id = contact_lookup.get(selected_contact_name)
-            logger.info("Config load submitted", tenant_id=tenant_id, contact_name=selected_contact_name, contact_id=selected_contact_id)
+            logger.info(
+                "Config load submitted",
+                tenant_id=tenant_id,
+                contact_name=selected_contact_name,
+                contact_id=selected_contact_id,
+            )
             if not selected_contact_id:
                 error = "Please select a valid contact."
-                logger.info("Config load failed", tenant_id=tenant_id, contact_name=selected_contact_name)
+                logger.info(
+                    "Config load failed",
+                    tenant_id=tenant_id,
+                    contact_name=selected_contact_name,
+                )
             else:
                 try:
                     cfg = get_contact_config(tenant_id, selected_contact_id)
@@ -1114,7 +1349,12 @@ def configs():
                     selected_decimal_separator = _normalize_decimal_separator(str(cfg.get("decimal_separator", "")))
                     selected_thousands_separator = _normalize_thousands_separator(str(cfg.get("thousands_separator", "")))
                     selected_date_format = str((cfg.get("date_format") or "")) if isinstance(cfg, dict) else ""
-                    logger.info("Config loaded", tenant_id=tenant_id, contact_id=selected_contact_id, keys=len(cfg) if isinstance(cfg, dict) else 0)
+                    logger.info(
+                        "Config loaded",
+                        tenant_id=tenant_id,
+                        contact_id=selected_contact_id,
+                        keys=len(cfg) if isinstance(cfg, dict) else 0,
+                    )
                 except KeyError:
                     # No existing config: show canonical fields with empty mapping values
                     mapping_rows = _build_rows({})
@@ -1122,16 +1362,30 @@ def configs():
                     selected_thousands_separator = DEFAULT_THOUSANDS_SEPARATOR
                     selected_date_format = ""
                     message = "No existing config found. You can create one below."
-                    logger.info("Config not found", tenant_id=tenant_id, contact_id=selected_contact_id)
+                    logger.info(
+                        "Config not found",
+                        tenant_id=tenant_id,
+                        contact_id=selected_contact_id,
+                    )
                 except Exception as e:
                     error = f"Failed to load config: {e}"
-                    logger.info("Config load error", tenant_id=tenant_id, contact_id=selected_contact_id, error=e)
+                    logger.info(
+                        "Config load error",
+                        tenant_id=tenant_id,
+                        contact_id=selected_contact_id,
+                        error=e,
+                    )
 
         elif action == "save_map":
             # Save edited mapping
             selected_contact_id = request.form.get("contact_id")
             selected_contact_name = request.form.get("contact_name")
-            logger.info("Config save submitted", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name)
+            logger.info(
+                "Config save submitted",
+                tenant_id=tenant_id,
+                contact_id=selected_contact_id,
+                contact_name=selected_contact_name,
+            )
             try:
                 try:
                     existing = get_contact_config(tenant_id, selected_contact_id)
@@ -1179,12 +1433,23 @@ def configs():
                         "thousands_separator": selected_thousands_separator,
                     }
                     set_contact_config(tenant_id, selected_contact_id, to_save)
-                    logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name, config=to_save)
+                    logger.info(
+                        "Contact config saved",
+                        tenant_id=tenant_id,
+                        contact_id=selected_contact_id,
+                        contact_name=selected_contact_name,
+                        config=to_save,
+                    )
                     message = "Config updated successfully."
                     mapping_rows = _build_rows(to_save)
             except Exception as e:
                 error = f"Failed to save config: {e}"
-                logger.info("Config save failed", tenant_id=tenant_id, contact_id=selected_contact_id, error=e)
+                logger.info(
+                    "Config save failed",
+                    tenant_id=tenant_id,
+                    contact_id=selected_contact_id,
+                    error=e,
+                )
 
     example_rows = _build_rows(EXAMPLE_CONFIG)
     example_date_format = str(EXAMPLE_CONFIG.get("date_format") or "")
@@ -1215,6 +1480,7 @@ def configs():
         thousands_separator_labels=thousands_separator_labels,
     )
 
+
 @app.route("/login")
 @route_handler_logging
 def login():
@@ -1240,13 +1506,22 @@ def login():
     logger.info("Redirecting to Xero authorization", scope_count=len(scope_str().split()))
     return redirect(f"{AUTH_URL}?{urllib.parse.urlencode(params)}")
 
+
 @app.route("/callback")
 @route_handler_logging
 def callback():
     # Handle user-denied or error cases
     if "error" in request.args:
-        logger.error("OAuth error", error_code=400, error_description=request.args.get('error_description'), error=request.args['error'])
-        return f"OAuth error: {request.args.get('error_description', request.args['error'])}", 400
+        logger.error(
+            "OAuth error",
+            error_code=400,
+            error_description=request.args.get("error_description"),
+            error=request.args["error"],
+        )
+        return (
+            f"OAuth error: {request.args.get('error_description', request.args['error'])}",
+            400,
+        )
 
     code = request.args.get("code")
     state = request.args.get("state")
@@ -1325,6 +1600,7 @@ def callback():
     logger.info("OAuth callback processed", tenants=len(tenants))
     return redirect(url_for("tenant_management"))
 
+
 @app.route("/logout")
 @route_handler_logging
 def logout():
@@ -1333,11 +1609,11 @@ def logout():
     return redirect(url_for("index"))
 
 
-@app.route('/.well-known/<path:path>')
+@app.route("/.well-known/<path:path>")
 def chrome_devtools_ping(path):
     # Avoids 404 error being logged when chrome developer tools is open
     # /.well-known/appspecific/com.chrome.devtools.json
-    return '', 204  # No content, indicates "OK but nothing here"
+    return "", 204  # No content, indicates "OK but nothing here"
 
 
 if __name__ == "__main__":

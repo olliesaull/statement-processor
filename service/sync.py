@@ -16,13 +16,19 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
 from botocore.exceptions import ClientError
+from xero_python.accounting import AccountingApi
 
 import cache_provider
 from config import S3_BUCKET_NAME, logger, s3_client, tenant_data_table
-from xero_repository import XeroType, get_contacts_from_xero, get_credit_notes, get_invoices, get_payments
-from utils import get_xero_api_client
-from xero_python.accounting import AccountingApi
 from tenant_data_repository import TenantDataRepository, TenantStatus
+from utils import get_xero_api_client
+from xero_repository import (
+    XeroType,
+    get_contacts_from_xero,
+    get_credit_notes,
+    get_invoices,
+    get_payments,
+)
 
 STAGE = os.getenv("STAGE")
 # Local cache used to merge incremental syncs with previously downloaded data.
@@ -61,7 +67,12 @@ def _sync_resource(
                 with open(local_path, encoding="utf-8") as existing_file:
                     existing_payload = json.load(existing_file)
             except (OSError, json.JSONDecodeError, TypeError) as exc:
-                logger.warning("Failed to load existing dataset", tenant_id=tenant_id, resource=resource, error=str(exc))
+                logger.warning(
+                    "Failed to load existing dataset",
+                    tenant_id=tenant_id,
+                    resource=resource,
+                    error=str(exc),
+                )
 
         # Merge incremental results with any cached data so we retain the full dataset.
         if modified_since:
@@ -84,7 +95,11 @@ def _sync_resource(
         return True
 
     except Exception:
-        logger.exception("Unexpected error syncing resource", tenant_id=tenant_id, resource=resource_filename)
+        logger.exception(
+            "Unexpected error syncing resource",
+            tenant_id=tenant_id,
+            resource=resource_filename,
+        )
         return False
 
 
@@ -192,22 +207,54 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
 
 def sync_contacts(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
     """Sync contact data from Xero."""
-    return _sync_resource(api, tenant_id, get_contacts_from_xero, XeroType.CONTACTS, "Syncing contacts", "Synced contacts", modified_since=modified_since)
+    return _sync_resource(
+        api,
+        tenant_id,
+        get_contacts_from_xero,
+        XeroType.CONTACTS,
+        "Syncing contacts",
+        "Synced contacts",
+        modified_since=modified_since,
+    )
 
 
 def sync_credit_notes(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
     """Sync credit note data from Xero."""
-    return _sync_resource(api, tenant_id, get_credit_notes, XeroType.CREDIT_NOTES, "Syncing credit notes", "Synced credit notes", modified_since=modified_since)
+    return _sync_resource(
+        api,
+        tenant_id,
+        get_credit_notes,
+        XeroType.CREDIT_NOTES,
+        "Syncing credit notes",
+        "Synced credit notes",
+        modified_since=modified_since,
+    )
 
 
 def sync_invoices(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
     """Sync invoice data from Xero."""
-    return _sync_resource(api, tenant_id, get_invoices, XeroType.INVOICES, "Syncing invoices", "Synced invoices", modified_since=modified_since)
+    return _sync_resource(
+        api,
+        tenant_id,
+        get_invoices,
+        XeroType.INVOICES,
+        "Syncing invoices",
+        "Synced invoices",
+        modified_since=modified_since,
+    )
 
 
 def sync_payments(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
     """Sync payment data from Xero."""
-    return _sync_resource(api, tenant_id, get_payments, XeroType.PAYMENTS, "Syncing payments", "Synced payments", modified_since=modified_since)
+    return _sync_resource(
+        api,
+        tenant_id,
+        get_payments,
+        XeroType.PAYMENTS,
+        "Syncing payments",
+        "Synced payments",
+        modified_since=modified_since,
+    )
 
 
 def check_load_required(tenant_id: str) -> bool:
@@ -232,9 +279,16 @@ def check_load_required(tenant_id: str) -> bool:
                 logger.info("Seeded tenant record with LOADING status", tenant_id=tenant_id)
             except ClientError as exc:
                 if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
-                    logger.exception("Failed to seed tenant status for new tenant", tenant_id=tenant_id)
+                    logger.exception(
+                        "Failed to seed tenant status for new tenant",
+                        tenant_id=tenant_id,
+                    )
 
-        logger.info("Checked tenant sync requirement", tenant_id=tenant_id, sync_required=load_required)
+        logger.info(
+            "Checked tenant sync requirement",
+            tenant_id=tenant_id,
+            sync_required=load_required,
+        )
 
         return load_required
 
@@ -243,7 +297,11 @@ def check_load_required(tenant_id: str) -> bool:
         return True  # In case of failure, assume sync is required as a safe fallback
 
 
-def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantStatus.FREE, last_sync_time: Optional[int] = None) -> bool:
+def update_tenant_status(
+    tenant_id: str,
+    tenant_status: TenantStatus = TenantStatus.FREE,
+    last_sync_time: Optional[int] = None,
+) -> bool:
     """Persist the tenant's status in DynamoDB and cache."""
     if not tenant_id:
         logger.error("Missing TenantID while marking sync state")
@@ -262,7 +320,12 @@ def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantSta
             UpdateExpression=update_expression,
             ExpressionAttributeValues=expression_values,
         )
-        logger.info("Updated tenant sync state", tenant_id=tenant_id, tenant_status=tenant_status, last_sync_time=last_sync_time)
+        logger.info(
+            "Updated tenant sync state",
+            tenant_id=tenant_id,
+            tenant_status=tenant_status,
+            last_sync_time=last_sync_time,
+        )
         cache_provider.set_tenant_status_cache(tenant_id, tenant_status)
         return True
     except ClientError:
@@ -270,7 +333,11 @@ def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantSta
         return False
 
 
-def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: Optional[Dict[str, Any]] = None) -> None:
+def sync_data(
+    tenant_id: str,
+    operation_type: TenantStatus,
+    oauth_token: Optional[Dict[str, Any]] = None,
+) -> None:
     """Sync all datasets for a tenant and update tenant status."""
     tenant_record = TenantDataRepository.get_item(tenant_id)
     modified_since: Optional[datetime] = None

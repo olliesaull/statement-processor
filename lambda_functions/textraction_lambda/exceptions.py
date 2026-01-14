@@ -13,9 +13,7 @@ class ItemCountDisagreementError(Exception):
         summary: Optional[Dict[str, Any]] = None,
         message: Optional[str] = None,
     ) -> None:
-        msg = message or (
-            f"PDF/Textract item count mismatch: pdfplumber={pdfplumber_count}, textract={textract_count}"
-        )
+        msg = message or (f"PDF/Textract item count mismatch: pdfplumber={pdfplumber_count}, textract={textract_count}")
         super().__init__(msg)
         self.summary = summary
         self.pdfplumber_count = pdfplumber_count

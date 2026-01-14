@@ -16,7 +16,6 @@ from datetime import date, datetime
 from functools import lru_cache
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
-
 TOKEN_ORDER: Sequence[str] = (
     "YYYY",
     "MMMM",
@@ -43,16 +42,8 @@ TOKEN_REGEX = {
     "dddd": r"(?P<{name}>[A-Za-z]+)",
 }
 
-MONTH_NAME_TO_NUM = {
-    name.lower(): idx
-    for idx, name in enumerate(calendar.month_name)
-    if name
-}
-MONTH_ABBR_TO_NUM = {
-    abbr.lower(): idx
-    for idx, abbr in enumerate(calendar.month_abbr)
-    if abbr
-}
+MONTH_NAME_TO_NUM = {name.lower(): idx for idx, name in enumerate(calendar.month_name) if name}
+MONTH_ABBR_TO_NUM = {abbr.lower(): idx for idx, abbr in enumerate(calendar.month_abbr) if abbr}
 MONTH_NAME_TO_NUM["sept"] = 9  # common alternative abbreviation
 
 
@@ -67,7 +58,15 @@ def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]
         return None
 
     prepared = _prepare_template(template)
-    regex, group_order, tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal = prepared
+    (
+        regex,
+        group_order,
+        tokens,
+        has_textual_month,
+        numeric_month,
+        numeric_day,
+        uses_ordinal,
+    ) = prepared
     match = regex.match(s)
     if not match:
         return None
@@ -271,7 +270,15 @@ def _prepare_template(template: str):
     numeric_month = any(t in {"M", "MM"} for t in flat_tokens)
     numeric_day = any(t in {"D", "DD"} for t in flat_tokens)
     uses_ordinal = any(t == "Do" for t in flat_tokens)
-    return regex, tuple(group_order), tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal
+    return (
+        regex,
+        tuple(group_order),
+        tokens,
+        has_textual_month,
+        numeric_month,
+        numeric_day,
+        uses_ordinal,
+    )
 
 
 def _tokens_to_regex(

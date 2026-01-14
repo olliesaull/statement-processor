@@ -115,8 +115,7 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
     keys_to_delete: List[str] = []
     existing_status: Dict[str, bool] = {}
     query_kwargs: Dict[str, Any] = {
-        "KeyConditionExpression": Key("TenantID").eq(tenant_id)
-        & Key("StatementID").begins_with(f"{statement_id}#item-"),
+        "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("StatementID").begins_with(f"{statement_id}#item-"),
         "ProjectionExpression": "#sid, #completed",
         "ExpressionAttributeNames": {"#sid": "StatementID", "#completed": "Completed"},
     }
@@ -139,15 +138,9 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
 
     try:
         # Read the statement header to use its completion flag as a default for new rows.
-        header_resp = tenant_statements_table.get_item(
-            Key={"TenantID": tenant_id, "StatementID": statement_id}
-        )
+        header_resp = tenant_statements_table.get_item(Key={"TenantID": tenant_id, "StatementID": statement_id})
         header_item = header_resp.get("Item") if isinstance(header_resp, dict) else None
-        header_completed = (
-            str(header_item.get("Completed", "false")).strip().lower() == "true"
-            if header_item
-            else False
-        )
+        header_completed = str(header_item.get("Completed", "false")).strip().lower() == "true" if header_item else False
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning(
             "Failed to fetch statement header completion flag",
@@ -176,11 +169,7 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
                 continue
 
             # Sanitize values so they can be stored safely in DynamoDB (numbers as Decimal, etc.).
-            sanitized_payload = {
-                key: _sanitize_for_dynamodb(value)
-                for key, value in item.items()
-                if value is not None
-            }
+            sanitized_payload = {key: _sanitize_for_dynamodb(value) for key, value in item.items() if value is not None}
             sanitized_payload["statement_item_id"] = item_id
 
             record: Dict[str, Any] = {
@@ -190,9 +179,7 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
                 "ParentStatementID": statement_id,
                 "RecordType": "statement_item",
                 # Preserve per-item completion flags if they already exist; otherwise inherit from header.
-                "Completed": "true"
-                if existing_status.get(item_id, header_completed)
-                else "false",
+                "Completed": "true" if existing_status.get(item_id, header_completed) else "false",
             }
             if contact_id:
                 record["ContactID"] = contact_id
@@ -253,9 +240,7 @@ def run_textraction(
 
     logger.info("Textract statement processing", job_id=job_id, key=key)
     # Convert grids into a structured statement using contact-specific mapping/config (see `core/transform.py`).
-    statement = table_to_json(
-        tables_wp, tenant_id, contact_id, statement_id=statement_id
-    )
+    statement = table_to_json(tables_wp, tenant_id, contact_id, statement_id=statement_id)
     item_count = len(statement.get("statement_items", []) or [])
     logger.info(
         "Built statement JSON",
@@ -300,21 +285,15 @@ def run_textraction(
         )
 
     # Flag outliers without removing them, so downstream consumers can inspect anomalies
-    statement, summary = apply_outlier_flags(
-        statement, remove=False, one_based_index=True
-    )
+    statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True)
     logger.info("Performed anomaly detection", summary=json.dumps(summary, indent=2))
 
     # Upload the enriched JSON back to S3 for the caller to consume
     # StepFunctions passes `jsonKey` into this Lambda; writing to that key is how we publish the output artifact.
-    buf = io.BytesIO(
-        json.dumps(statement, ensure_ascii=False, indent=2).encode("utf-8")
-    )
+    buf = io.BytesIO(json.dumps(statement, ensure_ascii=False, indent=2).encode("utf-8"))
     buf.seek(0)
 
-    s3_client.put_object(
-        Bucket=bucket or S3_BUCKET_NAME, Key=json_key, Body=buf.getvalue()
-    )
+    s3_client.put_object(Bucket=bucket or S3_BUCKET_NAME, Key=json_key, Body=buf.getvalue())
     logger.info("Uploaded statement JSON", bucket=bucket, json_key=json_key)
 
     if tenant_statements_table is not None:

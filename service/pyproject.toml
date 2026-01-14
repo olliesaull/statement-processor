@@ -1,7 +1,7 @@
 [project]
-name = "statement-processor-textraction-lambda"
+name = "statement-processor-service"
 version = "1.0.0"
-description = "Statement Processor - Textraction Lambda Function"
+description = "Statement Processor - Service"
 requires-python = ">=3.13"
 
 # Ruff configuration for linting and formatting

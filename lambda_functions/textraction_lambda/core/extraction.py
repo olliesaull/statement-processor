@@ -88,11 +88,7 @@ def _sanitize_grid(grid: List[List[str]]) -> List[List[str]]:
         return []
 
     # 2) Remove fully-empty columns across the remaining rows.
-    keep_cols = [
-        idx
-        for idx in range(len(meaningful_rows[0]))
-        if any(row[idx].strip() for row in meaningful_rows)
-    ]
+    keep_cols = [idx for idx in range(len(meaningful_rows[0])) if any(row[idx].strip() for row in meaningful_rows)]
     if not keep_cols:
         return []
 
@@ -118,9 +114,7 @@ def _sanitize_grid(grid: List[List[str]]) -> List[List[str]]:
     return [[row[idx] for idx in keep_dedup] for row in cleaned]
 
 
-def _extract_text_for_block(
-    block_map: Dict[str, Dict[str, Any]], block: Dict[str, Any]
-) -> str:
+def _extract_text_for_block(block_map: Dict[str, Dict[str, Any]], block: Dict[str, Any]) -> str:
     """
     Convert a Textract `CELL` block into a single text string.
 
@@ -140,10 +134,7 @@ def _extract_text_for_block(
                 txt = (child.get("Text") or "").strip()
                 if txt:
                     texts.append(txt)
-            elif (
-                child.get("BlockType") == "SELECTION_ELEMENT"
-                and child.get("SelectionStatus") == "SELECTED"
-            ):
+            elif child.get("BlockType") == "SELECTION_ELEMENT" and child.get("SelectionStatus") == "SELECTED":
                 texts.append("X")
     return " ".join(texts)
 
@@ -192,9 +183,7 @@ def _extract_tables_from_blocks(blocks: List[Dict[str, Any]]) -> List[TableOnPag
 
         # Textract uses 1-based row/column indices; size the grid from the max indices seen.
         max_row = max(int(c.get("RowIndex") or 0) for c in cells if isinstance(c, dict))
-        max_col = max(
-            int(c.get("ColumnIndex") or 0) for c in cells if isinstance(c, dict)
-        )
+        max_col = max(int(c.get("ColumnIndex") or 0) for c in cells if isinstance(c, dict))
         grid = [["" for _ in range(max_col)] for _ in range(max_row)]
 
         for cell in cells:
@@ -254,7 +243,5 @@ def get_tables_for_job(job_id: str) -> Dict[str, List[TableOnPage]]:
         result[job_id] = analyze_tables_job(job_id)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Failures are logged and swallowed so the caller can decide how to handle missing tables.
-        logger.exception(
-            "Textract result fetch failed", job_id=job_id, error=str(exc), exc_info=True
-        )
+        logger.exception("Textract result fetch failed", job_id=job_id, error=str(exc), exc_info=True)
     return result
