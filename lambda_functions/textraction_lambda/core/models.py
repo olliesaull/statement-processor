@@ -6,12 +6,12 @@ These are small, focused schemas that:
 - Provide a typed representation of extracted statement data (`StatementItem`, `SupplierStatement`)
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # `total` values can arrive as numbers or numeric-looking strings; we normalize them into a simple union.
-Number = Union[int, float, str]
+Number = int | float | str
 
 
 class TextractionEvent(BaseModel):
@@ -29,7 +29,7 @@ class TextractionEvent(BaseModel):
     contact_id: str = Field(alias="contactId")
     pdf_key: str = Field(alias="pdfKey")
     json_key: str = Field(alias="jsonKey")
-    pdf_bucket: Optional[str] = Field(default=None, alias="pdfBucket")
+    pdf_bucket: str | None = Field(default=None, alias="pdfBucket")
 
 
 class StatementItem(BaseModel):
@@ -37,12 +37,12 @@ class StatementItem(BaseModel):
 
     # These fields are populated by `core/transform.table_to_json`.
     statement_item_id: str = ""
-    date: Optional[str] = ""
-    number: Optional[str] = ""
-    total: Dict[str, Number] = Field(default_factory=dict)
+    date: str | None = ""
+    number: str | None = ""
+    total: dict[str, Number] = Field(default_factory=dict)
     item_type: str = "invoice"
-    due_date: Optional[str] = ""
-    reference: Optional[str] = ""
+    due_date: str | None = ""
+    reference: str | None = ""
     raw: dict = Field(default_factory=dict)
 
     @classmethod
@@ -62,12 +62,12 @@ class StatementItem(BaseModel):
 
     @field_validator("total", mode="before")
     @classmethod
-    def _coerce_total(cls, v: Any) -> Dict[str, Number]:
+    def _coerce_total(cls, v: Any) -> dict[str, Number]:
         # Normalize `total` into a simple `{label: value}` mapping regardless of the input shape.
         def _coerce_val(val: Any) -> Number:
             return cls._coerce_number(val)
 
-        coerced: Dict[str, Number] = {}
+        coerced: dict[str, Number] = {}
 
         if v is None:
             return {}
@@ -93,6 +93,6 @@ class StatementItem(BaseModel):
 class SupplierStatement(BaseModel):
     """Top-level container for extracted statement rows."""
 
-    statement_items: List[StatementItem] = Field(default_factory=list)
-    earliest_item_date: Optional[str] = None
-    latest_item_date: Optional[str] = None
+    statement_items: list[StatementItem] = Field(default_factory=list)
+    earliest_item_date: str | None = None
+    latest_item_date: str | None = None

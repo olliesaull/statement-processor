@@ -18,7 +18,7 @@ or attached to the output for inspection.
 
 import re
 from collections import Counter
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from config import logger
 
@@ -26,7 +26,7 @@ FLAG_LABEL = "ml-outlier"
 
 # Keyword token rules used by `_keyword_hit` to mark suspicious lines.
 # Each entry is: (required_tokens, human_label)
-SUSPECT_TOKEN_RULES: List[Tuple[set[str], str]] = [
+SUSPECT_TOKEN_RULES: list[tuple[set[str], str]] = [
     ({"brought", "forward"}, "brought forward"),
     ({"carried", "forward"}, "carried forward"),
     ({"balance", "forward"}, "balance forward"),
@@ -67,7 +67,7 @@ def _normalize_text(value: Any) -> str:
     return text.strip()
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     """Split normalized text into tokens, dropping empty tokens."""
     return [tok for tok in text.split() if tok]
 
@@ -110,7 +110,7 @@ def _has_text(value: Any) -> bool:
     return str(value).strip() != ""
 
 
-def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_based_index: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:  # pylint: disable=too-many-locals,too-many-branches
+def apply_outlier_flags(statement: dict[str, Any], *, remove: bool = False, one_based_index: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:  # pylint: disable=too-many-locals,too-many-branches
     """
     Flag suspicious statement items (and optionally remove them).
 
@@ -132,15 +132,15 @@ def apply_outlier_flags(statement: Dict[str, Any], *, remove: bool = False, one_
 
     logger.debug("Outlier flagging start", total_items=len(items), remove=remove)
 
-    flagged_items: List[Dict[str, Any]] = []
-    flagged_indices: List[int] = []
+    flagged_items: list[dict[str, Any]] = []
+    flagged_indices: list[int] = []
     rule_counter: Counter[str] = Counter()
 
     for idx, item in enumerate(items):
         # We track both high-level "issues" (for counting) and structured "details"
         # so consumers can understand exactly what was detected.
-        issues: List[str] = []
-        details: List[Dict[str, Any]] = []
+        issues: list[str] = []
+        details: list[dict[str, Any]] = []
 
         number_val = item.get("number")
         reference_val = item.get("reference")

@@ -8,7 +8,7 @@ This handler:
 - Returns a structured response for downstream state handling
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -17,7 +17,7 @@ from core.models import TextractionEvent
 from core.textract_statement import run_textraction
 
 
-def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:  # pylint: disable=unused-argument
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # pylint: disable=unused-argument
     """Validate the incoming event and orchestrate the textraction run."""
     # Entry point for AWS Lambda: validate input and orchestrate textraction.
     logger.info(

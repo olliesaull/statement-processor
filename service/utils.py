@@ -3,12 +3,13 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
@@ -60,7 +61,7 @@ SCOPES = [
 _DDB_UPDATE_MAX_WORKERS = max(4, min(16, (os.cpu_count() or 4)))
 
 
-def get_xero_oauth2_token() -> Optional[dict]:
+def get_xero_oauth2_token() -> dict | None:
     """Return the token dict the SDK expects, or None if not set."""
     return session.get("xero_oauth2_token")
 
@@ -70,14 +71,14 @@ def save_xero_oauth2_token(token: dict) -> None:
     session["xero_oauth2_token"] = token
 
 
-def get_xero_api_client(oauth_token: Optional[dict] = None) -> AccountingApi:
+def get_xero_api_client(oauth_token: dict | None = None) -> AccountingApi:
     """Create a thread-safe AccountingApi client, optionally seeded with a specific token."""
     if oauth_token is None:
         token_getter = get_xero_oauth2_token
         token_saver = save_xero_oauth2_token
     else:
 
-        def token_getter() -> Optional[dict]:
+        def token_getter() -> dict | None:
             return oauth_token
 
         def token_saver(new_token: dict) -> None:
@@ -98,7 +99,7 @@ def get_xero_api_client(oauth_token: Optional[dict] = None) -> AccountingApi:
     return AccountingApi(api_client)
 
 
-def _norm_number(x: Any) -> Optional[Decimal]:
+def _norm_number(x: Any) -> Decimal | None:
     """Return Decimal if x looks numeric (incl. currency/commas); else None."""
     if x is None:
         return None
@@ -128,14 +129,14 @@ def _equal(a: Any, b: Any) -> bool:
     return sa.casefold() == sb.casefold()
 
 
-def _query_statements_by_completed(tenant_id: Optional[str], completed_value: str) -> List[Dict[str, Any]]:
+def _query_statements_by_completed(tenant_id: str | None, completed_value: str) -> list[dict[str, Any]]:
     """Query statements for a tenant filtered by the Completed flag via GSI."""
     if not tenant_id:
         logger.info("Skipping statement query; tenant missing", completed=completed_value)
         return []
 
-    items: List[Dict[str, Any]] = []
-    kwargs: Dict[str, Any] = {
+    items: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {
         "IndexName": "TenantIDCompletedIndex",
         "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("Completed").eq(completed_value),
         "FilterExpression": Attr("RecordType").not_exists() | Attr("RecordType").eq("statement"),
@@ -171,7 +172,7 @@ def _query_statements_by_completed(tenant_id: Optional[str], completed_value: st
     return items
 
 
-def get_statement_record(tenant_id: str, statement_id: str) -> Optional[Dict[str, Any]]:
+def get_statement_record(tenant_id: str, statement_id: str) -> dict[str, Any] | None:
     """Return the full DynamoDB record for a tenant/statement pair."""
     logger.info("Fetching statement record", tenant_id=tenant_id, statement_id=statement_id)
     response = tenant_statements_table.get_item(
@@ -232,7 +233,7 @@ def raise_for_unauthorized(error: Exception) -> None:
             raise RedirectToLogin()
 
 
-def get_cached_tenant_status(tenant_id: str) -> Optional[TenantStatus]:
+def get_cached_tenant_status(tenant_id: str) -> TenantStatus | None:
     """Retrieve tenant status from cache, falling back to DynamoDB if missing."""
     if not tenant_id:
         return None
@@ -368,10 +369,10 @@ def route_handler_logging(function):
 
 
 def persist_item_types_to_dynamo(
-    tenant_id: Optional[str],
-    classification_updates: Dict[str, str],
+    tenant_id: str | None,
+    classification_updates: dict[str, str],
     *,
-    max_workers: Optional[int] = None,
+    max_workers: int | None = None,
 ) -> None:
     """Update DynamoDB item types using a thread pool to hide network latency."""
     if not tenant_id or not classification_updates:
@@ -381,7 +382,7 @@ def persist_item_types_to_dynamo(
     worker_count = max_workers or _DDB_UPDATE_MAX_WORKERS
     worker_count = min(worker_count, len(items)) or 1
 
-    def _update(entry: Tuple[str, str]) -> None:
+    def _update(entry: tuple[str, str]) -> None:
         statement_item_id, new_type = entry
         try:
             tenant_statements_table.update_item(
@@ -413,7 +414,7 @@ def is_allowed_pdf(filename: str, mimetype: str) -> bool:
     return ext_ok and mime_ok
 
 
-def fmt_date(d: Any) -> Optional[str]:
+def fmt_date(d: Any) -> str | None:
     """Format datetime/date to ISO date string, else None."""
     if isinstance(d, (datetime, date)):
         return d.strftime("%Y-%m-%d")
@@ -437,14 +438,14 @@ def fmt_invoice_data(inv):
     }
 
 
-def get_incomplete_statements() -> List[Dict[str, Any]]:
+def get_incomplete_statements() -> list[dict[str, Any]]:
     """Return statements for the active tenant that are not completed."""
     tenant_id = session.get("xero_tenant_id")
     logger.info("Fetching incomplete statements", tenant_id=tenant_id)
     return _query_statements_by_completed(tenant_id, "false")
 
 
-def get_completed_statements() -> List[Dict[str, Any]]:
+def get_completed_statements() -> list[dict[str, Any]]:
     """Return statements for the active tenant that are marked completed."""
     tenant_id = session.get("xero_tenant_id")
     logger.info("Fetching completed statements", tenant_id=tenant_id)
@@ -465,7 +466,7 @@ def mark_statement_completed(tenant_id: str, statement_id: str, completed: bool)
     )
 
 
-def get_statement_item_status_map(tenant_id: str, statement_id: str) -> Dict[str, bool]:
+def get_statement_item_status_map(tenant_id: str, statement_id: str) -> dict[str, bool]:
     """Return completion status for each statement item keyed by statement_item_id."""
     if not tenant_id or not statement_id:
         return {}
@@ -475,9 +476,9 @@ def get_statement_item_status_map(tenant_id: str, statement_id: str) -> Dict[str
         tenant_id=tenant_id,
         statement_id=statement_id,
     )
-    statuses: Dict[str, bool] = {}
+    statuses: dict[str, bool] = {}
     prefix = f"{statement_id}#item-"
-    kwargs: Dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("StatementID").begins_with(prefix),
         "ProjectionExpression": "#sid, #completed",
         "ExpressionAttributeNames": {"#sid": "StatementID", "#completed": "Completed"},
@@ -528,7 +529,7 @@ def set_all_statement_items_completed(tenant_id: str, statement_id: str, complet
     if not statuses:
         return
 
-    for statement_item_id in statuses.keys():
+    for statement_item_id in statuses:
         set_statement_item_completed(tenant_id, statement_item_id, completed)
 
 
@@ -541,7 +542,7 @@ def delete_statement_data(tenant_id: str, statement_id: str) -> None:
 
     # Delete statement header and statement items linked to this statement
     item_prefix = f"{statement_id}"
-    query_kwargs: Dict[str, Any] = {
+    query_kwargs: dict[str, Any] = {
         "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("StatementID").begins_with(item_prefix),
         "ProjectionExpression": "#sid",
         "ExpressionAttributeNames": {"#sid": "StatementID"},
@@ -605,7 +606,7 @@ def delete_statement_data(tenant_id: str, statement_id: str) -> None:
     )
 
 
-def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
+def add_statement_to_table(tenant_id: str, entry: dict[str, str]) -> None:
     item = {
         "TenantID": tenant_id,
         "StatementID": entry["statement_id"],
@@ -613,7 +614,7 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
         "ContactID": entry["contact_id"],
         "ContactName": entry["contact_name"],
         # Store upload time in UTC for sorting/filtering
-        "UploadedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "UploadedAt": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "Completed": "false",
         "RecordType": "statement",
     }
@@ -634,7 +635,7 @@ def add_statement_to_table(tenant_id: str, entry: Dict[str, str]) -> None:
         raise
 
 
-def _clean_key_segment(value: Optional[str], label: str) -> str:
+def _clean_key_segment(value: str | None, label: str) -> str:
     segment = (value or "").strip()
     if not segment:
         raise ValueError(f"{label} is required for S3 key construction")
@@ -684,7 +685,7 @@ class StatementJSONNotFoundError(Exception):
     """Raised when the structured JSON for a statement is not yet available."""
 
 
-def fetch_json_statement(tenant_id: str, contact_id: str, bucket: str, json_key: str) -> Tuple[Dict[str, Any], FileStorage]:
+def fetch_json_statement(tenant_id: str, contact_id: str, bucket: str, json_key: str) -> tuple[dict[str, Any], FileStorage]:
     """Download and return the JSON statement from S3.
 
     Raises:
@@ -788,9 +789,9 @@ _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
 
 def _normalize_separators(
     value: Any,
-    decimal_separator: Optional[str] = None,
-    thousands_separator: Optional[str] = None,
-) -> Optional[str]:
+    decimal_separator: str | None = None,
+    thousands_separator: str | None = None,
+) -> str | None:
     """Normalize a raw numeric string using configured separators."""
     if value is None or value == "":
         return None
@@ -818,9 +819,9 @@ def _normalize_separators(
 def _to_decimal(
     x: Any,
     *,
-    decimal_separator: Optional[str] = None,
-    thousands_separator: Optional[str] = None,
-) -> Optional[Decimal]:
+    decimal_separator: str | None = None,
+    thousands_separator: str | None = None,
+) -> Decimal | None:
     if x is None or x == "":
         return None
     normalized = _normalize_separators(x, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
@@ -849,8 +850,8 @@ def _to_decimal(
 def format_money(
     x: Any,
     *,
-    decimal_separator: Optional[str] = None,
-    thousands_separator: Optional[str] = None,
+    decimal_separator: str | None = None,
+    thousands_separator: str | None = None,
 ) -> str:
     """Format a number with thousands separators and 2 decimals.
 
@@ -862,7 +863,7 @@ def format_money(
     return f"{d:,.2f}"
 
 
-def get_items_template_from_config(contact_config: Dict[str, Any]) -> Dict[str, Any]:
+def get_items_template_from_config(contact_config: dict[str, Any]) -> dict[str, Any]:
     """
     Return the items template mapping from a contact config.
 
@@ -885,7 +886,7 @@ def get_items_template_from_config(contact_config: Dict[str, Any]) -> Dict[str, 
     return contact_config
 
 
-def get_date_format_from_config(contact_config: Dict[str, Any]) -> Optional[str]:
+def get_date_format_from_config(contact_config: dict[str, Any]) -> str | None:
     """Extract the configured date format from a contact configuration."""
     if not isinstance(contact_config, dict):
         return None
@@ -901,8 +902,8 @@ _DEFAULT_THOUSANDS_SEPARATOR = ","
 
 
 def get_number_separators_from_config(
-    contact_config: Dict[str, Any],
-) -> Tuple[str, str]:
+    contact_config: dict[str, Any],
+) -> tuple[str, str]:
     """Return (decimal_separator, thousands_separator) with sensible defaults."""
     if not isinstance(contact_config, dict):
         return _DEFAULT_DECIMAL_SEPARATOR, _DEFAULT_THOUSANDS_SEPARATOR
@@ -924,7 +925,7 @@ def get_number_separators_from_config(
     )
 
 
-def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, str]], Dict[str, str], Optional[str]]:
+def prepare_display_mappings(items: list[dict], contact_config: dict[str, Any]) -> tuple[list[str], list[dict[str, str]], dict[str, str], str | None]:
     """
     Build the display headers, filtered left rows, header->invoice_field map,
     and detect which header corresponds to the invoice "number".
@@ -939,7 +940,7 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
         return " ".join(str(s or "").split()).strip().lower()
 
     items_template = get_items_template_from_config(contact_config)
-    header_to_field_norm: Dict[str, str] = {}
+    header_to_field_norm: dict[str, str] = {}
     # Simple (string) mappings first
     for canonical_field, mapped in (items_template or {}).items():
         if canonical_field in {"raw", "date_format", "item_type"}:
@@ -957,8 +958,8 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
 
     # Only display headers present in the mapping (case-insensitive match),
     # and ensure at most one header per canonical field (e.g., only one amount column).
-    header_to_field: Dict[str, str] = {}
-    display_headers: List[str] = []
+    header_to_field: dict[str, str] = {}
+    display_headers: list[str] = []
     for h in raw_headers:
         canon = header_to_field_norm.get(_n(h))
         if not canon:
@@ -968,7 +969,7 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
 
     # Re-order the display headers to prefer familiar Xero columns when present.
     preferred_field_order = ["date", "due_date", "number", "total"]
-    ordered_headers: List[str] = []
+    ordered_headers: list[str] = []
     for canonical_field in preferred_field_order:
         header_match = next(
             (hdr for hdr in display_headers if header_to_field.get(hdr) == canonical_field),
@@ -983,13 +984,13 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
     display_headers = ordered_headers
 
     # Convert raw rows into dicts filtered by display headers, normalizing date fields for display
-    rows_by_header: List[Dict[str, str]] = []
+    rows_by_header: list[dict[str, str]] = []
     date_fmt = get_date_format_from_config(contact_config)
     dec_sep, thou_sep = get_number_separators_from_config(contact_config)
     numeric_fields = {"total"}
     for it in items:
         raw = it.get("raw", {}) if isinstance(it, dict) else {}
-        row: Dict[str, str] = {}
+        row: dict[str, str] = {}
         for h in display_headers:
             v = raw.get(h, "")
             # If this header maps to a canonical date field, normalize to the configured format
@@ -997,17 +998,14 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
             if canon in {"date", "due_date"}:
                 dt = coerce_datetime_with_template(v, date_fmt)
                 if dt is not None:
-                    if date_fmt:
-                        v = format_iso_with(dt, date_fmt)
-                    else:
-                        v = dt.strftime("%Y-%m-%d")
+                    v = format_iso_with(dt, date_fmt) if date_fmt else dt.strftime("%Y-%m-%d")
             elif canon in numeric_fields:
                 v = format_money(v, decimal_separator=dec_sep, thousands_separator=thou_sep)
             row[h] = v
         rows_by_header.append(row)
 
     # Identify which header maps to the canonical "number" field
-    item_number_header: Optional[str] = None
+    item_number_header: str | None = None
     for h in display_headers:
         if header_to_field.get(h) == "number":
             item_number_header = h
@@ -1017,11 +1015,11 @@ def prepare_display_mappings(items: List[Dict], contact_config: Dict[str, Any]) 
 
 
 def match_invoices_to_statement_items(
-    items: List[Dict],
-    rows_by_header: List[Dict[str, str]],
-    item_number_header: Optional[str],
-    invoices: List[Dict],
-) -> Dict[str, Dict]:
+    items: list[dict],
+    rows_by_header: list[dict[str, str]],
+    item_number_header: str | None,
+    invoices: list[dict],
+) -> dict[str, dict]:
     """
     Build mapping from statement invoice number -> { invoice, statement_item, match_type, match_score, matched_invoice_number }.
 
@@ -1031,12 +1029,12 @@ def match_invoices_to_statement_items(
          e.g. "Invoice # INV-12345" contains "INV12345".
       No generic fuzzy similarity to avoid near-number false positives.
     """
-    matched: Dict[str, Dict] = {}
+    matched: dict[str, dict] = {}
     if not item_number_header:
         return matched
 
     # Build fast lookup for statement items by their displayed invoice number
-    stmt_by_number: Dict[str, Dict] = {}
+    stmt_by_number: dict[str, dict] = {}
     for it in items:
         raw = it.get("raw", {}) if isinstance(it, dict) else {}
         num = raw.get(item_number_header, "")
@@ -1158,15 +1156,15 @@ def match_invoices_to_statement_items(
 
 
 def build_right_rows(
-    rows_by_header: List[Dict[str, str]],
-    display_headers: List[str],
-    header_to_field: Dict[str, str],
-    matched_map: Dict[str, Dict],
-    item_number_header: Optional[str],
-    date_format: Optional[str] = None,
-    decimal_separator: Optional[str] = None,
-    thousands_separator: Optional[str] = None,
-) -> List[Dict[str, str]]:
+    rows_by_header: list[dict[str, str]],
+    display_headers: list[str],
+    header_to_field: dict[str, str],
+    matched_map: dict[str, dict],
+    item_number_header: str | None,
+    date_format: str | None = None,
+    decimal_separator: str | None = None,
+    thousands_separator: str | None = None,
+) -> list[dict[str, str]]:
     """
     Using the matched map, build the right-hand table rows with values from
     the invoice, aligned to the same display headers and row order as the left.
@@ -1223,17 +1221,17 @@ def build_right_rows(
 
 
 def build_row_comparisons(
-    left_rows: List[Dict[str, str]],
-    right_rows: List[Dict[str, str]],
-    display_headers: List[str],
-    header_to_field: Optional[Dict[str, str]] = None,
-) -> List[List[CellComparison]]:
+    left_rows: list[dict[str, str]],
+    right_rows: list[dict[str, str]],
+    display_headers: list[str],
+    header_to_field: dict[str, str] | None = None,
+) -> list[list[CellComparison]]:
     """
     Build per-cell comparison objects for each row.
     """
-    comparisons: List[List[CellComparison]] = []
-    for left, right in zip(left_rows, right_rows):
-        row_cells: List[CellComparison] = []
+    comparisons: list[list[CellComparison]] = []
+    for left, right in zip(left_rows, right_rows, strict=False):
+        row_cells: list[CellComparison] = []
         for header in display_headers:
             left_val = left.get(header, "") if isinstance(left, dict) else ""
             right_val = right.get(header, "") if isinstance(right, dict) else ""

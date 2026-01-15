@@ -47,7 +47,7 @@ graph and reconstructs a clean 2D grid per table so later stages can map headers
 to fields and emit structured statement JSON.
 """
 
-from typing import Any, Dict, List, Optional, TypedDict, cast
+from typing import Any, TypedDict, cast
 
 from config import logger, textract_client
 
@@ -63,10 +63,10 @@ class TableOnPage(TypedDict):
     """
 
     page: int
-    grid: List[List[str]]
+    grid: list[list[str]]
 
 
-def _sanitize_grid(grid: List[List[str]]) -> List[List[str]]:
+def _sanitize_grid(grid: list[list[str]]) -> list[list[str]]:
     """
     Clean a raw rectangular table grid built from Textract `CELL` coordinates.
 
@@ -98,7 +98,7 @@ def _sanitize_grid(grid: List[List[str]]) -> List[List[str]]:
 
     # 3) Deduplicate columns by signature (header + all values below it).
     seen_signatures = set()
-    keep_dedup: List[int] = []
+    keep_dedup: list[int] = []
     for col_idx in range(len(cleaned[0])):
         header = (cleaned[0][col_idx] or "").strip().lower()
         column_values = tuple((row[col_idx] or "").strip() for row in cleaned[1:])
@@ -114,7 +114,7 @@ def _sanitize_grid(grid: List[List[str]]) -> List[List[str]]:
     return [[row[idx] for idx in keep_dedup] for row in cleaned]
 
 
-def _extract_text_for_block(block_map: Dict[str, Dict[str, Any]], block: Dict[str, Any]) -> str:
+def _extract_text_for_block(block_map: dict[str, dict[str, Any]], block: dict[str, Any]) -> str:
     """
     Convert a Textract `CELL` block into a single text string.
 
@@ -124,7 +124,7 @@ def _extract_text_for_block(block_map: Dict[str, Dict[str, Any]], block: Dict[st
 
     This function walks the child ids and concatenates tokens into the cell's text.
     """
-    texts: List[str] = []
+    texts: list[str] = []
     for rel in block.get("Relationships", []):
         if rel.get("Type") != "CHILD":
             continue
@@ -139,7 +139,7 @@ def _extract_text_for_block(block_map: Dict[str, Dict[str, Any]], block: Dict[st
     return " ".join(texts)
 
 
-def _extract_tables_from_blocks(blocks: List[Dict[str, Any]]) -> List[TableOnPage]:  # pylint: disable=too-many-locals
+def _extract_tables_from_blocks(blocks: list[dict[str, Any]]) -> list[TableOnPage]:  # pylint: disable=too-many-locals
     """
     Reconstruct table grids from the flat `Blocks` list returned by Textract.
 
@@ -157,21 +157,21 @@ def _extract_tables_from_blocks(blocks: List[Dict[str, Any]]) -> List[TableOnPag
     Returns a list of `TableOnPage` entries sorted by page.
     """
     # Build an index for quick lookup
-    block_map: Dict[str, Dict[str, Any]] = {}
+    block_map: dict[str, dict[str, Any]] = {}
     for block in blocks:
         if not isinstance(block, dict):
             continue
         block_id = block.get("Id")
         if isinstance(block_id, str):
             block_map[block_id] = block
-    tables: List[TableOnPage] = []
+    tables: list[TableOnPage] = []
 
     # We only care about `TABLE` blocks; everything else is reached via relationships.
     for block in blocks:
         if not isinstance(block, dict) or block.get("BlockType") != "TABLE":
             continue
         page = int(block.get("Page") or 1)
-        cell_ids: List[str] = []
+        cell_ids: list[str] = []
         for rel in block.get("Relationships", []):
             if rel.get("Type") == "CHILD":
                 cell_ids.extend(rel.get("Ids", []))
@@ -205,22 +205,22 @@ def _extract_tables_from_blocks(blocks: List[Dict[str, Any]]) -> List[TableOnPag
     return tables
 
 
-def analyze_tables_job(job_id: str) -> List[TableOnPage]:
+def analyze_tables_job(job_id: str) -> list[TableOnPage]:
     """
     Fetch and parse Textract table results for a completed job id.
 
     `get_document_analysis` is paginated. We call it repeatedly, following `NextToken`,
     until all blocks are retrieved, then extract tables by reconstructing grids from the block graph.
     """
-    blocks: List[Dict[str, Any]] = []
-    next_token: Optional[str] = None
+    blocks: list[dict[str, Any]] = []
+    next_token: str | None = None
     while True:
-        params: Dict[str, Any] = {"JobId": job_id}
+        params: dict[str, Any] = {"JobId": job_id}
         if next_token:
             params["NextToken"] = next_token
         # Textract paginates; keep calling until `NextToken` is absent.
         resp = textract_client.get_document_analysis(**params)
-        raw_blocks = cast(List[Dict[str, Any]], resp.get("Blocks", []))
+        raw_blocks = cast(list[dict[str, Any]], resp.get("Blocks", []))
         blocks.extend(raw_blocks)
         next_token = resp.get("NextToken")
         if not next_token:
@@ -230,7 +230,7 @@ def analyze_tables_job(job_id: str) -> List[TableOnPage]:
     return _extract_tables_from_blocks(blocks)
 
 
-def get_tables_for_job(job_id: str) -> Dict[str, List[TableOnPage]]:
+def get_tables_for_job(job_id: str) -> dict[str, list[TableOnPage]]:
     """
     Convenience wrapper used by the main workflow (`run_textraction`).
 
@@ -238,7 +238,7 @@ def get_tables_for_job(job_id: str) -> Dict[str, List[TableOnPage]]:
     the job that produced them. Any exceptions are logged and swallowed, because
     downstream steps may choose to proceed (or fail) based on missing table data.
     """
-    result: Dict[str, List[TableOnPage]] = {}
+    result: dict[str, list[TableOnPage]] = {}
     try:
         result[job_id] = analyze_tables_job(job_id)
     except Exception as exc:  # pylint: disable=broad-exception-caught

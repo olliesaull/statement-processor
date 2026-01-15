@@ -17,10 +17,7 @@ AWS_PROFILE = os.getenv("AWS_PROFILE")
 
 logger: Logger = Logger()
 
-if AWS_PROFILE:
-    session = boto3.session.Session(region_name=AWS_REGION, profile_name=AWS_PROFILE)
-else:
-    session = boto3.session.Session(region_name=AWS_REGION)
+session = boto3.session.Session(region_name=AWS_REGION, profile_name=AWS_PROFILE) if AWS_PROFILE else boto3.session.Session(region_name=AWS_REGION)
 s3_client: S3Client = session.client("s3")
 textract_client: TextractClient = session.client("textract")
 ddb: DynamoDBServiceResource = session.resource("dynamodb")

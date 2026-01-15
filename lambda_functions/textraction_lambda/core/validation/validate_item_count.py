@@ -20,16 +20,17 @@ If a mismatch is detected, `validate_references_roundtrip` raises
 Reference is what Xero call the 'Number' of an item (e.g. invoice number).
 """
 
+import contextlib
 import io
 import re
-from typing import Any, Dict, List, Set, Union
+from typing import Any
 
 import pdfplumber
 
 from config import logger
 from exceptions import ItemCountDisagreementError
 
-PdfInput = Union[str, bytes, bytearray, io.BytesIO, Any]
+PdfInput = str | bytes | bytearray | io.BytesIO | Any
 
 
 def _normalise(s: str) -> str:
@@ -44,7 +45,7 @@ def _normalise(s: str) -> str:
 
 
 def make_family_regex_from_examples(
-    refs: List[str],
+    refs: list[str],
     digit_prefix_len: int = 3,
     min_samples_for_prefixing: int = 3,
     coverage_threshold: float = 0.6,
@@ -64,8 +65,8 @@ def make_family_regex_from_examples(
         return re.compile(r"$^")
 
     # Split references into (letters prefix, digits tail) families; keep non-matching refs as literals.
-    families: Dict[str, List[str]] = {}
-    leftovers: List[str] = []
+    families: dict[str, list[str]] = {}
+    leftovers: list[str] = []
     for s in ex_norm:
         m = re.fullmatch(r"([A-Z]*)(\d+)", s)
         if not m:
@@ -74,7 +75,7 @@ def make_family_regex_from_examples(
         prefix, digits = m.group(1), m.group(2)
         families.setdefault(prefix, []).append(digits)
 
-    parts: List[str] = []
+    parts: list[str] = []
 
     for prefix, tails in families.items():
         # Digit-length range within this prefix family (e.g. INV + 5..7 digits).
@@ -89,7 +90,7 @@ def make_family_regex_from_examples(
             continue
 
         # If we have enough samples, bucket by the first N digits to reduce false positives.
-        bucket_counts: Dict[str, int] = {}
+        bucket_counts: dict[str, int] = {}
         for t in tails:
             k = t[: min(digit_prefix_len, len(t))]
             bucket_counts[k] = bucket_counts.get(k, 0) + 1
@@ -116,10 +117,7 @@ def make_family_regex_from_examples(
             lo_k, hi_k = min(lens_k), max(lens_k)
             rem_lo = max(0, lo_k - len(k))
             rem_hi = max(0, hi_k - len(k))
-            if rem_lo == rem_hi:
-                pat = rf"{re.escape(prefix)}{re.escape(k)}\d{{{rem_lo}}}"
-            else:
-                pat = rf"{re.escape(prefix)}{re.escape(k)}\d{{{rem_lo},{rem_hi}}}"
+            pat = rf"{re.escape(prefix)}{re.escape(k)}\d{{{rem_lo}}}" if rem_lo == rem_hi else rf"{re.escape(prefix)}{re.escape(k)}\d{{{rem_lo},{rem_hi}}}"
             parts.append(pat)
 
     if leftovers:
@@ -128,7 +126,7 @@ def make_family_regex_from_examples(
     return re.compile("(?:" + "|".join(parts) + ")")
 
 
-def _to_pdf_open_arg(pdf_input: PdfInput) -> Union[str, io.BytesIO, Any]:
+def _to_pdf_open_arg(pdf_input: PdfInput) -> str | io.BytesIO | Any:
     """
     Convert various PDF input types into a value that `pdfplumber.open` accepts.
 
@@ -144,10 +142,8 @@ def _to_pdf_open_arg(pdf_input: PdfInput) -> Union[str, io.BytesIO, Any]:
         return io.BytesIO(pdf_input)
 
     if hasattr(pdf_input, "read"):
-        try:
+        with contextlib.suppress(AttributeError, OSError, ValueError):
             pdf_input.seek(0)
-        except (AttributeError, OSError, ValueError):
-            pass
         return pdf_input
 
     raise TypeError("Unsupported pdf_input type for pdfplumber.open")
@@ -159,7 +155,7 @@ def extract_normalized_pdf_text(pdf_input: PdfInput) -> str:
 
     Note: scanned/image-only PDFs often return little or no text from `page.extract_text()`.
     """
-    chunks: List[str] = []
+    chunks: list[str] = []
     with pdfplumber.open(_to_pdf_open_arg(pdf_input)) as pdf:
         for page in pdf.pages:
             t = page.extract_text()
@@ -168,7 +164,7 @@ def extract_normalized_pdf_text(pdf_input: PdfInput) -> str:
     return _normalise("\n".join(chunks))
 
 
-def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern, ngram_max: int = 5, hard_seps: str = ":.") -> Set[str]:  # pylint: disable=too-many-locals
+def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern, ngram_max: int = 5, hard_seps: str = ":.") -> set[str]:  # pylint: disable=too-many-locals
     """
     Scan PDF text for tokens that match a learned reference regex.
 
@@ -180,7 +176,7 @@ def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern
     `hard_seps` are characters that cause us to skip a span entirely (e.g. ":" or ".")
     to reduce false positives from things like timestamps, section labels, etc.
     """
-    cands: Set[str] = set()
+    cands: set[str] = set()
     with pdfplumber.open(_to_pdf_open_arg(pdf_input)) as pdf:
         for page in pdf.pages:
             text = page.extract_text() or ""
@@ -209,7 +205,7 @@ def extract_pdf_candidates_with_pattern(pdf_input: PdfInput, pattern: re.Pattern
     return cands
 
 
-def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dict], ref_field: str = "reference") -> Dict:  # pylint: disable=too-many-locals
+def validate_references_roundtrip(pdf_input: PdfInput, statement_items: list[dict], ref_field: str = "reference") -> dict:  # pylint: disable=too-many-locals
     """
     Cross-check extracted reference values against the source PDF text.
 
@@ -250,8 +246,8 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: List[Dic
     # JSON -> PDF: check each extracted reference appears somewhere in the PDF text.
     norm_pdf_text = extract_normalized_pdf_text(pdf_input)
     logger.debug("Extracted normalized PDF text", chars=len(norm_pdf_text))
-    found: List[Dict[str, Any]] = []
-    not_found: List[Dict[str, Any]] = []
+    found: list[dict[str, Any]] = []
+    not_found: list[dict[str, Any]] = []
     for i, raw in raw_refs:
         norm_ref = _normalise(raw)
         (found if norm_ref in norm_pdf_text else not_found).append({"index": i, "reference": raw})

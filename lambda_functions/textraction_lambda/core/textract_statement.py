@@ -31,7 +31,7 @@ import io
 import json
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
@@ -76,7 +76,7 @@ def _sanitize_for_dynamodb(value: Any) -> Any:  # pylint: disable=too-many-retur
                 sanitized_list.append(sanitized)
         return sanitized_list
     if isinstance(value, dict):
-        sanitized_dict: Dict[str, Any] = {}
+        sanitized_dict: dict[str, Any] = {}
         for k, v in value.items():
             sanitized = _sanitize_for_dynamodb(v)
             if sanitized is not None:
@@ -87,12 +87,12 @@ def _sanitize_for_dynamodb(value: Any) -> Any:  # pylint: disable=too-many-retur
 
 def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     tenant_id: str,
-    contact_id: Optional[str],
-    statement_id: Optional[str],
-    items: List[Dict[str, Any]],
+    contact_id: str | None,
+    statement_id: str | None,
+    items: list[dict[str, Any]],
     *,
-    earliest_item_date: Optional[str] = None,
-    latest_item_date: Optional[str] = None,
+    earliest_item_date: str | None = None,
+    latest_item_date: str | None = None,
 ) -> None:
     """
     Persist extracted statement line items into the tenant statements DynamoDB table.
@@ -112,9 +112,9 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
         return
 
     # Discover existing item rows so we can delete-and-replace them while preserving completion state.
-    keys_to_delete: List[str] = []
-    existing_status: Dict[str, bool] = {}
-    query_kwargs: Dict[str, Any] = {
+    keys_to_delete: list[str] = []
+    existing_status: dict[str, bool] = {}
+    query_kwargs: dict[str, Any] = {
         "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("StatementID").begins_with(f"{statement_id}#item-"),
         "ProjectionExpression": "#sid, #completed",
         "ExpressionAttributeNames": {"#sid": "StatementID", "#completed": "Completed"},
@@ -172,7 +172,7 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
             sanitized_payload = {key: _sanitize_for_dynamodb(value) for key, value in item.items() if value is not None}
             sanitized_payload["statement_item_id"] = item_id
 
-            record: Dict[str, Any] = {
+            record: dict[str, Any] = {
                 "TenantID": tenant_id,
                 "StatementID": item_id,
                 "StatementItemID": item_id,
@@ -189,9 +189,9 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
 
     if statement_id and (earliest_item_date or latest_item_date):
         # Store derived date range metadata on the statement header for filtering/summaries elsewhere.
-        update_parts: List[str] = []
-        attr_names: Dict[str, str] = {}
-        attr_values: Dict[str, Any] = {}
+        update_parts: list[str] = []
+        attr_names: dict[str, str] = {}
+        attr_values: dict[str, Any] = {}
 
         if earliest_item_date:
             attr_names["#earliestItemDate"] = "EarliestItemDate"
@@ -219,7 +219,7 @@ def run_textraction(
     tenant_id: str,
     contact_id: str,
     statement_id: str,
-) -> Dict[str, Any]:  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+) -> dict[str, Any]:  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     """
     End-to-end processing for a single statement Textract job.
 
@@ -231,7 +231,7 @@ def run_textraction(
     - Flags anomalous rows, uploads JSON to S3, and records the job id on the header
     """
     # Fetch Textract tables for the job and rebuild them into 2D grids (see `core/extraction.py`).
-    tables_by_key: Dict[str, List[TableOnPage]] = get_tables_for_job(job_id)
+    tables_by_key: dict[str, list[TableOnPage]] = get_tables_for_job(job_id)
 
     # `get_tables_for_job` returns a dict keyed by job id; we currently only ever fetch one job.
     tables_wp = next(iter(tables_by_key.values())) if tables_by_key else []

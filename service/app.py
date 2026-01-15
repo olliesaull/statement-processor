@@ -6,7 +6,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import requests
 from flask import (
@@ -135,7 +135,7 @@ THOUSANDS_SEPARATOR_OPTIONS = [
 ]
 
 
-def _trigger_initial_sync_if_required(tenant_id: Optional[str]) -> None:
+def _trigger_initial_sync_if_required(tenant_id: str | None) -> None:
     """Kick off an initial load if the tenant has no cached data yet."""
     if not tenant_id:
         return
@@ -148,7 +148,7 @@ def _trigger_initial_sync_if_required(tenant_id: Optional[str]) -> None:
             _executor.submit(sync_data, tenant_id, TenantStatus.LOADING, oauth_token)
 
 
-def _set_active_tenant(tenant_id: Optional[str]) -> None:
+def _set_active_tenant(tenant_id: str | None) -> None:
     """Persist the selected tenant in the session."""
     tenants = session.get("xero_tenants", []) or []
     tenant_map = {t.get("tenantId"): t for t in tenants if t.get("tenantId")}
@@ -263,8 +263,8 @@ def upload_statements():
     contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
     contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
-    success_count: Optional[int] = None
-    error_messages: List[str] = []
+    success_count: int | None = None
+    error_messages: list[str] = []
     logger.info(
         "Rendering upload statements",
         tenant_id=tenant_id,
@@ -287,7 +287,7 @@ def upload_statements():
         elif len(files) != len(names):
             logger.info("Each statement must have a contact selected.")
         else:
-            for f, contact in zip(files, names):
+            for f, contact in zip(files, names, strict=False):
                 file_bytes = getattr(f, "content_length", None)
                 if not contact.strip():
                     logger.info("Missing contact", statement_filename=f.filename)
@@ -297,7 +297,7 @@ def upload_statements():
                     continue
 
                 contact_name = contact.strip()
-                contact_id: Optional[str] = contact_lookup.get(contact_name)
+                contact_id: str | None = contact_lookup.get(contact_name)
                 if not contact_id:
                     logger.warning(
                         "Upload blocked; contact not found",
@@ -414,7 +414,7 @@ def upload_statements():
             "Upload statements processed",
             tenant_id=tenant_id,
             succeeded=uploads_ok,
-            errors=[msg for msg in error_messages],
+            errors=list(error_messages),
         )
 
     return render_template(
@@ -453,7 +453,7 @@ def statements():
     reverse = current_dir == "desc"
     message = session.pop("statements_message", None)
 
-    def _parse_iso_date(value: object) -> Optional[date]:
+    def _parse_iso_date(value: object) -> date | None:
         if not isinstance(value, str):
             return None
         stripped = value.strip()
@@ -464,7 +464,7 @@ def statements():
         except ValueError:
             return None
 
-    def _parse_iso_datetime(value: object) -> Optional[datetime]:
+    def _parse_iso_datetime(value: object) -> datetime | None:
         if not isinstance(value, str):
             return None
         text = value.strip()
@@ -483,7 +483,7 @@ def statements():
         row["_latest_item_date"] = latest
         row["_uploaded_at"] = _parse_iso_datetime(row.get("UploadedAt"))
         if earliest and latest:
-            row["ItemDateRangeDisplay"] = earliest.isoformat() if earliest == latest else f"{earliest.isoformat()} – {latest.isoformat()}"
+            row["ItemDateRangeDisplay"] = earliest.isoformat() if earliest == latest else f"{earliest.isoformat()} - {latest.isoformat()}"
         elif latest:
             row["ItemDateRangeDisplay"] = latest.isoformat()
         elif earliest:
@@ -508,7 +508,7 @@ def statements():
         row.pop("_latest_item_date", None)
         row.pop("_uploaded_at", None)
 
-    base_args: Dict[str, Any] = {}
+    base_args: dict[str, Any] = {}
     if show_completed:
         base_args["view"] = "completed"
 
@@ -738,8 +738,8 @@ def statement(statement_id: str):
         invoices=docs_for_matching,
     )
 
-    matched_numbers: Set[str] = {key for key in matched_invoice_to_statement_item.keys() if isinstance(key, str)}
-    match_by_item_id: Dict[str, Dict[str, str]] = {}
+    matched_numbers: set[str] = {key for key in matched_invoice_to_statement_item if isinstance(key, str)}
+    match_by_item_id: dict[str, dict[str, str]] = {}
     for match in matched_invoice_to_statement_item.values():
         stmt_item = match.get("statement_item") if isinstance(match, dict) else None
         doc = match.get("invoice") if isinstance(match, dict) else None
@@ -760,14 +760,14 @@ def statement(statement_id: str):
                 "source": "invoice_match",
             }
 
-    invoice_number_by_id: Dict[str, str] = {}
+    invoice_number_by_id: dict[str, str] = {}
     for inv in invoices:
         inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
         inv_number = str(inv.get("number") or "").strip() if isinstance(inv, dict) else ""
         if inv_id and inv_number:
             invoice_number_by_id[str(inv_id)] = inv_number
 
-    payment_number_map: Dict[str, List[Dict[str, Any]]] = {}
+    payment_number_map: dict[str, list[dict[str, Any]]] = {}
     for payment in payments:
         if not isinstance(payment, dict):
             continue
@@ -779,7 +779,7 @@ def statement(statement_id: str):
             continue
         payment_number_map.setdefault(invoice_number, []).append(payment)
 
-    classification_updates: Dict[str, str] = {}
+    classification_updates: dict[str, str] = {}
     for idx, it in enumerate(items):
         if not isinstance(it, dict):
             continue
@@ -790,8 +790,8 @@ def statement(statement_id: str):
         if item_number_header and idx < len(rows_by_header):
             row_number = str(rows_by_header[idx].get(item_number_header) or "").strip()
 
-        new_type: Optional[str]
-        source: Optional[str]
+        new_type: str | None
+        source: str | None
         new_type = None
         source = None
 
@@ -880,7 +880,7 @@ def statement(statement_id: str):
     # Row highlight: if this row is linked to a Xero document (exact or substring),
     # consider the row a "match" for coloring purposes even if some cells differ.
     if item_number_header:
-        row_matches: List[bool] = []
+        row_matches: list[bool] = []
         for r in rows_by_header:
             num = (r.get(item_number_header) or "").strip()
             row_matches.append(bool(num and matched_invoice_to_statement_item.get(num)))
@@ -892,20 +892,17 @@ def statement(statement_id: str):
 
     if request.args.get("download") == "xlsx":
         header_labels = []
-        statement_headers: List[str] = []
-        xero_headers: List[str] = []
+        statement_headers: list[str] = []
+        xero_headers: list[str] = []
 
         for header in display_headers:
             label = (header or "").replace("_", " ").strip()
-            if label:
-                label = label[0].upper() + label[1:]
-            else:
-                label = header or ""
+            label = label[0].upper() + label[1:] if label else header or ""
             header_labels.append((header, label))
             statement_headers.append(f"Statement {label}")
             xero_headers.append(f"Xero {label}")
 
-        excel_headers = ["Item Type"] + statement_headers + xero_headers + ["Status"]
+        excel_headers = ["Item Type", *statement_headers, *xero_headers, "Status"]
 
         workbook = Workbook()
         worksheet = workbook.active
@@ -953,12 +950,12 @@ def statement(statement_id: str):
             left_row = rows_by_header[idx] if idx < len(rows_by_header) else {}
             right_row = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
 
-            row_values: List[Any] = [item_types[idx] if idx < len(item_types) else ""]
-            for src_header, label in header_labels:
+            row_values: list[Any] = [item_types[idx] if idx < len(item_types) else ""]
+            for src_header, label in header_labels:  # noqa: B007
                 left_value = left_row.get(src_header, "") if isinstance(left_row, dict) else ""
                 row_values.append("" if left_value is None else left_value)
 
-            for src_header, label in header_labels:
+            for src_header, label in header_labels:  # noqa: B007
                 right_value = right_row.get(src_header, "") if isinstance(right_row, dict) else ""
                 row_values.append("" if right_value is None else right_value)
 
@@ -1033,8 +1030,8 @@ def statement(statement_id: str):
 
         earliest_date_raw = record.get("EarliestItemDate")
         latest_date_raw = record.get("LatestItemDate")
-        earliest_date: Optional[date] = None
-        latest_date: Optional[date] = None
+        earliest_date: date | None = None
+        latest_date: date | None = None
         try:
             if isinstance(earliest_date_raw, str):
                 earliest_date = date.fromisoformat(earliest_date_raw.strip())
@@ -1047,10 +1044,7 @@ def statement(statement_id: str):
             latest_date = None
 
         if earliest_date and latest_date:
-            if earliest_date == latest_date:
-                date_segment = earliest_date.strftime("%Y-%m-%d")
-            else:
-                date_segment = f"{earliest_date.strftime('%Y-%m-%d')}_{latest_date.strftime('%Y-%m-%d')}"
+            date_segment = earliest_date.strftime("%Y-%m-%d") if earliest_date == latest_date else f"{earliest_date.strftime('%Y-%m-%d')}_{latest_date.strftime('%Y-%m-%d')}"
         elif latest_date or earliest_date:
             chosen = latest_date or earliest_date
             date_segment = chosen.strftime("%Y-%m-%d") if chosen else ""
@@ -1075,7 +1069,7 @@ def statement(statement_id: str):
         )
         return response
 
-    statement_rows: List[Dict[str, Any]] = []
+    statement_rows: list[dict[str, Any]] = []
     for idx, left_row in enumerate(rows_by_header):
         item = items[idx] if idx < len(items) else {}
         statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
@@ -1099,8 +1093,8 @@ def statement(statement_id: str):
                     flags.append(normalized)
 
         # Build Xero links by extracting IDs from matched data
-        xero_invoice_id: Optional[str] = None
-        xero_credit_note_id: Optional[str] = None
+        xero_invoice_id: str | None = None
+        xero_credit_note_id: str | None = None
         if item_number_header and idx < len(rows_by_header):
             row_number = str(rows_by_header[idx].get(item_number_header) or "").strip()
             if row_number:
@@ -1266,32 +1260,32 @@ def configs():
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     logger.info("Rendering configs", tenant_id=tenant_id, contacts=len(contacts_list))
 
-    selected_contact_name: Optional[str] = None
-    selected_contact_id: Optional[str] = None
-    mapping_rows: List[Dict[str, Any]] = []  # {field, values:list[str], is_multi:bool}
-    message: Optional[str] = None
-    error: Optional[str] = None
+    selected_contact_name: str | None = None
+    selected_contact_id: str | None = None
+    mapping_rows: list[dict[str, Any]] = []  # {field, values:list[str], is_multi:bool}
+    message: str | None = None
+    error: str | None = None
     selected_decimal_separator: str = DEFAULT_DECIMAL_SEPARATOR
     selected_thousands_separator: str = DEFAULT_THOUSANDS_SEPARATOR
     selected_date_format: str = ""
 
     # Normalise dropdown values so we only persist supported separators.
-    def _normalize_decimal_separator(value: Optional[str]) -> str:
+    def _normalize_decimal_separator(value: str | None) -> str:
         if value in {opt[0] for opt in DECIMAL_SEPARATOR_OPTIONS}:
             return value or DEFAULT_DECIMAL_SEPARATOR
         return DEFAULT_DECIMAL_SEPARATOR
 
-    def _normalize_thousands_separator(value: Optional[str]) -> str:
+    def _normalize_thousands_separator(value: str | None) -> str:
         if value in {opt[0] for opt in THOUSANDS_SEPARATOR_OPTIONS}:
             return value if value is not None else DEFAULT_THOUSANDS_SEPARATOR
         return DEFAULT_THOUSANDS_SEPARATOR
 
-    def _build_rows(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _build_rows(cfg: dict[str, Any]) -> list[dict[str, Any]]:
         """Build table rows for canonical fields using existing config values."""
         # Flatten mapping sources: nested 'statement_items' + root-level keys
         nested = cfg.get("statement_items") if isinstance(cfg, dict) else None
         nested = nested if isinstance(nested, dict) else {}
-        flat: Dict[str, Any] = {}
+        flat: dict[str, Any] = {}
         flat.update(nested)
         allowed_keys = set(StatementItem.model_fields.keys())
         disallowed = {"raw", "statement_item_id"}
@@ -1305,11 +1299,11 @@ def configs():
 
         # Canonical field order from the Pydantic model, prioritising config UI alignment
         preferred_order = ["number", "total", "date", "due_date"]
-        model_fields = [f for f in StatementItem.model_fields.keys() if f not in {"raw", "statement_item_id", "item_type"}]
+        model_fields = [f for f in StatementItem.model_fields if f not in {"raw", "statement_item_id", "item_type"}]
         remaining_fields = [f for f in model_fields if f not in preferred_order]
         canonical_order = preferred_order + remaining_fields
 
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for f in canonical_order:
             if f in {"reference", "item_type"}:
                 continue
@@ -1348,7 +1342,7 @@ def configs():
                     mapping_rows = _build_rows(cfg)
                     selected_decimal_separator = _normalize_decimal_separator(str(cfg.get("decimal_separator", "")))
                     selected_thousands_separator = _normalize_thousands_separator(str(cfg.get("thousands_separator", "")))
-                    selected_date_format = str((cfg.get("date_format") or "")) if isinstance(cfg, dict) else ""
+                    selected_date_format = str(cfg.get("date_format") or "") if isinstance(cfg, dict) else ""
                     logger.info(
                         "Config loaded",
                         tenant_id=tenant_id,
@@ -1400,10 +1394,10 @@ def configs():
 
                 # Preserve any root keys not shown in the mapping editor.
                 # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
-                preserved = {k: v for k, v in existing.items() if k not in posted_fields + ["statement_items"] and k not in {"reference", "item_type"}}
+                preserved = {k: v for k, v in existing.items() if k not in [*posted_fields, "statement_items"] and k not in {"reference", "item_type"}}
 
                 # Rebuild mapping from form
-                new_map: Dict[str, Any] = {}
+                new_map: dict[str, Any] = {}
                 for f in posted_fields:
                     if f == "total":
                         total_vals = [v.strip() for v in request.form.getlist("map[total][]") if v.strip()]

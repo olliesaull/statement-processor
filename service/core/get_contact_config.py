@@ -4,7 +4,7 @@ DynamoDB accessors for contact-specific statement mapping config.
 These helpers read/write the JSON config stored on the tenant contact row.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from botocore.exceptions import ClientError
 
@@ -13,7 +13,7 @@ from config import tenant_contacts_config_table
 CONFIG_ATTR = "config"
 
 
-def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
+def get_contact_config(tenant_id: str, contact_id: str) -> dict[str, Any]:
     """
     Fetch contact-specific statement mapping config from DynamoDB.
 
@@ -42,7 +42,7 @@ def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
     return cfg
 
 
-def set_contact_config(tenant_id: str, contact_id: str, config: Dict[str, Any]) -> None:
+def set_contact_config(tenant_id: str, contact_id: str, config: dict[str, Any]) -> None:
     """Update contact-specific statement mapping config in DynamoDB."""
     if not isinstance(config, dict):
         raise TypeError("config must be a dict")

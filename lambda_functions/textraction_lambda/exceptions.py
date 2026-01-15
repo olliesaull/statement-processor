@@ -1,6 +1,6 @@
 """Custom exceptions used by the statement processing Lambda."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class ItemCountDisagreementError(Exception):
@@ -10,8 +10,8 @@ class ItemCountDisagreementError(Exception):
         self,
         pdfplumber_count: int,
         textract_count: int,
-        summary: Optional[Dict[str, Any]] = None,
-        message: Optional[str] = None,
+        summary: dict[str, Any] | None = None,
+        message: str | None = None,
     ) -> None:
         msg = message or (f"PDF/Textract item count mismatch: pdfplumber={pdfplumber_count}, textract={textract_count}")
         super().__init__(msg)

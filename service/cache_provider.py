@@ -1,7 +1,5 @@
 """Shared cache accessors used by the statement processor service."""
 
-from typing import Optional
-
 from flask_caching import Cache
 
 from config import logger
@@ -9,7 +7,7 @@ from config import logger
 _STATUS_SUFFIX = "_status"
 
 
-cache: Optional[Cache] = None
+cache: Cache | None = None
 
 
 def set_cache(instance: Cache) -> None:

@@ -14,8 +14,9 @@ from __future__ import annotations
 import calendar
 import re
 from collections import Counter
+from collections.abc import Iterable, Sequence
 from datetime import date, datetime
-from typing import Any, Iterable, List, Optional, Sequence, Tuple
+from typing import Any
 
 from config import logger
 
@@ -53,7 +54,7 @@ MONTH_ABBR_TO_NUM = {abbr.lower(): idx for idx, abbr in enumerate(calendar.month
 MONTH_NAME_TO_NUM["sept"] = 9
 
 
-def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]:  # pylint: disable=too-many-branches,too-many-return-statements,too-many-locals
+def parse_with_format(value: Any, template: str | None) -> datetime | None:  # pylint: disable=too-many-branches,too-many-return-statements,too-many-locals
     """
     Parse ``value`` using the custom Supplier Date Format tokens.
 
@@ -134,7 +135,7 @@ def parse_with_format(value: Any, template: Optional[str]) -> Optional[datetime]
         return None
 
 
-def format_iso_with(value: Any, template: Optional[str]) -> str:
+def format_iso_with(value: Any, template: str | None) -> str:
     """
     Format a stored ISO date using the Supplier Date Format tokens.
 
@@ -154,9 +155,9 @@ def format_iso_with(value: Any, template: Optional[str]) -> str:
     return _format_tokens(tokens, dt)
 
 
-def coerce_datetime_with_template(value: Any, template: Optional[str]) -> Optional[datetime]:
+def coerce_datetime_with_template(value: Any, template: str | None) -> datetime | None:
     """Try parsing with a template first, then fall back to ISO coercion."""
-    parsed: Optional[datetime] = None
+    parsed: datetime | None = None
     if template:
         try:
             parsed = parse_with_format(value, template)
@@ -184,7 +185,7 @@ def _parse_ordinal(value: str) -> int:
     return int(match.group(1))
 
 
-def _month_from_name(value: str) -> Optional[int]:
+def _month_from_name(value: str) -> int | None:
     """Return the month number for a name/abbreviation, or None if unrecognized."""
     txt = value.strip().lower()
     if txt in MONTH_NAME_TO_NUM:
@@ -197,7 +198,7 @@ def _month_from_name(value: str) -> Optional[int]:
     return None
 
 
-def _coerce_to_iso_string(value: Any) -> Optional[str]:
+def _coerce_to_iso_string(value: Any) -> str | None:
     """Normalize any date-like input into a YYYY-MM-DD string."""
     dt = _coerce_to_datetime(value)
     if dt is None:
@@ -205,7 +206,7 @@ def _coerce_to_iso_string(value: Any) -> Optional[str]:
     return dt.strftime("%Y-%m-%d")
 
 
-def _coerce_to_datetime(value: Any) -> Optional[datetime]:  # pylint: disable=too-many-branches,too-many-return-statements
+def _coerce_to_datetime(value: Any) -> datetime | None:  # pylint: disable=too-many-branches,too-many-return-statements
     """Best-effort conversion of input values to a date-only datetime."""
     if isinstance(value, datetime):
         return datetime(value.year, value.month, value.day)
@@ -227,7 +228,7 @@ def _coerce_to_datetime(value: Any) -> Optional[datetime]:  # pylint: disable=to
 
 def _format_tokens(tokens: Sequence, dt: datetime) -> str:  # pylint: disable=too-many-branches
     """Format a datetime by expanding template tokens into string parts."""
-    parts: List[str] = []
+    parts: list[str] = []
     for kind, value in tokens:
         if kind == "YYYY":
             parts.append(f"{dt.year:04d}")
@@ -259,10 +260,7 @@ def _format_tokens(tokens: Sequence, dt: datetime) -> str:  # pylint: disable=to
 def _format_ordinal(day: int) -> str:
     """Format a day-of-month as an ordinal string (e.g. 1st, 2nd, 3rd)."""
     suffix = "th"
-    if 10 <= day % 100 <= 20:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    suffix = "th" if 10 <= day % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
     return f"{day}{suffix}"
 
 
@@ -274,7 +272,7 @@ def _prepare_template(template: str):
 
 def _tokenize_format(template: str):
     """Split a template string into tokens and separator literals."""
-    tokens: List[Tuple[str, str]] = []
+    tokens: list[tuple[str, str]] = []
     cursor = 0
     remaining = template
     has_textual_month = False
@@ -328,8 +326,8 @@ def _compile(
 
     names = name_gen()
 
-    regex_parts: List[str] = []
-    group_order: List[Tuple[str, str]] = []
+    regex_parts: list[str] = []
+    group_order: list[tuple[str, str]] = []
     for kind, value in tokens:
         if kind in TOKEN_REGEX:
             name = next(names)
@@ -350,7 +348,7 @@ def _compile(
     )
 
 
-def common_formats(samples: Iterable[str], top_k: int = 5) -> List[str]:
+def common_formats(samples: Iterable[str], top_k: int = 5) -> list[str]:
     """Summarize the most common character-level date templates from samples."""
 
     def normalize_template(template: str) -> str:

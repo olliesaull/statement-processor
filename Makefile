@@ -50,7 +50,7 @@ format-all:
 	@for dir in $(SERVICE_DIR) $(LAMBDA_DIRS); do \
 		if [ -d "$$dir" ]; then \
 			echo "Formatting: $$dir"; \
-			bash -c "cd $$dir && source venv/bin/activate && ruff format . && ruff check --select I,W --fix . 2>/dev/null || true"; \
+			bash -c "cd $$dir && source venv/bin/activate && ruff check --select I --fix . && ruff format . 2>/dev/null || true"; \
 		fi; \
 	done
 	@echo "✅ Ruff formatting complete"

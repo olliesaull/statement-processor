@@ -6,10 +6,11 @@ Provides:
 - Lookups for individual tenants and bulk status checks
 """
 
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Optional
 
 from config import tenant_data_table
 
@@ -29,7 +30,7 @@ class TenantDataRepository:
     _table = tenant_data_table
 
     @staticmethod
-    def _determine_status(item: Dict[str, Any]) -> TenantStatus:
+    def _determine_status(item: dict[str, Any]) -> TenantStatus:
         """Extract a tenant status value from a DynamoDB record."""
         raw_status = item.get("TenantStatus")
 
@@ -45,7 +46,7 @@ class TenantDataRepository:
         return TenantStatus.FREE
 
     @classmethod
-    def get_item(cls, tenant_id: str) -> Optional[Dict[str, object]]:
+    def get_item(cls, tenant_id: str) -> dict[str, object] | None:
         """Fetch a single tenant record by ID."""
         if not tenant_id:
             return None
@@ -54,7 +55,7 @@ class TenantDataRepository:
         return response.get("Item")
 
     @classmethod
-    def get_tenant_statuses(cls, tenant_ids: Iterable[str], max_workers: int = 4) -> Dict[str, TenantStatus]:
+    def get_tenant_statuses(cls, tenant_ids: Iterable[str], max_workers: int = 4) -> dict[str, TenantStatus]:
         """
         Fetch multiple tenant records concurrently and return their status.
 
@@ -70,7 +71,7 @@ class TenantDataRepository:
         if not unique_ids:
             return {}
 
-        statuses: Dict[str, TenantStatus] = {tenant_id: TenantStatus.FREE for tenant_id in unique_ids}
+        statuses: dict[str, TenantStatus] = {tenant_id: TenantStatus.FREE for tenant_id in unique_ids}
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(cls.get_item, tenant_id): tenant_id for tenant_id in unique_ids}

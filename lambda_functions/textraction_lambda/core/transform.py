@@ -13,7 +13,7 @@ The main entry point is `table_to_json`.
 import re
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from uuid import uuid4
 
 from config import logger
@@ -23,7 +23,7 @@ from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem, SupplierStatement
 
 
-def _generate_statement_item_id(statement_id: Optional[str], sequence: int) -> str:
+def _generate_statement_item_id(statement_id: str | None, sequence: int) -> str:
     """Build a stable per-row identifier, namespaced under the statement id when provided."""
     if statement_id:
         return f"{statement_id}#item-{sequence:04d}"
@@ -47,7 +47,7 @@ def _normalize_table_cell(cell: Any) -> str:
     text = str(cell).strip()
     if not text:
         return ""
-    text = text.replace("−", "-")
+    text = text.replace("−", "-")  # noqa: RUF001
     compact = re.sub(r"\s+", " ", text)
     candidate = re.sub(r"^[\$£€]\s*", "", compact)
     candidate = re.sub(r"(?i)(cr|dr)$", "", candidate)
@@ -63,12 +63,12 @@ def _normalize_table_cell(cell: Any) -> str:
         return compact.lower()
 
 
-def _dedupe_grid_columns(grid: List[List[str]]) -> List[List[str]]:
+def _dedupe_grid_columns(grid: list[list[str]]) -> list[list[str]]:
     """Remove duplicate columns (identical header + values) to avoid double-counting fields."""
     if not grid or not grid[0]:
         return grid
-    seen: Dict[Tuple[str, Tuple[str, ...]], int] = {}
-    keep: List[int] = []
+    seen: dict[tuple[str, tuple[str, ...]], int] = {}
+    keep: list[int] = []
     for idx in range(len(grid[0])):
         header = _norm(grid[0][idx]) if idx < len(grid[0]) else ""
         column_values = tuple(_normalize_table_cell(row[idx] if idx < len(row) else "") for row in grid[1:])
@@ -82,13 +82,13 @@ def _dedupe_grid_columns(grid: List[List[str]]) -> List[List[str]]:
     return [[row[i] if i < len(row) else "" for i in keep] for row in grid]
 
 
-def best_header_row(grid: List[List[str]], candidate_headers: List[str], lookahead: int = 5) -> Tuple[int, List[str]]:
+def best_header_row(grid: list[list[str]], candidate_headers: list[str], lookahead: int = 5) -> tuple[int, list[str]]:
     """
     Pick the most likely header row by matching configured candidates.
 
     We scan up to `lookahead` rows and score based on candidate header matches.
     """
-    cand = set(_norm(h) for h in candidate_headers if h)
+    cand = {_norm(h) for h in candidate_headers if h}
     if not cand:
         for idx, row in enumerate(grid):
             if any(c.strip() for c in row):
@@ -121,9 +121,9 @@ def best_header_row(grid: List[List[str]], candidate_headers: List[str], lookahe
     return best_idx, grid[best_idx]
 
 
-def build_col_index(header_row: List[str]) -> Dict[str, int]:
+def build_col_index(header_row: list[str]) -> dict[str, int]:
     """Map normalized header labels to their column indices for lookup later."""
-    col_index: Dict[str, int] = {}
+    col_index: dict[str, int] = {}
     for i, h in enumerate(header_row):
         hn = _norm(h)
         if hn and hn not in col_index:
@@ -131,7 +131,7 @@ def build_col_index(header_row: List[str]) -> Dict[str, int]:
     return col_index
 
 
-def get_by_header(row: List[str], col_index: Dict[str, int], header_label: str) -> str:
+def get_by_header(row: list[str], col_index: dict[str, int], header_label: str) -> str:
     """Safely fetch a cell value by header name; returns empty string if missing/out of range."""
     if not header_label:
         return ""
@@ -141,7 +141,7 @@ def get_by_header(row: List[str], col_index: Dict[str, int], header_label: str) 
     return (row[idx] or "").strip()
 
 
-def _load_contact_mapping(tenant_id: str, contact_id: str) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], List[str], str]:  # pylint: disable=too-many-branches
+def _load_contact_mapping(tenant_id: str, contact_id: str) -> tuple[dict[str, Any], dict[str, str], dict[str, str], list[str], str]:  # pylint: disable=too-many-branches
     """
     Load contact-specific mapping config and normalize it for table extraction.
 
@@ -152,9 +152,9 @@ def _load_contact_mapping(tenant_id: str, contact_id: str) -> Tuple[Dict[str, An
     - total_candidates: header labels that should be interpreted as totals
     - date_format: required parsing format for dates
     """
-    contact_cfg: Dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
+    contact_cfg: dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
 
-    template_date_format: Optional[str] = None
+    template_date_format: str | None = None
     if isinstance(contact_cfg, dict):
         si = contact_cfg.get("statement_items")
         if isinstance(si, dict):
@@ -172,8 +172,8 @@ def _load_contact_mapping(tenant_id: str, contact_id: str) -> Tuple[Dict[str, An
     items_template.pop("decimal_separator", None)
     items_template.pop("thousands_separator", None)
 
-    simple_map: Dict[str, str] = {}
-    raw_map: Dict[str, str] = {}
+    simple_map: dict[str, str] = {}
+    raw_map: dict[str, str] = {}
     date_format = None
     if isinstance(contact_cfg, dict):
         date_format = contact_cfg.get("date_format")
@@ -193,7 +193,7 @@ def _load_contact_mapping(tenant_id: str, contact_id: str) -> Tuple[Dict[str, An
         elif field in allowed_fields and isinstance(value, str) and value.strip():
             simple_map[field] = value
 
-    total_candidates: List[str] = []
+    total_candidates: list[str] = []
     total_cfg = items_template.get("total")
     if isinstance(total_cfg, list):
         total_candidates = [str(x).strip() for x in total_cfg if isinstance(x, str) and x.strip()]
@@ -204,11 +204,11 @@ def _load_contact_mapping(tenant_id: str, contact_id: str) -> Tuple[Dict[str, An
 
 
 def _prepare_header_context(
-    grid: List[List[str]],
-    candidates: List[str],
-    primary_header_row: Optional[List[str]],
-    primary_col_index: Optional[Dict[str, int]],
-) -> Tuple[List[str], Dict[str, int], List[List[str]], bool, List[str], Dict[str, int]]:
+    grid: list[list[str]],
+    candidates: list[str],
+    primary_header_row: list[str] | None,
+    primary_col_index: dict[str, int] | None,
+) -> tuple[list[str], dict[str, int], list[list[str]], bool, list[str], dict[str, int]]:
     """
     Determine header row/columns and data rows for a table grid.
 
@@ -246,10 +246,10 @@ def _prepare_header_context(
     )
 
 
-def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: List[str]) -> None:
+def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: list[str]) -> None:
     """Persist newly-seen raw headers to contact config for future mapping."""
     try:
-        cfg_existing: Dict[str, Any] = {}
+        cfg_existing: dict[str, Any] = {}
         try:
             cfg_existing = get_contact_config(tenant_id, contact_id)
         except Exception:  # pylint: disable=broad-exception-caught
@@ -257,7 +257,7 @@ def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: List[str])
 
         updated = False
         raw_val = cfg_existing.get("raw")
-        root_raw: Dict[str, Any] = dict(raw_val) if isinstance(raw_val, dict) else {}
+        root_raw: dict[str, Any] = dict(raw_val) if isinstance(raw_val, dict) else {}
         for h in header_row:
             hh = str(h or "").strip()
             if not hh:
@@ -275,17 +275,17 @@ def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: List[str])
 
 
 def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-    row: List[str],
-    header_row: List[str],
-    col_index: Dict[str, int],
-    items_template: Dict[str, Any],
-    simple_map: Dict[str, str],
-    raw_map: Dict[str, str],
-    configured_amount_headers: List[Tuple[Optional[int], str]],
+    row: list[str],
+    header_row: list[str],
+    col_index: dict[str, int],
+    items_template: dict[str, Any],
+    simple_map: dict[str, str],
+    raw_map: dict[str, str],
+    configured_amount_headers: list[tuple[int | None, str]],
     date_format: str,
-    statement_id: Optional[str],
+    statement_id: str | None,
     item_counter: int,
-) -> Tuple[StatementItem, List[str], Dict[str, Any], Dict[str, Any]]:
+) -> tuple[StatementItem, list[str], dict[str, Any], dict[str, Any]]:
     """
     Map a single data row into a `StatementItem` plus extraction metadata.
 
@@ -293,7 +293,7 @@ def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-
     (for debug/audit output in `_flags`).
     """
     # Build a raw row map keyed by the header text.
-    full_raw: Dict[str, Any] = {}
+    full_raw: dict[str, Any] = {}
     for col_idx, header_value in enumerate(header_row):
         label = str(header_value or "").strip() or f"column_{col_idx}"
         cell_value = row[col_idx] if col_idx < len(row) else ""
@@ -303,11 +303,11 @@ def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-
         else:
             full_raw[label] = cell_value
 
-    row_obj: Dict[str, Any] = deepcopy(items_template)
+    row_obj: dict[str, Any] = deepcopy(items_template)
     row_obj.pop("statement_item_id", None)
-    flags: List[str] = []
+    flags: list[str] = []
 
-    extracted_simple: Dict[str, Any] = {}
+    extracted_simple: dict[str, Any] = {}
     for field, header_name in simple_map.items():
         idx = col_index.get(_norm(header_name))
         actual_header = header_row[idx] if idx is not None and idx < len(header_row) else header_name
@@ -326,8 +326,8 @@ def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-
         canonical_header = str(actual_header or header_name)
         extracted_simple[field] = {"header": canonical_header, "value": value}
 
-    raw_obj: Dict[str, Any] = {}
-    extracted_raw: Dict[str, Any] = {}
+    raw_obj: dict[str, Any] = {}
+    extracted_raw: dict[str, Any] = {}
     for raw_key, raw_src_header in (raw_map or {}).items():
         chosen_header = raw_src_header or raw_key
         idx = col_index.get(_norm(chosen_header))
@@ -339,7 +339,7 @@ def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-
     # Always store the raw row; fall back to full row if no raw mapping provided.
     row_obj["raw"] = raw_obj if raw_obj else full_raw
 
-    total_entries: Dict[str, Any] = {}
+    total_entries: dict[str, Any] = {}
     for header_idx, header_label in configured_amount_headers:
         if header_idx is None or header_idx >= len(row):
             continue
@@ -369,10 +369,10 @@ def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-
 
 
 def select_relevant_tables_per_page(
-    tables_with_pages: List["TableOnPage"],
-    candidates: List[str],
+    tables_with_pages: list["TableOnPage"],
+    candidates: list[str],
     small_table_penalty: float = 2.5,
-) -> List["TableOnPage"]:  # pylint: disable=too-many-locals
+) -> list["TableOnPage"]:  # pylint: disable=too-many-locals
     """
     Choose the best table per page when multiple candidates exist.
 
@@ -385,10 +385,10 @@ def select_relevant_tables_per_page(
         return []
     cand_set = {c.strip().lower() for c in candidates if c}
     date_re = re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}$")
-    by_page: Dict[int, List[List[List[str]]]] = {}
+    by_page: dict[int, list[list[list[str]]]] = {}
     for t in tables_with_pages:
         by_page.setdefault(int(t["page"]), []).append(t["grid"])
-    selected: List["TableOnPage"] = []
+    selected: list[TableOnPage] = []
     for page, grids in sorted(by_page.items()):
         logger.debug("Evaluating tables for page", page=page, table_count=len(grids))
         best_grid, best_score = None, float("-inf")
@@ -432,11 +432,11 @@ def select_relevant_tables_per_page(
 
 
 def table_to_json(
-    tables_with_pages: List["TableOnPage"],
+    tables_with_pages: list["TableOnPage"],
     tenant_id: str,
     contact_id: str,
-    statement_id: Optional[str] = None,
-) -> Dict[str, Any]:  # pylint: disable=too-many-locals,too-many-statements
+    statement_id: str | None = None,
+) -> dict[str, Any]:  # pylint: disable=too-many-locals,too-many-statements
     """
     Convert Textract table grids into structured statement JSON.
 
@@ -465,12 +465,12 @@ def table_to_json(
     selected = select_relevant_tables_per_page(tables_with_pages, candidates=candidates)
     logger.debug("Selected tables", count=len(selected))
 
-    items: List[StatementItem] = []
-    per_item_flags: List[List[str]] = []
-    item_flags: List[List[Dict[str, Any]]] = []
+    items: list[StatementItem] = []
+    per_item_flags: list[list[str]] = []
+    item_flags: list[list[dict[str, Any]]] = []
     item_counter = 0
-    primary_header_row: Optional[List[str]] = None
-    primary_col_index: Optional[Dict[str, int]] = None
+    primary_header_row: list[str] | None = None
+    primary_col_index: dict[str, int] | None = None
     for _page_number, entry in enumerate(selected, start=1):
         grid = entry["grid"]
         grid = _dedupe_grid_columns(grid)
@@ -481,9 +481,9 @@ def table_to_json(
             cols=len(grid[0]) if grid and grid[0] else 0,
         )
 
-        header_row: List[str]
-        col_index: Dict[str, int]
-        data_rows: List[List[str]]
+        header_row: list[str]
+        col_index: dict[str, int]
+        data_rows: list[list[str]]
         header_detected = False
 
         (
@@ -507,7 +507,7 @@ def table_to_json(
             _persist_raw_headers(tenant_id, contact_id, header_row)
 
         # Pre-compute which columns should be interpreted as "total" values.
-        configured_amount_headers: List[Tuple[Optional[int], str]] = []
+        configured_amount_headers: list[tuple[int | None, str]] = []
         for cand in total_candidates:
             clean = cand.strip()
             if not clean:
@@ -546,7 +546,7 @@ def table_to_json(
                 ]
             )
 
-    combined_flags: List[Dict[str, Any]] = []
+    combined_flags: list[dict[str, Any]] = []
     for flist in item_flags:
         combined_flags.extend(flist)
 
@@ -577,8 +577,8 @@ def table_to_json(
 
 
 def _derive_date_range(
-    items: List[StatementItem],
-) -> Tuple[Optional[str], Optional[str]]:
+    items: list[StatementItem],
+) -> tuple[str | None, str | None]:
     """Compute min/max dates across all statement items."""
     dates = []
     for item in items:
@@ -597,7 +597,7 @@ def _clean_currency(value: Any) -> str:
     text = str(value).strip()
     if not text:
         return ""
-    text = text.replace("−", "-")
+    text = text.replace("−", "-")  # noqa: RUF001
     text = text.replace(",", "")
     text = text.replace(" ", "")
     text = re.sub(r"^[\$£€]\s*", "", text)
@@ -607,7 +607,7 @@ def _clean_currency(value: Any) -> str:
     return text
 
 
-def _to_number(value: Any) -> Optional[float]:
+def _to_number(value: Any) -> float | None:
     """Convert cleaned numeric string to float when possible."""
     if value is None:
         return None
@@ -620,7 +620,7 @@ def _to_number(value: Any) -> Optional[float]:
         return None
 
 
-def _first_nonempty_row_index(grid: List[List[str]]) -> int:
+def _first_nonempty_row_index(grid: list[list[str]]) -> int:
     """Find the first row with any non-empty cell."""
     for idx, row in enumerate(grid):
         if any((c or "").strip() for c in row):
@@ -628,7 +628,7 @@ def _first_nonempty_row_index(grid: List[List[str]]) -> int:
     return 0
 
 
-def _rows_match_header(row: List[str], header: List[str]) -> bool:
+def _rows_match_header(row: list[str], header: list[str]) -> bool:
     """Check whether a row resembles the header (used when carrying header across pages)."""
     if not row or not header:
         return False

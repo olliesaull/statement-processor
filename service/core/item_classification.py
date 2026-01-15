@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import difflib
 import re
+from collections.abc import Iterable, Sequence
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any
 
 from config import logger
 
-_DEBIT_HINTS: Tuple[str, ...] = ("debit", "dr")
-_CREDIT_HINTS: Tuple[str, ...] = ("credit", "cr")
+_DEBIT_HINTS: tuple[str, ...] = ("debit", "dr")
+_CREDIT_HINTS: tuple[str, ...] = ("credit", "cr")
 _NUMERIC_CHARS_RE = re.compile(r"[^0-9\-\.,()]")
 
 
@@ -30,13 +31,13 @@ def _normalize_label(label: Any) -> str:
     return "".join(ch.lower() for ch in str(label) if ch.isalnum())
 
 
-def _flatten_labels(value: Any) -> List[str]:
+def _flatten_labels(value: Any) -> list[str]:
     """Extract a list of non-empty strings from a value that may be a list or scalar."""
     if isinstance(value, str):
         stripped = value.strip()
         return [stripped] if stripped else []
     if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-        labels: List[str] = []
+        labels: list[str] = []
         for item in value:
             if isinstance(item, str) and item.strip():
                 labels.append(item.strip())
@@ -54,7 +55,7 @@ def _is_credit_norm(norm: str) -> bool:
     return any(norm.startswith(hint) or norm.endswith(hint) for hint in _CREDIT_HINTS)
 
 
-def _coerce_decimal(value: Any) -> Optional[Decimal]:
+def _coerce_decimal(value: Any) -> Decimal | None:
     """Parse a value into a Decimal, handling commas/parentheses for negatives."""
     if value is None:
         return None
@@ -89,7 +90,7 @@ def _has_amount(value: Any) -> bool:
     return dec is not None and dec != 0
 
 
-def _extract_total_template(contact_config: Optional[Dict[str, Any]]) -> Any:
+def _extract_total_template(contact_config: dict[str, Any] | None) -> Any:
     """Locate the `total` configuration template in the contact config payload."""
     if not isinstance(contact_config, dict):
         return None
@@ -106,14 +107,14 @@ def _extract_total_template(contact_config: Optional[Dict[str, Any]]) -> Any:
 
 
 def _collect_config_amount_labels(
-    contact_config: Optional[Dict[str, Any]],
-) -> Tuple[Set[str], Set[str]]:
+    contact_config: dict[str, Any] | None,
+) -> tuple[set[str], set[str]]:
     """Collect normalized debit/credit labels from contact config."""
     total_cfg = _extract_total_template(contact_config)
-    debit_norms: Set[str] = set()
-    credit_norms: Set[str] = set()
+    debit_norms: set[str] = set()
+    credit_norms: set[str] = set()
 
-    def _record(labels: Iterable[str], bucket: Optional[str]) -> None:
+    def _record(labels: Iterable[str], bucket: str | None) -> None:
         for label in labels:
             norm = _normalize_label(label)
             if not norm:
@@ -143,7 +144,7 @@ def _collect_config_amount_labels(
     return debit_norms, credit_norms
 
 
-def _iter_total_entries(total_entries: Any) -> Iterable[Tuple[str, Any]]:
+def _iter_total_entries(total_entries: Any) -> Iterable[tuple[str, Any]]:
     """Yield (label, value) pairs from dict or list-style total data."""
     if isinstance(total_entries, dict):
         for label, value in total_entries.items():
@@ -158,10 +159,10 @@ def _iter_total_entries(total_entries: Any) -> Iterable[Tuple[str, Any]]:
 
 
 def _evaluate_amount_hint(
-    raw_row: Dict[str, Any],
+    raw_row: dict[str, Any],
     total_entries: Any,
-    contact_config: Optional[Dict[str, Any]],
-) -> Tuple[Optional[str], bool, bool, List[str], List[str]]:
+    contact_config: dict[str, Any] | None,
+) -> tuple[str | None, bool, bool, list[str], list[str]]:
     """
     Infer debit/credit signals and return a type hint plus evidence details.
 
@@ -170,7 +171,7 @@ def _evaluate_amount_hint(
     """
     debit_norms, credit_norms = _collect_config_amount_labels(contact_config)
 
-    for key in (raw_row or {}).keys():
+    for key in raw_row or {}:
         norm = _normalize_label(key)
         if _is_debit_norm(norm):
             debit_norms.add(norm)
@@ -179,12 +180,12 @@ def _evaluate_amount_hint(
 
     debit_has_value = False
     credit_has_value = False
-    debit_labels_used: List[str] = []
-    credit_labels_used: List[str] = []
+    debit_labels_used: list[str] = []
+    credit_labels_used: list[str] = []
 
     for label, value in _iter_total_entries(total_entries):
         norm = _normalize_label(label)
-        category: Optional[str] = None
+        category: str | None = None
         if norm in debit_norms:
             category = "debit"
         elif norm in credit_norms:
@@ -201,10 +202,9 @@ def _evaluate_amount_hint(
             if _has_amount(value):
                 debit_has_value = True
                 debit_labels_used.append(label)
-        elif category == "credit":
-            if _has_amount(value):
-                credit_has_value = True
-                credit_labels_used.append(label)
+        elif category == "credit" and _has_amount(value):
+            credit_has_value = True
+            credit_labels_used.append(label)
 
     if not debit_has_value:
         inverse_raw = {_normalize_label(key): (key, val) for key, val in (raw_row or {}).items() if isinstance(key, str)}
@@ -238,7 +238,7 @@ def _evaluate_amount_hint(
     )
 
 
-def _default_type(candidate_types: Set[str]) -> str:
+def _default_type(candidate_types: set[str]) -> str:
     """Pick the first preferred type from the candidate set."""
     for option in ("invoice", "payment", "credit_note"):
         if option in candidate_types:
@@ -247,14 +247,14 @@ def _default_type(candidate_types: Set[str]) -> str:
 
 
 def guess_statement_item_type(
-    raw_row: Dict[str, Any],
-    total_entries: Optional[Dict[str, Any]] = None,
-    contact_config: Optional[Dict[str, Any]] = None,
+    raw_row: dict[str, Any],
+    total_entries: dict[str, Any] | None = None,
+    contact_config: dict[str, Any] | None = None,
 ) -> str:
     """Heuristically classify a row as ``invoice``, ``credit_note``, or ``payment``."""
     amount_hint, debit_has_value, credit_has_value, debit_labels, credit_labels = _evaluate_amount_hint(raw_row or {}, total_entries, contact_config)
 
-    candidate_types: Set[str] = {"invoice", "credit_note", "payment"}
+    candidate_types: set[str] = {"invoice", "credit_note", "payment"}
     if amount_hint == "invoice":
         candidate_types = {"invoice"}
     elif amount_hint == "credit":
@@ -295,7 +295,7 @@ def guess_statement_item_type(
         )
         return default_type
 
-    type_synonyms: Dict[str, List[str]] = {
+    type_synonyms: dict[str, list[str]] = {
         "payment": [
             "payment",
             "paid",
@@ -314,7 +314,7 @@ def guess_statement_item_type(
 
     best_type = default_type
     best_score = 0.0
-    type_details: Dict[str, Dict[str, Any]] = {}
+    type_details: dict[str, dict[str, Any]] = {}
 
     for doc_type, synonyms in type_synonyms.items():
         if doc_type not in candidate_types:
@@ -326,7 +326,7 @@ def guess_statement_item_type(
                 continue
 
             if syn_norm in joined_compact:
-                if 1.0 >= type_best:
+                if type_best <= 1.0:
                     type_best = 1.0
                     type_details[doc_type] = {
                         "synonym": syn_norm,

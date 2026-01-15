@@ -1,13 +1,13 @@
 """DynamoDB helpers for loading and updating tenant contact config."""
 
-from typing import Any, Dict
+from typing import Any
 
 from botocore.exceptions import ClientError
 
 from config import logger, tenant_contacts_config_table
 
 
-def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
+def get_contact_config(tenant_id: str, contact_id: str) -> dict[str, Any]:
     """Fetch a contact's config payload from DynamoDB."""
     logger.debug("Fetching contact config", tenant_id=tenant_id, contact_id=contact_id)
     attr_name = "config"
@@ -33,7 +33,7 @@ def get_contact_config(tenant_id: str, contact_id: str) -> Dict[str, Any]:
     return cfg
 
 
-def set_contact_config(tenant_id: str, contact_id: str, config: Dict[str, Any]) -> None:
+def set_contact_config(tenant_id: str, contact_id: str, config: dict[str, Any]) -> None:
     """Updates 'raw' dict in DDB based on statement table headers."""
     if tenant_contacts_config_table is None:
         raise RuntimeError("Contact config table not configured")

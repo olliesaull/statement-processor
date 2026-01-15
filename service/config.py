@@ -7,7 +7,6 @@ and fetches required SSM parameters at import time.
 
 import logging
 import os
-from typing import Optional, Tuple
 
 import boto3
 from aws_lambda_powertools.logging import Logger
@@ -16,20 +15,17 @@ from mypy_boto3_ssm import SSMClient
 
 load_dotenv()
 
-AWS_PROFILE: Optional[str] = os.getenv("AWS_PROFILE")
-AWS_REGION: Optional[str] = os.getenv("AWS_REGION")
-S3_BUCKET_NAME: Optional[str] = os.getenv("S3_BUCKET_NAME")
-STAGE: Optional[str] = os.getenv("STAGE")
-TEXTRACTION_STATE_MACHINE_ARN: Optional[str] = os.getenv("TEXTRACTION_STATE_MACHINE_ARN")
+AWS_PROFILE: str | None = os.getenv("AWS_PROFILE")
+AWS_REGION: str | None = os.getenv("AWS_REGION")
+S3_BUCKET_NAME: str | None = os.getenv("S3_BUCKET_NAME")
+STAGE: str | None = os.getenv("STAGE")
+TEXTRACTION_STATE_MACHINE_ARN: str | None = os.getenv("TEXTRACTION_STATE_MACHINE_ARN")
 
-TENANT_CONTACTS_CONFIG_TABLE_NAME: Optional[str] = os.getenv("TENANT_CONTACTS_CONFIG_TABLE_NAME")
-TENANT_STATEMENTS_TABLE_NAME: Optional[str] = os.getenv("TENANT_STATEMENTS_TABLE_NAME")
-TENANT_DATA_TABLE_NAME: Optional[str] = os.getenv("TENANT_DATA_TABLE_NAME")
+TENANT_CONTACTS_CONFIG_TABLE_NAME: str | None = os.getenv("TENANT_CONTACTS_CONFIG_TABLE_NAME")
+TENANT_STATEMENTS_TABLE_NAME: str | None = os.getenv("TENANT_STATEMENTS_TABLE_NAME")
+TENANT_DATA_TABLE_NAME: str | None = os.getenv("TENANT_DATA_TABLE_NAME")
 
-if STAGE == "dev":
-    session = boto3.session.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
-else:
-    session = boto3.session.Session()  # Use the default session (e.g., in AppRunner)
+session = boto3.session.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION) if STAGE == "dev" else boto3.session.Session()  # Use the default session (e.g., in AppRunner)
 
 s3_client = session.client("s3")
 stepfunctions_client = session.client("stepfunctions")
@@ -41,7 +37,7 @@ tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME)
 
 logger: Logger = Logger()
 
-_SUPPRESSED_LOGGERS: Tuple[str, ...] = (
+_SUPPRESSED_LOGGERS: tuple[str, ...] = (
     "boto",
     "urllib3",
     "s3transfer",

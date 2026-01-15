@@ -11,7 +11,7 @@ import json
 import os
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from flask import session
 from xero_python.accounting import AccountingApi
@@ -26,7 +26,7 @@ from utils import (
 )
 
 PAGE_SIZE: int = 100  # Xero max
-STAGE: Optional[str] = os.getenv("STAGE")
+STAGE: str | None = os.getenv("STAGE")
 # Local cache shared with the sync job for dataset reads.
 LOCAL_DATA_DIR: str = "./tmp/data" if STAGE == "dev" else "/tmp/data"
 
@@ -40,7 +40,7 @@ class XeroType(StrEnum):
     CONTACTS = "contacts"
 
 
-def load_local_dataset(resource: XeroType, tenant_id: Optional[str] = None) -> Optional[Any]:
+def load_local_dataset(resource: XeroType, tenant_id: str | None = None) -> Any | None:
     """
     Load a locally cached dataset produced by the sync job. If dataset not found locally download it from S3.
 
@@ -122,10 +122,10 @@ def load_local_dataset(resource: XeroType, tenant_id: Optional[str] = None) -> O
 
 
 def get_contacts_from_xero(
-    tenant_id: Optional[str] = None,
-    modified_since: Optional[datetime] = None,
-    api: Optional[AccountingApi] = None,
-) -> List[Dict[str, Any]]:
+    tenant_id: str | None = None,
+    modified_since: datetime | None = None,
+    api: AccountingApi | None = None,
+) -> list[dict[str, Any]]:
     """Fetch contacts directly from Xero ordered by name."""
     tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id:
@@ -135,7 +135,7 @@ def get_contacts_from_xero(
     client = api or get_xero_api_client()
 
     page = 1
-    contacts: List[Dict[str, Any]] = []
+    contacts: list[dict[str, Any]] = []
     seen_ids: set[str] = set()  # De-dupe contacts across pages.
 
     try:
@@ -211,10 +211,10 @@ def get_contacts_from_xero(
 
 
 def get_invoices(
-    tenant_id: Optional[str] = None,
-    modified_since: Optional[datetime] = None,
-    api: Optional[AccountingApi] = None,
-) -> List[Dict[str, Any]]:
+    tenant_id: str | None = None,
+    modified_since: datetime | None = None,
+    api: AccountingApi | None = None,
+) -> list[dict[str, Any]]:
     """Get all supplier bills (ACCPAY) from Xero, across all pages."""
 
     tenant_id = tenant_id or session.get("xero_tenant_id")
@@ -226,8 +226,8 @@ def get_invoices(
 
     page = 1
     total_returned = 0
-    by_id: Dict[str, Dict[str, Any]] = {}
-    extras: List[Dict[str, Any]] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    extras: list[dict[str, Any]] = []
 
     try:
         logger.info(
@@ -282,7 +282,7 @@ def get_invoices(
 
             page += 1
 
-        invoices: List[Dict[str, Any]] = list(by_id.values()) + extras
+        invoices: list[dict[str, Any]] = list(by_id.values()) + extras
         invoices.sort(key=lambda inv: str(inv.get("number") or "").casefold())
         logger.info(
             "Fetched all invoices",
@@ -304,10 +304,10 @@ def get_invoices(
 
 
 def get_credit_notes(
-    tenant_id: Optional[str] = None,
-    modified_since: Optional[datetime] = None,
-    api: Optional[AccountingApi] = None,
-) -> List[Dict[str, Any]]:
+    tenant_id: str | None = None,
+    modified_since: datetime | None = None,
+    api: AccountingApi | None = None,
+) -> list[dict[str, Any]]:
     """
     Get all supplier credit notes (ACCPAYCREDIT) across all pages (no contact filter).
 
@@ -324,7 +324,7 @@ def get_credit_notes(
     client = api or get_xero_api_client()
 
     page = 1
-    credit_notes: List[Dict[str, Any]] = []
+    credit_notes: list[dict[str, Any]] = []
 
     try:
         logger.info(
@@ -406,10 +406,10 @@ def get_credit_notes(
 
 
 def get_payments(
-    tenant_id: Optional[str] = None,
-    modified_since: Optional[datetime] = None,
-    api: Optional[AccountingApi] = None,
-) -> List[Dict[str, Any]]:
+    tenant_id: str | None = None,
+    modified_since: datetime | None = None,
+    api: AccountingApi | None = None,
+) -> list[dict[str, Any]]:
     """
     Get all payments across all pages (no contact filter).
 
@@ -426,7 +426,7 @@ def get_payments(
     client = api or get_xero_api_client()
 
     page = 1
-    payments: List[Dict[str, Any]] = []
+    payments: list[dict[str, Any]] = []
 
     try:
         logger.info(
@@ -501,7 +501,7 @@ def get_payments(
     return []
 
 
-def get_contacts(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_contacts(tenant_id: str | None = None) -> list[dict[str, Any]]:
     """Return cached contacts for the active tenant."""
     tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id:
@@ -524,7 +524,7 @@ def get_contacts(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
         return []
 
 
-def _coerce_invoice_list(payload: Any) -> List[Dict[str, Any]]:
+def _coerce_invoice_list(payload: Any) -> list[dict[str, Any]]:
     """Normalize cached invoice payload (list or legacy dict) to a sorted list."""
     if isinstance(payload, list):
         invoices = [inv for inv in payload if isinstance(inv, dict)]
@@ -537,7 +537,7 @@ def _coerce_invoice_list(payload: Any) -> List[Dict[str, Any]]:
     return invoices
 
 
-def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
+def get_invoices_by_contact(contact_id: str) -> list[dict[str, Any]]:
     """Return cached invoices for the specified contact."""
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
@@ -569,7 +569,7 @@ def get_invoices_by_contact(contact_id: str) -> List[Dict[str, Any]]:
         return []
 
 
-def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
+def get_credit_notes_by_contact(contact_id: str) -> list[dict[str, Any]]:
     """Return cached credit notes for the specified contact."""
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id or not contact_id:
@@ -599,7 +599,7 @@ def get_credit_notes_by_contact(contact_id: str) -> List[Dict[str, Any]]:
         return []
 
 
-def get_payments_by_contact(contact_id: str) -> List[Dict[str, Any]]:
+def get_payments_by_contact(contact_id: str) -> list[dict[str, Any]]:
     """Return cached payments for the specified contact."""
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id or not contact_id:

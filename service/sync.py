@@ -11,9 +11,10 @@ This module:
 import json
 import os
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from botocore.exceptions import ClientError
 from xero_python.accounting import AccountingApi
@@ -42,7 +43,7 @@ def _sync_resource(
     resource: XeroType,
     start_message: str,
     done_message: str,
-    modified_since: Optional[datetime] = None,
+    modified_since: datetime | None = None,
 ) -> bool:
     """Fetch, cache, and upload a single Xero dataset."""
     if not tenant_id:
@@ -75,10 +76,7 @@ def _sync_resource(
                 )
 
         # Merge incremental results with any cached data so we retain the full dataset.
-        if modified_since:
-            payload = _merge_resource_payload(resource, existing_payload, data)
-        else:
-            payload = data if data is not None else existing_payload
+        payload = _merge_resource_payload(resource, existing_payload, data) if modified_since else data if data is not None else existing_payload
 
         if payload is None:
             payload = []
@@ -103,7 +101,7 @@ def _sync_resource(
         return False
 
 
-def _resolve_modified_since(record: Optional[Dict[str, Any]]) -> Optional[datetime]:
+def _resolve_modified_since(record: dict[str, Any] | None) -> datetime | None:
     """Return LastSyncTime as a timezone-aware datetime if present."""
     if not record:
         return None
@@ -124,7 +122,7 @@ def _resolve_modified_since(record: Optional[Dict[str, Any]]) -> Optional[dateti
         try:
             normalised = str(raw_value).strip().replace("Z", "+00:00")
             parsed = datetime.fromisoformat(normalised)
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
         except ValueError:
             return None
 
@@ -132,7 +130,7 @@ def _resolve_modified_since(record: Optional[Dict[str, Any]]) -> Optional[dateti
         timestamp /= 1000
 
     try:
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        return datetime.fromtimestamp(timestamp, tz=UTC)
     except (OverflowError, OSError, ValueError):
         return None
 
@@ -149,7 +147,7 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
     if isinstance(delta, (list, dict)) and not delta:
         return existing
 
-    def _as_list(value: Any) -> List[Dict[str, Any]]:
+    def _as_list(value: Any) -> list[dict[str, Any]]:
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
         if isinstance(value, dict):
@@ -173,8 +171,8 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
     if not delta_list:
         return existing_list
 
-    merged: Dict[str, Dict[str, Any]] = {}
-    extras: list[Dict[str, Any]] = []
+    merged: dict[str, dict[str, Any]] = {}
+    extras: list[dict[str, Any]] = []
 
     for item in existing_list:
         if isinstance(item, dict) and item.get(key):
@@ -205,7 +203,7 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
     return combined
 
 
-def sync_contacts(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+def sync_contacts(api: AccountingApi, tenant_id: str, modified_since: datetime | None = None) -> bool:
     """Sync contact data from Xero."""
     return _sync_resource(
         api,
@@ -218,7 +216,7 @@ def sync_contacts(api: AccountingApi, tenant_id: str, modified_since: Optional[d
     )
 
 
-def sync_credit_notes(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+def sync_credit_notes(api: AccountingApi, tenant_id: str, modified_since: datetime | None = None) -> bool:
     """Sync credit note data from Xero."""
     return _sync_resource(
         api,
@@ -231,7 +229,7 @@ def sync_credit_notes(api: AccountingApi, tenant_id: str, modified_since: Option
     )
 
 
-def sync_invoices(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+def sync_invoices(api: AccountingApi, tenant_id: str, modified_since: datetime | None = None) -> bool:
     """Sync invoice data from Xero."""
     return _sync_resource(
         api,
@@ -244,7 +242,7 @@ def sync_invoices(api: AccountingApi, tenant_id: str, modified_since: Optional[d
     )
 
 
-def sync_payments(api: AccountingApi, tenant_id: str, modified_since: Optional[datetime] = None) -> bool:
+def sync_payments(api: AccountingApi, tenant_id: str, modified_since: datetime | None = None) -> bool:
     """Sync payment data from Xero."""
     return _sync_resource(
         api,
@@ -300,7 +298,7 @@ def check_load_required(tenant_id: str) -> bool:
 def update_tenant_status(
     tenant_id: str,
     tenant_status: TenantStatus = TenantStatus.FREE,
-    last_sync_time: Optional[int] = None,
+    last_sync_time: int | None = None,
 ) -> bool:
     """Persist the tenant's status in DynamoDB and cache."""
     if not tenant_id:
@@ -336,11 +334,11 @@ def update_tenant_status(
 def sync_data(
     tenant_id: str,
     operation_type: TenantStatus,
-    oauth_token: Optional[Dict[str, Any]] = None,
+    oauth_token: dict[str, Any] | None = None,
 ) -> None:
     """Sync all datasets for a tenant and update tenant status."""
     tenant_record = TenantDataRepository.get_item(tenant_id)
-    modified_since: Optional[datetime] = None
+    modified_since: datetime | None = None
     if operation_type != TenantStatus.LOADING and tenant_record:
         modified_since = _resolve_modified_since(tenant_record)
 
