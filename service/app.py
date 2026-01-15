@@ -1,7 +1,6 @@
 import json
 import os
 import secrets
-import urllib.parse
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
@@ -9,6 +8,8 @@ from io import BytesIO
 from typing import Any
 
 import requests
+from authlib.integrations.base_client.errors import OAuthError
+from authlib.integrations.flask_client import OAuth
 from flask import (
     Flask,
     abort,
@@ -107,8 +108,10 @@ cache_provider.set_cache(cache)
 app.config["CLIENT_ID"] = CLIENT_ID
 app.config["CLIENT_SECRET"] = CLIENT_SECRET
 
-AUTH_URL = "https://login.xero.com/identity/connect/authorize"
-TOKEN_URL = "https://identity.xero.com/connect/token"
+XERO_OIDC_METADATA_URL = os.getenv(
+    "XERO_OIDC_METADATA_URL",
+    "https://identity.xero.com/.well-known/openid-configuration",
+)
 
 if STAGE == "prod":
     REDIRECT_URI = "https://cloudcathode.com/callback"
@@ -116,6 +119,17 @@ elif STAGE == "dev":
     REDIRECT_URI = "https://s7mznicnms.eu-west-1.awsapprunner.com/callback"
 else:
     REDIRECT_URI = "http://localhost:8080/callback"
+
+oauth = OAuth(app)
+oauth.register(
+    name="xero",
+    client_id=CLIENT_ID,
+    client_secret=CLIENT_SECRET,
+    # Load endpoints + JWKS from OIDC metadata so Authlib can validate id_tokens.
+    server_metadata_url=XERO_OIDC_METADATA_URL,
+    # Reuse the existing scope string to keep requested permissions unchanged.
+    client_kwargs={"scope": scope_str()},
+)
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -1482,23 +1496,13 @@ def login():
     if not CLIENT_ID or not CLIENT_SECRET:
         return "Missing XERO_CLIENT_ID or XERO_CLIENT_SECRET env vars", 500
 
-    # Create and store a CSRF state
-    state = secrets.token_urlsafe(24)
-    session["oauth_state"] = state
-
-    # Optional but recommended for OIDC
+    # OIDC nonce ties the auth response to this browser session.
     nonce = secrets.token_urlsafe(24)
     session["oauth_nonce"] = nonce
 
-    params = {
-        "response_type": "code",
-        "client_id": CLIENT_ID,
-        "redirect_uri": REDIRECT_URI,
-        "scope": scope_str(),
-        "state": state,
-    }
     logger.info("Redirecting to Xero authorization", scope_count=len(scope_str().split()))
-    return redirect(f"{AUTH_URL}?{urllib.parse.urlencode(params)}")
+    # Authlib stores state/nonce in session and builds the authorize URL.
+    return oauth.xero.authorize_redirect(redirect_uri=REDIRECT_URI, nonce=nonce)
 
 
 @app.route("/callback")
@@ -1517,34 +1521,40 @@ def callback():
             400,
         )
 
-    code = request.args.get("code")
-    state = request.args.get("state")
-    if not code:
-        logger.error("No authorization code returned from Xero", error_code=400)
-        return "No authorization code returned from Xero", 400
+    try:
+        tokens = oauth.xero.authorize_access_token()
+    except OAuthError as exc:
+        logger.error(
+            "OAuth error",
+            error_code=400,
+            error_description=exc.description,
+            error=exc.error,
+        )
+        return f"OAuth error: {exc.description or exc.error}", 400
 
-    # Validate state
-    if not state or state != session.get("oauth_state"):
-        logger.error("Invalid OAuth state", error_code=400)
-        abort(400, "Invalid OAuth state")
+    if not isinstance(tokens, dict):
+        logger.error("Invalid token response from Xero", error_code=400)
+        return "Invalid token response from Xero", 400
 
-    # Exchange code for tokens
-    data = {
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": REDIRECT_URI,
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    # id_token is required for OIDC claim + nonce validation.
+    if not tokens.get("id_token"):
+        logger.error("Missing id_token in OAuth response", error_code=400)
+        return "Missing id_token in OAuth response", 400
 
-    # Xero expects client_secret_basic (HTTP Basic) auth for token endpoint
-    token_res = requests.post(TOKEN_URL, data=data, headers=headers, auth=(CLIENT_ID, CLIENT_SECRET))
-    if token_res.status_code != 200:
-        logger.error("Error fetching token", error=token_res.text, error_code=400)
-        return f"Error fetching token: {token_res.text}", 400
+    nonce = session.pop("oauth_nonce", None)
+    # Require the original nonce so we can validate the id_token against it.
+    if not nonce:
+        logger.error("Missing OAuth nonce in session", error_code=400)
+        return "Missing OAuth nonce in session", 400
 
-    tokens = token_res.json()
+    try:
+        # Validates signature + standard claims and checks nonce matches session.
+        oauth.xero.parse_id_token(tokens, nonce=nonce)
+    except Exception as exc:
+        logger.exception("Failed to validate id_token", error=str(exc))
+        return "Invalid id_token", 400
+
     save_xero_oauth2_token(tokens)
-
     session["access_token"] = tokens.get("access_token")
 
     conn_res = requests.get(
@@ -1586,10 +1596,6 @@ def callback():
         _set_active_tenant(first_tenant)
     else:
         _set_active_tenant(None)
-
-    # Clear state after successful exchange
-    session.pop("oauth_state", None)
-    session.pop("oauth_nonce", None)
 
     logger.info("OAuth callback processed", tenants=len(tenants))
     return redirect(url_for("tenant_management"))

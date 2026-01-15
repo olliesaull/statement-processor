@@ -8,6 +8,7 @@ aws_lambda_powertools
 flask
 flask-caching
 Flask-Session
+Authlib
 requests
 xero-python
 Flask-WTF
