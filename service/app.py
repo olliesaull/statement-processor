@@ -25,6 +25,7 @@ from flask_session import Session
 from flask_wtf.csrf import CSRFProtect
 from openpyxl import Workbook
 from openpyxl.styles import Border, Font, PatternFill, Side
+from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 import cache_provider
@@ -264,6 +265,134 @@ def ignore_favicon():
     return "", 204
 
 
+def _get_active_contacts_for_upload() -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Return active contacts and a name -> ID lookup for the upload form."""
+    contacts_raw = get_contacts()
+    contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
+    contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
+    contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
+    return contacts_list, contact_lookup
+
+
+def _validate_upload_payload(files: list, names: list[str]) -> bool:
+    """Validate the number of uploaded files and selected contacts."""
+    if not files:
+        logger.info("Upload rejected; no statement files provided.")
+        return False
+    if len(files) != len(names):
+        logger.info("Upload rejected; file count does not match contact selections.")
+        return False
+    return True
+
+
+def _ensure_contact_config(
+    tenant_id: str | None,
+    contact_id: str,
+    contact_name: str,
+    filename: str,
+    error_messages: list[str],
+) -> bool:
+    """Ensure the contact has a config; on failure, log and append a user-facing error."""
+    try:
+        get_contact_config(tenant_id, contact_id)
+    except KeyError:
+        logger.warning(
+            "Upload blocked; contact config missing",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            contact_name=contact_name,
+            statement_filename=filename,
+        )
+        error_messages.append(f"Contact '{contact_name}' does not have a statement config yet. Please configure it before uploading.")
+        return False
+    except Exception as exc:
+        logger.exception(
+            "Upload blocked; config lookup failed",
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            contact_name=contact_name,
+            statement_filename=filename,
+            error=exc,
+        )
+        error_messages.append(f"Could not load the config for '{contact_name}'. Please try again later.")
+        return False
+    return True
+
+
+def _process_statement_upload(
+    tenant_id: str | None,
+    uploaded_file: FileStorage,
+    contact_id: str,
+    contact_name: str,
+) -> str:
+    """Upload the PDF, register the statement, and kick off textraction."""
+    file_bytes = getattr(uploaded_file, "content_length", None)
+    statement_id = str(uuid.uuid4())
+    logger.info(
+        "Preparing statement upload",
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        contact_name=contact_name,
+        statement_id=statement_id,
+        statement_filename=uploaded_file.filename,
+        bytes=file_bytes,
+    )
+
+    entry = {
+        "statement_id": statement_id,
+        "statement_name": uploaded_file.filename,
+        "contact_name": contact_name,
+        "contact_id": contact_id,
+    }
+
+    # Upload PDF to S3 first so downstream processing can read it.
+    pdf_statement_key = statement_pdf_s3_key(tenant_id, statement_id)
+    upload_statement_to_s3(fs_like=uploaded_file, key=pdf_statement_key)
+    logger.info(
+        "Uploaded statement PDF",
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        statement_id=statement_id,
+        s3_key=pdf_statement_key,
+    )
+
+    # Persist statement metadata to DynamoDB.
+    add_statement_to_table(tenant_id, entry)
+    logger.info(
+        "Statement submitted and metadata registered",
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        statement_id=statement_id,
+        table_entry=entry,
+    )
+
+    # Kick off background textraction so it's ready by the time the user views it.
+    json_statement_key = statement_json_s3_key(tenant_id, statement_id)
+    started = start_textraction_state_machine(
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        statement_id=statement_id,
+        pdf_key=pdf_statement_key,
+        json_key=json_statement_key,
+    )
+
+    log_kwargs = {
+        "tenant_id": tenant_id,
+        "contact_id": contact_id,
+        "statement_id": statement_id,
+        "pdf_key": pdf_statement_key,
+        "json_key": json_statement_key,
+    }
+
+    if started:
+        logger.info("Started textraction workflow", **log_kwargs)
+    else:
+        logger.error("Failed to start textraction workflow", **log_kwargs)
+
+
+    return statement_id
+
+
 @app.route("/upload-statements", methods=["GET", "POST"])
 @active_tenant_required("Please select a tenant before uploading statements.")
 @xero_token_required
@@ -273,10 +402,7 @@ def upload_statements():
     """Upload one or more PDF statements and register them for processing."""
     tenant_id = session.get("xero_tenant_id")
 
-    contacts_raw = get_contacts()
-    contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
-    contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
-    contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
+    contacts_list, contact_lookup = _get_active_contacts_for_upload()
     success_count: int | None = None
     error_messages: list[str] = []
     logger.info(
@@ -296,18 +422,13 @@ def upload_statements():
             files=len(files),
             names=len(names),
         )
-        if not files:
-            logger.info("Please add at least one statement (PDF).")
-        elif len(files) != len(names):
-            logger.info("Each statement must have a contact selected.")
-        else:
-            for f, contact in zip(files, names, strict=False):
-                file_bytes = getattr(f, "content_length", None)
+        if _validate_upload_payload(files, names):
+            for uploaded_file, contact in zip(files, names, strict=False):
                 if not contact.strip():
-                    logger.info("Missing contact", statement_filename=f.filename)
+                    logger.info("Missing contact", statement_filename=uploaded_file.filename)
                     continue
-                if not is_allowed_pdf(f.filename, f.mimetype):
-                    logger.info("Rejected non-PDF upload", statement_filename=f.filename)
+                if not is_allowed_pdf(uploaded_file.filename, uploaded_file.mimetype):
+                    logger.info("Rejected non-PDF upload", statement_filename=uploaded_file.filename)
                     continue
 
                 contact_name = contact.strip()
@@ -317,109 +438,20 @@ def upload_statements():
                         "Upload blocked; contact not found",
                         tenant_id=tenant_id,
                         contact_name=contact_name,
-                        statement_filename=f.filename,
+                        statement_filename=uploaded_file.filename,
                     )
                     error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")
                     continue
 
-                try:
-                    get_contact_config(tenant_id, contact_id)
-                except KeyError:
-                    logger.warning(
-                        "Upload blocked; contact config missing",
-                        tenant_id=tenant_id,
-                        contact_id=contact_id,
-                        contact_name=contact_name,
-                        statement_filename=f.filename,
-                    )
-                    error_messages.append(f"Contact '{contact_name}' does not have a statement config yet. Please configure it before uploading.")
-                    continue
-                except Exception as exc:
-                    logger.exception(
-                        "Upload blocked; config lookup failed",
-                        tenant_id=tenant_id,
-                        contact_id=contact_id,
-                        contact_name=contact_name,
-                        statement_filename=f.filename,
-                        error=exc,
-                    )
-                    error_messages.append(f"Could not load the config for '{contact_name}'. Please try again later.")
+                if not _ensure_contact_config(tenant_id, contact_id, contact_name, uploaded_file.filename, error_messages):
                     continue
 
-                statement_id = str(uuid.uuid4())
-                logger.info(
-                    "Preparing statement upload",
+                _process_statement_upload(
                     tenant_id=tenant_id,
+                    uploaded_file=uploaded_file,
                     contact_id=contact_id,
                     contact_name=contact_name,
-                    statement_id=statement_id,
-                    statement_filename=f.filename,
-                    bytes=file_bytes,
                 )
-
-                entry = {
-                    "statement_id": statement_id,
-                    "statement_name": f.filename,
-                    "contact_name": contact_name,
-                    "contact_id": contact_id,
-                }
-
-                # Upload pdf statement to S3
-                pdf_statement_key = statement_pdf_s3_key(tenant_id, statement_id)
-                upload_statement_to_s3(fs_like=f, key=pdf_statement_key)
-                logger.info(
-                    "Uploaded statement PDF",
-                    tenant_id=tenant_id,
-                    contact_id=contact_id,
-                    statement_id=statement_id,
-                    s3_key=pdf_statement_key,
-                )
-
-                # Upload statement to ddb
-                add_statement_to_table(tenant_id, entry)
-                logger.info(
-                    "Registered statement metadata",
-                    tenant_id=tenant_id,
-                    contact_id=contact_id,
-                    statement_id=statement_id,
-                    table_entry=entry,
-                )
-
-                logger.info(
-                    "Statement submitted",
-                    statement_id=statement_id,
-                    tenant_id=tenant_id,
-                    contact_id=contact_id,
-                )
-
-                # Kick off background textraction so it's ready by the time the user views it
-                json_statement_key = statement_json_s3_key(tenant_id, statement_id)
-                started = start_textraction_state_machine(
-                    tenant_id=tenant_id,
-                    contact_id=contact_id,
-                    statement_id=statement_id,
-                    pdf_key=pdf_statement_key,
-                    json_key=json_statement_key,
-                )
-                if started:
-                    logger.info(
-                        "Started textraction workflow",
-                        tenant_id=tenant_id,
-                        contact_id=contact_id,
-                        statement_id=statement_id,
-                        pdf_key=pdf_statement_key,
-                        json_key=json_statement_key,
-                    )
-                else:
-                    logger.error(
-                        "Failed to start textraction workflow",
-                        tenant_id=tenant_id,
-                        contact_id=contact_id,
-                        statement_id=statement_id,
-                        pdf_key=pdf_statement_key,
-                        json_key=json_statement_key,
-                    )
-
                 uploads_ok += 1
 
         if uploads_ok:
@@ -588,6 +620,542 @@ def delete_statement(statement_id: str):
     return redirect(url_for("statements"))
 
 
+def _parse_items_view(raw_value: str | None) -> str:
+    """Normalize the statement item filter."""
+    items_view = (raw_value or "incomplete").strip().lower()
+    if items_view not in {"incomplete", "completed", "all"}:
+        return "incomplete"
+    return items_view
+
+
+def _parse_show_payments(raw_value: str | None) -> bool:
+    """Normalize the show payments flag."""
+    value = (raw_value or "true").strip().lower()
+    return value in {"true", "1", "yes", "on"}
+
+
+def _handle_statement_post_actions(
+    *,
+    tenant_id: str,
+    statement_id: str,
+    form: Any,
+    items_view: str,
+    show_payments: bool,
+) -> Any:
+    """Handle POST actions for statement detail views, returning a redirect when applicable."""
+    action = form.get("action")
+    if action in {"mark_complete", "mark_incomplete"}:
+        completed_flag = action == "mark_complete"
+        try:
+            mark_statement_completed(tenant_id, statement_id, completed_flag)
+            try:
+                set_all_statement_items_completed(tenant_id, statement_id, completed_flag)
+            except Exception as exc:
+                logger.exception(
+                    "Failed to toggle all statement items",
+                    statement_id=statement_id,
+                    tenant_id=tenant_id,
+                    desired_state=completed_flag,
+                    error=exc,
+                )
+
+            session["statements_message"] = "Statement marked as complete." if completed_flag else "Statement marked as incomplete."
+            logger.info(
+                "Statement completion updated",
+                tenant_id=tenant_id,
+                statement_id=statement_id,
+                completed=completed_flag,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception(
+                "Failed to toggle statement completion",
+                statement_id=statement_id,
+                tenant_id=tenant_id,
+                desired_state=completed_flag,
+                error=exc,
+            )
+            abort(500)
+        return redirect(url_for("statements"))
+
+    if action in {"complete_item", "incomplete_item"}:
+        statement_item_id = (form.get("statement_item_id") or "").strip()
+        if statement_item_id:
+            desired_state = action == "complete_item"
+            try:
+                set_statement_item_completed(tenant_id, statement_item_id, desired_state)
+                logger.info(
+                    "Statement item updated",
+                    tenant_id=tenant_id,
+                    statement_id=statement_id,
+                    statement_item_id=statement_item_id,
+                    completed=desired_state,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Failed to toggle statement item completion",
+                    statement_id=statement_id,
+                    statement_item_id=statement_item_id,
+                    tenant_id=tenant_id,
+                    desired_state=desired_state,
+                    error=exc,
+                )
+        return redirect(
+            url_for(
+                "statement",
+                statement_id=statement_id,
+                items_view=items_view,
+                show_payments="true" if show_payments else "false",
+            )
+        )
+
+    return None
+
+
+def _build_match_by_item_id(matched_invoice_to_statement_item: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Return a map of statement_item_id to matched document type/source."""
+    match_by_item_id: dict[str, dict[str, str]] = {}
+    for match in matched_invoice_to_statement_item.values():
+        stmt_item = match.get("statement_item") if isinstance(match, dict) else None
+        doc = match.get("invoice") if isinstance(match, dict) else None
+        if not isinstance(stmt_item, dict) or not isinstance(doc, dict):
+            continue
+        statement_item_id = stmt_item.get("statement_item_id")
+        if not statement_item_id:
+            continue
+        doc_type = str(doc.get("type") or "").upper()
+        if doc.get("credit_note_id") or doc_type.endswith("CREDIT"):
+            match_by_item_id[statement_item_id] = {
+                "type": "credit_note",
+                "source": "credit_note_match",
+            }
+        else:
+            match_by_item_id[statement_item_id] = {
+                "type": "invoice",
+                "source": "invoice_match",
+            }
+    return match_by_item_id
+
+
+def _build_payment_number_map(
+    invoices: list[dict[str, Any]],
+    payments: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Build a map of invoice number -> payment rows for payment inference."""
+    invoice_number_by_id: dict[str, str] = {}
+    for inv in invoices:
+        inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
+        inv_number = str(inv.get("number") or "").strip() if isinstance(inv, dict) else ""
+        if inv_id and inv_number:
+            invoice_number_by_id[str(inv_id)] = inv_number
+
+    payment_number_map: dict[str, list[dict[str, Any]]] = {}
+    for payment in payments:
+        if not isinstance(payment, dict):
+            continue
+        invoice_id = payment.get("invoice_id")
+        if not invoice_id:
+            continue
+        invoice_number = invoice_number_by_id.get(str(invoice_id))
+        if not invoice_number:
+            continue
+        payment_number_map.setdefault(invoice_number, []).append(payment)
+    return payment_number_map
+
+
+def _classify_statement_items(
+    *,
+    items: list[Any],
+    rows_by_header: list[dict[str, Any]],
+    item_number_header: str | None,
+    contact_config: dict[str, Any],
+    matched_invoice_to_statement_item: dict[str, Any],
+    matched_numbers: set[str],
+    match_by_item_id: dict[str, dict[str, str]],
+    payment_number_map: dict[str, list[dict[str, Any]]],
+    statement_id: str,
+) -> tuple[list[str], dict[str, str]]:
+    """Classify statement items in-place and return item types + updates."""
+    classification_updates: dict[str, str] = {}
+    for idx, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
+        statement_item_id = it.get("statement_item_id")
+        raw = it.get("raw", {}) if isinstance(it.get("raw"), dict) else {}
+        current_type = str(it.get("item_type") or "").strip().lower()
+        row_number = ""
+        if item_number_header and idx < len(rows_by_header):
+            row_number = str(rows_by_header[idx].get(item_number_header) or "").strip()
+
+        new_type: str | None
+        source: str | None
+        new_type = None
+        source = None
+
+        if statement_item_id and statement_item_id in match_by_item_id:
+            entry = match_by_item_id[statement_item_id]
+            new_type = entry["type"]
+            source = entry["source"]
+        elif row_number and row_number in matched_numbers:
+            match = matched_invoice_to_statement_item.get(row_number)
+            doc = match.get("invoice") if isinstance(match, dict) else None
+            if isinstance(doc, dict):
+                doc_type = str(doc.get("type") or "").upper()
+                if doc.get("credit_note_id") or doc_type.endswith("CREDIT"):
+                    new_type = "credit_note"
+                    source = "credit_note_match"
+                else:
+                    new_type = "invoice"
+                    source = "invoice_match"
+        elif row_number and row_number not in matched_numbers and row_number in payment_number_map:
+            new_type = "payment"
+            source = "payment_match"
+
+        if not new_type:
+            new_type = guess_statement_item_type(raw, it.get("total"), contact_config)
+            source = "heuristic"
+
+        if new_type and new_type != current_type:
+            it["item_type"] = new_type
+            if statement_item_id:
+                classification_updates[statement_item_id] = new_type
+            logger.info(
+                "Statement item type updated",
+                statement_id=statement_id,
+                statement_item_id=statement_item_id,
+                new_type=new_type,
+                previous_type=current_type or "",
+                source=source,
+            )
+
+    item_types = [
+        str((it.get("item_type") if isinstance(it, dict) else "") or "").strip().lower()
+        for it in items
+    ]
+    return item_types, classification_updates
+
+
+def _persist_classification_updates(
+    *,
+    data: dict[str, Any],
+    statement_id: str,
+    tenant_id: str,
+    json_statement_key: str,
+    classification_updates: dict[str, str],
+) -> None:
+    """Persist updated item types back to S3 and DynamoDB."""
+    if not classification_updates:
+        return
+
+    try:
+        json_payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        upload_statement_to_s3(BytesIO(json_payload), json_statement_key)
+        logger.info(
+            "Persisted statement item types to S3",
+            statement_id=statement_id,
+            updated=len(classification_updates),
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed to persist statement JSON",
+            statement_id=statement_id,
+            error=str(exc),
+        )
+
+    persist_item_types_to_dynamo(tenant_id, classification_updates)
+    logger.info(
+        "Persisted statement item types to DynamoDB",
+        statement_id=statement_id,
+        updated=len(classification_updates),
+    )
+
+
+def _build_row_matches(
+    rows_by_header: list[dict[str, Any]],
+    item_number_header: str | None,
+    matched_invoice_to_statement_item: dict[str, Any],
+    row_comparisons: list[list[Any]],
+) -> list[bool]:
+    """Return the per-row match status for coloring and export."""
+    if item_number_header:
+        row_matches: list[bool] = []
+        for r in rows_by_header:
+            num = (r.get(item_number_header) or "").strip()
+            row_matches.append(bool(num and matched_invoice_to_statement_item.get(num)))
+        return row_matches
+
+    # Fallback: if no number mapping, use strict all-cells match
+    return [all(cell.matches for cell in row) for row in row_comparisons]
+
+
+def _build_statement_excel_response(
+    *,
+    display_headers: list[str],
+    rows_by_header: list[dict[str, Any]],
+    right_rows_by_header: list[dict[str, Any]],
+    row_comparisons: list[list[Any]],
+    row_matches: list[bool],
+    item_types: list[str],
+    items: list[Any],
+    item_status_map: dict[str, bool],
+    record: dict[str, Any],
+    statement_id: str,
+    tenant_id: str,
+) -> Any:
+    """Build an XLSX export response for the current statement view."""
+    header_labels = []
+    statement_headers: list[str] = []
+    xero_headers: list[str] = []
+
+    for header in display_headers:
+        label = (header or "").replace("_", " ").strip()
+        label = label[0].upper() + label[1:] if label else header or ""
+        header_labels.append((header, label))
+        statement_headers.append(f"Statement {label}")
+        xero_headers.append(f"Xero {label}")
+
+    excel_headers = ["Item Type", *statement_headers, *xero_headers, "Status"]
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Statement"
+    worksheet.append(excel_headers)
+
+    fill_success = PatternFill(fill_type="solid", fgColor="C6EFCE")
+    fill_danger = PatternFill(fill_type="solid", fgColor="FFC7CE")
+    fill_warning = PatternFill(fill_type="solid", fgColor="FFEB9C")
+    font_completed = Font(color="808080")
+    mismatch_side = Side(style="thin", color="E6B8B7")
+    mismatch_border = Border(
+        left=mismatch_side,
+        right=mismatch_side,
+        top=mismatch_side,
+        bottom=mismatch_side,
+    )
+    divider_side = Side(style="medium", color="808080")
+    statement_col_count = len(header_labels)
+    statement_end_col = 1 + statement_col_count
+    xero_start_col = statement_end_col + 1
+
+    legend = workbook.create_sheet(title="Legend")
+    legend.column_dimensions["A"].width = 26
+    legend.column_dimensions["B"].width = 18
+    legend.append(["Legend", ""])
+    legend["A1"].font = Font(bold=True)
+    legend.append(["Match", ""])
+    legend["B2"].fill = fill_success
+    legend.append(["Mismatch", ""])
+    legend["B3"].fill = fill_danger
+    legend.append(["Flagged anomaly", ""])
+    legend["B4"].fill = fill_warning
+    legend.append(["Cell mismatch (matched rows)", ""])
+    legend["B5"].border = mismatch_border
+    legend.append(["Completed (faded)", ""])
+    legend["A7"].font = font_completed
+
+    if statement_col_count:
+        worksheet.cell(row=1, column=statement_end_col).border = Border(right=divider_side)
+        worksheet.cell(row=1, column=xero_start_col).border = Border(left=divider_side)
+
+    row_count = max(len(rows_by_header), len(right_rows_by_header))
+    for idx in range(row_count):
+        left_row = rows_by_header[idx] if idx < len(rows_by_header) else {}
+        right_row = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
+
+        row_values: list[Any] = [item_types[idx] if idx < len(item_types) else ""]
+        for src_header, label in header_labels:  # noqa: B007
+            left_value = left_row.get(src_header, "") if isinstance(left_row, dict) else ""
+            row_values.append("" if left_value is None else left_value)
+
+        for src_header, label in header_labels:  # noqa: B007
+            right_value = right_row.get(src_header, "") if isinstance(right_row, dict) else ""
+            row_values.append("" if right_value is None else right_value)
+
+        status_label = ""
+        item = items[idx] if idx < len(items) else {}
+        statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
+        is_item_completed = False
+        if statement_item_id:
+            is_item_completed = item_status_map.get(statement_item_id, False)
+            status_label = "Completed" if is_item_completed else "Incomplete"
+        # Providing status in the sheet lets users filter finished work out quickly.
+        row_values.append(status_label)
+
+        worksheet.append(row_values)
+
+        # Apply the same row colouring rules as the UI:
+        # - anomalous rows: warning (based on per-item `_flags`)
+        # - otherwise: green for "match", red for "mismatch"
+        raw_flags = item.get("_flags") if isinstance(item, dict) else None
+        flag_list = raw_flags if isinstance(raw_flags, list) else []
+        anomalous = any(isinstance(f, str) and f.strip() in {"ml-outlier", "invalid-date"} for f in flag_list)
+        row_match = row_matches[idx] if idx < len(row_matches) else False
+
+        fill = fill_warning if anomalous else (fill_success if row_match else fill_danger)
+        current_row = worksheet.max_row
+        for col in range(1, len(excel_headers) + 1):
+            cell = worksheet.cell(row=current_row, column=col)
+            cell.fill = fill
+            if is_item_completed:
+                cell.font = font_completed
+
+        # Highlight per-cell mismatches for matched rows (mirrors the "!" indicator in the UI).
+        if statement_col_count:
+            worksheet.cell(row=current_row, column=statement_end_col).border = Border(right=divider_side)
+            worksheet.cell(row=current_row, column=xero_start_col).border = Border(left=divider_side)
+
+        if row_match and idx < len(row_comparisons):
+            comparisons = row_comparisons[idx] or []
+            col_count = len(header_labels)
+            for col_idx, comparison in enumerate(comparisons[:col_count]):
+                if getattr(comparison, "matches", True):
+                    continue
+                for target_col in (2 + col_idx, 2 + col_count + col_idx):
+                    cell = worksheet.cell(row=current_row, column=target_col)
+                    if target_col == statement_end_col:
+                        cell.border = Border(
+                            left=mismatch_side,
+                            right=divider_side,
+                            top=mismatch_side,
+                            bottom=mismatch_side,
+                        )
+                    elif target_col == xero_start_col:
+                        cell.border = Border(
+                            left=divider_side,
+                            right=mismatch_side,
+                            top=mismatch_side,
+                            bottom=mismatch_side,
+                        )
+                    else:
+                        cell.border = mismatch_border
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    excel_payload = output.getvalue()
+    output.close()
+
+    response = app.response_class(
+        excel_payload,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    earliest_date_raw = record.get("EarliestItemDate")
+    latest_date_raw = record.get("LatestItemDate")
+    earliest_date: date | None = None
+    latest_date: date | None = None
+    try:
+        if isinstance(earliest_date_raw, str):
+            earliest_date = date.fromisoformat(earliest_date_raw.strip())
+    except ValueError:
+        earliest_date = None
+    try:
+        if isinstance(latest_date_raw, str):
+            latest_date = date.fromisoformat(latest_date_raw.strip())
+    except ValueError:
+        latest_date = None
+
+    if earliest_date and latest_date:
+        date_segment = earliest_date.strftime("%Y-%m-%d") if earliest_date == latest_date else f"{earliest_date.strftime('%Y-%m-%d')}_{latest_date.strftime('%Y-%m-%d')}"
+    elif latest_date or earliest_date:
+        chosen = latest_date or earliest_date
+        date_segment = chosen.strftime("%Y-%m-%d") if chosen else ""
+    else:
+        date_segment = ""
+
+    contact_name = record.get("ContactName") if isinstance(record, dict) else ""
+    contact_segment = secure_filename(str(contact_name or "").strip()) or f"statement_{statement_id}"
+
+    parts = [contact_segment]
+    if date_segment:
+        parts.append(date_segment)
+    download_name = "_".join(parts) + "_export.xlsx"
+
+    response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
+    logger.info(
+        "Statement Excel generated",
+        tenant_id=tenant_id,
+        statement_id=statement_id,
+        rows=row_count,
+        excel_filename=download_name,
+    )
+    return response
+
+
+def _build_statement_rows(
+    *,
+    rows_by_header: list[dict[str, Any]],
+    right_rows_by_header: list[dict[str, Any]],
+    display_headers: list[str],
+    row_comparisons: list[list[Any]],
+    row_matches: list[bool],
+    items: list[Any],
+    item_types: list[str],
+    item_status_map: dict[str, bool],
+    item_number_header: str | None,
+    matched_invoice_to_statement_item: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build the rows displayed in the statement detail UI."""
+    statement_rows: list[dict[str, Any]] = []
+    for idx, left_row in enumerate(rows_by_header):
+        item = items[idx] if idx < len(items) else {}
+        statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
+        is_item_completed = False
+        if statement_item_id:
+            is_item_completed = item_status_map.get(statement_item_id, False)
+
+        right_row_dict = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
+        flags: list[str] = []
+        if isinstance(item, dict):
+            raw_flags = item.get("_flags") or []
+            if isinstance(raw_flags, list):
+                seen_flags = set()
+                for flag in raw_flags:
+                    if not isinstance(flag, str):
+                        continue
+                    normalized = flag.strip()
+                    if not normalized or normalized in seen_flags:
+                        continue
+                    seen_flags.add(normalized)
+                    flags.append(normalized)
+
+        # Build Xero links by extracting IDs from matched data
+        xero_invoice_id: str | None = None
+        xero_credit_note_id: str | None = None
+        if item_number_header and idx < len(rows_by_header):
+            row_number = str(rows_by_header[idx].get(item_number_header) or "").strip()
+            if row_number:
+                match = matched_invoice_to_statement_item.get(row_number)
+                if isinstance(match, dict):
+                    inv = match.get("invoice")
+                    if isinstance(inv, dict):
+                        cn_id = inv.get("credit_note_id")
+                        if isinstance(cn_id, str) and cn_id.strip():
+                            xero_credit_note_id = cn_id.strip()
+                        inv_id = inv.get("invoice_id")
+                        if isinstance(inv_id, str) and inv_id.strip():
+                            xero_invoice_id = inv_id.strip()
+
+        statement_rows.append(
+            {
+                "statement_item_id": statement_item_id,
+                "left_values": [left_row.get(h, "") for h in display_headers],
+                "right_values": [right_row_dict.get(h, "") for h in display_headers],
+                "cell_comparisons": row_comparisons[idx] if idx < len(row_comparisons) else [],
+                "matches": row_matches[idx] if idx < len(row_matches) else False,
+                "is_completed": is_item_completed,
+                "flags": flags,
+                "item_type": (
+                    (item.get("item_type") if isinstance(item, dict) else None)
+                    or (item_types[idx] if idx < len(item_types) else "invoice")
+                ),
+                "xero_invoice_id": xero_invoice_id,
+                "xero_credit_note_id": xero_credit_note_id,
+            }
+        )
+
+    return statement_rows
+
+
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @active_tenant_required("Please select a tenant to view statements.")
 @xero_token_required
@@ -601,11 +1169,8 @@ def statement(statement_id: str):
         logger.info("Statement record not found", tenant_id=tenant_id, statement_id=statement_id)
         abort(404)
 
-    items_view = (request.values.get("items_view") or "incomplete").strip().lower()
-    if items_view not in {"incomplete", "completed", "all"}:
-        items_view = "incomplete"
-    show_payments_raw = (request.values.get("show_payments") or "true").strip().lower()
-    show_payments = show_payments_raw in {"true", "1", "yes", "on"}
+    items_view = _parse_items_view(request.values.get("items_view"))
+    show_payments = _parse_show_payments(request.values.get("show_payments"))
     logger.info(
         "Statement detail requested",
         tenant_id=tenant_id,
@@ -625,70 +1190,15 @@ def statement(statement_id: str):
     page_heading = contact_name or f"Statement {statement_id}"
 
     if request.method == "POST":
-        action = request.form.get("action")
-        if action in {"mark_complete", "mark_incomplete"}:
-            completed_flag = action == "mark_complete"
-            try:
-                mark_statement_completed(tenant_id, statement_id, completed_flag)
-                try:
-                    set_all_statement_items_completed(tenant_id, statement_id, completed_flag)
-                except Exception as exc:
-                    logger.exception(
-                        "Failed to toggle all statement items",
-                        statement_id=statement_id,
-                        tenant_id=tenant_id,
-                        desired_state=completed_flag,
-                        error=exc,
-                    )
-
-                session["statements_message"] = "Statement marked as complete." if completed_flag else "Statement marked as incomplete."
-                logger.info(
-                    "Statement completion updated",
-                    tenant_id=tenant_id,
-                    statement_id=statement_id,
-                    completed=completed_flag,
-                )
-            except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception(
-                    "Failed to toggle statement completion",
-                    statement_id=statement_id,
-                    tenant_id=tenant_id,
-                    desired_state=completed_flag,
-                    error=exc,
-                )
-                abort(500)
-            return redirect(url_for("statements"))
-
-        elif action in {"complete_item", "incomplete_item"}:
-            statement_item_id = (request.form.get("statement_item_id") or "").strip()
-            if statement_item_id:
-                desired_state = action == "complete_item"
-                try:
-                    set_statement_item_completed(tenant_id, statement_item_id, desired_state)
-                    logger.info(
-                        "Statement item updated",
-                        tenant_id=tenant_id,
-                        statement_id=statement_id,
-                        statement_item_id=statement_item_id,
-                        completed=desired_state,
-                    )
-                except Exception as exc:
-                    logger.exception(
-                        "Failed to toggle statement item completion",
-                        statement_id=statement_id,
-                        statement_item_id=statement_item_id,
-                        tenant_id=tenant_id,
-                        desired_state=desired_state,
-                        error=exc,
-                    )
-            return redirect(
-                url_for(
-                    "statement",
-                    statement_id=statement_id,
-                    items_view=items_view,
-                    show_payments="true" if show_payments else "false",
-                )
-            )
+        response = _handle_statement_post_actions(
+            tenant_id=tenant_id,
+            statement_id=statement_id,
+            form=request.form,
+            items_view=items_view,
+            show_payments=show_payments,
+        )
+        if response is not None:
+            return response
 
     json_statement_key = statement_json_s3_key(tenant_id, statement_id)
 
@@ -753,122 +1263,28 @@ def statement(statement_id: str):
     )
 
     matched_numbers: set[str] = {key for key in matched_invoice_to_statement_item if isinstance(key, str)}
-    match_by_item_id: dict[str, dict[str, str]] = {}
-    for match in matched_invoice_to_statement_item.values():
-        stmt_item = match.get("statement_item") if isinstance(match, dict) else None
-        doc = match.get("invoice") if isinstance(match, dict) else None
-        if not isinstance(stmt_item, dict) or not isinstance(doc, dict):
-            continue
-        statement_item_id = stmt_item.get("statement_item_id")
-        if not statement_item_id:
-            continue
-        doc_type = str(doc.get("type") or "").upper()
-        if doc.get("credit_note_id") or doc_type.endswith("CREDIT"):
-            match_by_item_id[statement_item_id] = {
-                "type": "credit_note",
-                "source": "credit_note_match",
-            }
-        else:
-            match_by_item_id[statement_item_id] = {
-                "type": "invoice",
-                "source": "invoice_match",
-            }
+    match_by_item_id = _build_match_by_item_id(matched_invoice_to_statement_item)
+    payment_number_map = _build_payment_number_map(invoices, payments)
 
-    invoice_number_by_id: dict[str, str] = {}
-    for inv in invoices:
-        inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
-        inv_number = str(inv.get("number") or "").strip() if isinstance(inv, dict) else ""
-        if inv_id and inv_number:
-            invoice_number_by_id[str(inv_id)] = inv_number
+    item_types, classification_updates = _classify_statement_items(
+        items=items,
+        rows_by_header=rows_by_header,
+        item_number_header=item_number_header,
+        contact_config=contact_config,
+        matched_invoice_to_statement_item=matched_invoice_to_statement_item,
+        matched_numbers=matched_numbers,
+        match_by_item_id=match_by_item_id,
+        payment_number_map=payment_number_map,
+        statement_id=statement_id,
+    )
 
-    payment_number_map: dict[str, list[dict[str, Any]]] = {}
-    for payment in payments:
-        if not isinstance(payment, dict):
-            continue
-        invoice_id = payment.get("invoice_id")
-        if not invoice_id:
-            continue
-        invoice_number = invoice_number_by_id.get(str(invoice_id))
-        if not invoice_number:
-            continue
-        payment_number_map.setdefault(invoice_number, []).append(payment)
-
-    classification_updates: dict[str, str] = {}
-    for idx, it in enumerate(items):
-        if not isinstance(it, dict):
-            continue
-        statement_item_id = it.get("statement_item_id")
-        raw = it.get("raw", {}) if isinstance(it.get("raw"), dict) else {}
-        current_type = str(it.get("item_type") or "").strip().lower()
-        row_number = ""
-        if item_number_header and idx < len(rows_by_header):
-            row_number = str(rows_by_header[idx].get(item_number_header) or "").strip()
-
-        new_type: str | None
-        source: str | None
-        new_type = None
-        source = None
-
-        if statement_item_id and statement_item_id in match_by_item_id:
-            entry = match_by_item_id[statement_item_id]
-            new_type = entry["type"]
-            source = entry["source"]
-        elif row_number and row_number in matched_numbers:
-            match = matched_invoice_to_statement_item.get(row_number)
-            doc = match.get("invoice") if isinstance(match, dict) else None
-            if isinstance(doc, dict):
-                doc_type = str(doc.get("type") or "").upper()
-                if doc.get("credit_note_id") or doc_type.endswith("CREDIT"):
-                    new_type = "credit_note"
-                    source = "credit_note_match"
-                else:
-                    new_type = "invoice"
-                    source = "invoice_match"
-        elif row_number and row_number not in matched_numbers and row_number in payment_number_map:
-            new_type = "payment"
-            source = "payment_match"
-
-        if not new_type:
-            new_type = guess_statement_item_type(raw, it.get("total"), contact_config)
-            source = "heuristic"
-
-        if new_type and new_type != current_type:
-            it["item_type"] = new_type
-            if statement_item_id:
-                classification_updates[statement_item_id] = new_type
-            logger.info(
-                "Statement item type updated",
-                statement_id=statement_id,
-                statement_item_id=statement_item_id,
-                new_type=new_type,
-                previous_type=current_type or "",
-                source=source,
-            )
-
-    item_types = [str((it.get("item_type") if isinstance(it, dict) else "") or "").strip().lower() for it in items]
-
-    if classification_updates:
-        try:
-            json_payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-            upload_statement_to_s3(BytesIO(json_payload), json_statement_key)
-            logger.info(
-                "Persisted statement item types to S3",
-                statement_id=statement_id,
-                updated=len(classification_updates),
-            )
-        except Exception as exc:
-            logger.exception(
-                "Failed to persist statement JSON",
-                statement_id=statement_id,
-                error=str(exc),
-            )
-
-        persist_item_types_to_dynamo(tenant_id, classification_updates)
-        logger.info(
-            "Persisted statement item types to DynamoDB",
-            statement_id=statement_id,
-            updated=len(classification_updates),
-        )
+    _persist_classification_updates(
+        data=data,
+        statement_id=statement_id,
+        tenant_id=tenant_id,
+        json_statement_key=json_statement_key,
+        classification_updates=classification_updates,
+    )
 
     # 3) Build right-hand rows from the matched invoices
     date_fmt = get_date_format_from_config(contact_config)
@@ -893,250 +1309,42 @@ def statement(statement_id: str):
     )
     # Row highlight: if this row is linked to a Xero document (exact or substring),
     # consider the row a "match" for coloring purposes even if some cells differ.
-    if item_number_header:
-        row_matches: list[bool] = []
-        for r in rows_by_header:
-            num = (r.get(item_number_header) or "").strip()
-            row_matches.append(bool(num and matched_invoice_to_statement_item.get(num)))
-    else:
-        # Fallback: if no number mapping, use strict all-cells match
-        row_matches = [all(cell.matches for cell in row) for row in row_comparisons]
+    row_matches = _build_row_matches(
+        rows_by_header,
+        item_number_header,
+        matched_invoice_to_statement_item,
+        row_comparisons,
+    )
 
     item_status_map = get_statement_item_status_map(tenant_id, statement_id)
 
     if request.args.get("download") == "xlsx":
-        header_labels = []
-        statement_headers: list[str] = []
-        xero_headers: list[str] = []
-
-        for header in display_headers:
-            label = (header or "").replace("_", " ").strip()
-            label = label[0].upper() + label[1:] if label else header or ""
-            header_labels.append((header, label))
-            statement_headers.append(f"Statement {label}")
-            xero_headers.append(f"Xero {label}")
-
-        excel_headers = ["Item Type", *statement_headers, *xero_headers, "Status"]
-
-        workbook = Workbook()
-        worksheet = workbook.active
-        worksheet.title = "Statement"
-        worksheet.append(excel_headers)
-
-        fill_success = PatternFill(fill_type="solid", fgColor="C6EFCE")
-        fill_danger = PatternFill(fill_type="solid", fgColor="FFC7CE")
-        fill_warning = PatternFill(fill_type="solid", fgColor="FFEB9C")
-        font_completed = Font(color="808080")
-        mismatch_side = Side(style="thin", color="E6B8B7")
-        mismatch_border = Border(
-            left=mismatch_side,
-            right=mismatch_side,
-            top=mismatch_side,
-            bottom=mismatch_side,
-        )
-        divider_side = Side(style="medium", color="808080")
-        statement_col_count = len(header_labels)
-        statement_end_col = 1 + statement_col_count
-        xero_start_col = statement_end_col + 1
-
-        legend = workbook.create_sheet(title="Legend")
-        legend.column_dimensions["A"].width = 26
-        legend.column_dimensions["B"].width = 18
-        legend.append(["Legend", ""])
-        legend["A1"].font = Font(bold=True)
-        legend.append(["Match", ""])
-        legend["B2"].fill = fill_success
-        legend.append(["Mismatch", ""])
-        legend["B3"].fill = fill_danger
-        legend.append(["Flagged anomaly", ""])
-        legend["B4"].fill = fill_warning
-        legend.append(["Cell mismatch (matched rows)", ""])
-        legend["B5"].border = mismatch_border
-        legend.append(["Completed (faded)", ""])
-        legend["A7"].font = font_completed
-
-        if statement_col_count:
-            worksheet.cell(row=1, column=statement_end_col).border = Border(right=divider_side)
-            worksheet.cell(row=1, column=xero_start_col).border = Border(left=divider_side)
-
-        row_count = max(len(rows_by_header), len(right_rows_by_header))
-        for idx in range(row_count):
-            left_row = rows_by_header[idx] if idx < len(rows_by_header) else {}
-            right_row = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
-
-            row_values: list[Any] = [item_types[idx] if idx < len(item_types) else ""]
-            for src_header, label in header_labels:  # noqa: B007
-                left_value = left_row.get(src_header, "") if isinstance(left_row, dict) else ""
-                row_values.append("" if left_value is None else left_value)
-
-            for src_header, label in header_labels:  # noqa: B007
-                right_value = right_row.get(src_header, "") if isinstance(right_row, dict) else ""
-                row_values.append("" if right_value is None else right_value)
-
-            status_label = ""
-            item = items[idx] if idx < len(items) else {}
-            statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
-            is_item_completed = False
-            if statement_item_id:
-                is_item_completed = item_status_map.get(statement_item_id, False)
-                status_label = "Completed" if is_item_completed else "Incomplete"
-            # Providing status in the sheet lets users filter finished work out quickly.
-            row_values.append(status_label)
-
-            worksheet.append(row_values)
-
-            # Apply the same row colouring rules as the UI:
-            # - anomalous rows: warning (based on per-item `_flags`)
-            # - otherwise: green for "match", red for "mismatch"
-            raw_flags = item.get("_flags") if isinstance(item, dict) else None
-            flag_list = raw_flags if isinstance(raw_flags, list) else []
-            anomalous = any(isinstance(f, str) and f.strip() in {"ml-outlier", "invalid-date"} for f in flag_list)
-            row_match = row_matches[idx] if idx < len(row_matches) else False
-
-            fill = fill_warning if anomalous else (fill_success if row_match else fill_danger)
-            current_row = worksheet.max_row
-            for col in range(1, len(excel_headers) + 1):
-                cell = worksheet.cell(row=current_row, column=col)
-                cell.fill = fill
-                if is_item_completed:
-                    cell.font = font_completed
-
-            # Highlight per-cell mismatches for matched rows (mirrors the "!" indicator in the UI).
-            if statement_col_count:
-                worksheet.cell(row=current_row, column=statement_end_col).border = Border(right=divider_side)
-                worksheet.cell(row=current_row, column=xero_start_col).border = Border(left=divider_side)
-
-            if row_match and idx < len(row_comparisons):
-                comparisons = row_comparisons[idx] or []
-                col_count = len(header_labels)
-                for col_idx, comparison in enumerate(comparisons[:col_count]):
-                    if getattr(comparison, "matches", True):
-                        continue
-                    for target_col in (2 + col_idx, 2 + col_count + col_idx):
-                        cell = worksheet.cell(row=current_row, column=target_col)
-                        if target_col == statement_end_col:
-                            cell.border = Border(
-                                left=mismatch_side,
-                                right=divider_side,
-                                top=mismatch_side,
-                                bottom=mismatch_side,
-                            )
-                        elif target_col == xero_start_col:
-                            cell.border = Border(
-                                left=divider_side,
-                                right=mismatch_side,
-                                top=mismatch_side,
-                                bottom=mismatch_side,
-                            )
-                        else:
-                            cell.border = mismatch_border
-
-        output = BytesIO()
-        workbook.save(output)
-        output.seek(0)
-        excel_payload = output.getvalue()
-        output.close()
-
-        response = app.response_class(
-            excel_payload,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-        earliest_date_raw = record.get("EarliestItemDate")
-        latest_date_raw = record.get("LatestItemDate")
-        earliest_date: date | None = None
-        latest_date: date | None = None
-        try:
-            if isinstance(earliest_date_raw, str):
-                earliest_date = date.fromisoformat(earliest_date_raw.strip())
-        except ValueError:
-            earliest_date = None
-        try:
-            if isinstance(latest_date_raw, str):
-                latest_date = date.fromisoformat(latest_date_raw.strip())
-        except ValueError:
-            latest_date = None
-
-        if earliest_date and latest_date:
-            date_segment = earliest_date.strftime("%Y-%m-%d") if earliest_date == latest_date else f"{earliest_date.strftime('%Y-%m-%d')}_{latest_date.strftime('%Y-%m-%d')}"
-        elif latest_date or earliest_date:
-            chosen = latest_date or earliest_date
-            date_segment = chosen.strftime("%Y-%m-%d") if chosen else ""
-        else:
-            date_segment = ""
-
-        contact_name = record.get("ContactName") if isinstance(record, dict) else ""
-        contact_segment = secure_filename(str(contact_name or "").strip()) or f"statement_{statement_id}"
-
-        parts = [contact_segment]
-        if date_segment:
-            parts.append(date_segment)
-        download_name = "_".join(parts) + "_export.xlsx"
-
-        response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
-        logger.info(
-            "Statement Excel generated",
-            tenant_id=tenant_id,
+        return _build_statement_excel_response(
+            display_headers=display_headers,
+            rows_by_header=rows_by_header,
+            right_rows_by_header=right_rows_by_header,
+            row_comparisons=row_comparisons,
+            row_matches=row_matches,
+            item_types=item_types,
+            items=items,
+            item_status_map=item_status_map,
+            record=record,
             statement_id=statement_id,
-            rows=row_count,
-            excel_filename=download_name,
+            tenant_id=tenant_id,
         )
-        return response
 
-    statement_rows: list[dict[str, Any]] = []
-    for idx, left_row in enumerate(rows_by_header):
-        item = items[idx] if idx < len(items) else {}
-        statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
-        is_item_completed = False
-        if statement_item_id:
-            is_item_completed = item_status_map.get(statement_item_id, False)
-
-        right_row_dict = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
-        flags = []
-        if isinstance(item, dict):
-            raw_flags = item.get("_flags") or []
-            if isinstance(raw_flags, list):
-                seen_flags = set()
-                for flag in raw_flags:
-                    if not isinstance(flag, str):
-                        continue
-                    normalized = flag.strip()
-                    if not normalized or normalized in seen_flags:
-                        continue
-                    seen_flags.add(normalized)
-                    flags.append(normalized)
-
-        # Build Xero links by extracting IDs from matched data
-        xero_invoice_id: str | None = None
-        xero_credit_note_id: str | None = None
-        if item_number_header and idx < len(rows_by_header):
-            row_number = str(rows_by_header[idx].get(item_number_header) or "").strip()
-            if row_number:
-                match = matched_invoice_to_statement_item.get(row_number)
-                if isinstance(match, dict):
-                    inv = match.get("invoice")
-                    if isinstance(inv, dict):
-                        cn_id = inv.get("credit_note_id")
-                        if isinstance(cn_id, str) and cn_id.strip():
-                            xero_credit_note_id = cn_id.strip()
-                        inv_id = inv.get("invoice_id")
-                        if isinstance(inv_id, str) and inv_id.strip():
-                            xero_invoice_id = inv_id.strip()
-
-        statement_rows.append(
-            {
-                "statement_item_id": statement_item_id,
-                "left_values": [left_row.get(h, "") for h in display_headers],
-                "right_values": [right_row_dict.get(h, "") for h in display_headers],
-                "cell_comparisons": row_comparisons[idx] if idx < len(row_comparisons) else [],
-                "matches": row_matches[idx] if idx < len(row_matches) else False,
-                "is_completed": is_item_completed,
-                "flags": flags,
-                "item_type": ((item.get("item_type") if isinstance(item, dict) else None) or (item_types[idx] if idx < len(item_types) else "invoice")),
-                "xero_invoice_id": xero_invoice_id,
-                "xero_credit_note_id": xero_credit_note_id,
-            }
-        )
+    statement_rows = _build_statement_rows(
+        rows_by_header=rows_by_header,
+        right_rows_by_header=right_rows_by_header,
+        display_headers=display_headers,
+        row_comparisons=row_comparisons,
+        row_matches=row_matches,
+        items=items,
+        item_types=item_types,
+        item_status_map=item_status_map,
+        item_number_header=item_number_header,
+        matched_invoice_to_statement_item=matched_invoice_to_statement_item,
+    )
 
     completed_count = sum(1 for row in statement_rows if row["is_completed"])
     incomplete_count = len(statement_rows) - completed_count
