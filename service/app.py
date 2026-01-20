@@ -148,6 +148,8 @@ THOUSANDS_SEPARATOR_OPTIONS = [
     (" ", "Space ( )"),
     ("'", "Apostrophe (')"),
 ]
+DECIMAL_SEPARATOR_VALUES = {opt[0] for opt in DECIMAL_SEPARATOR_OPTIONS}
+THOUSANDS_SEPARATOR_VALUES = {opt[0] for opt in THOUSANDS_SEPARATOR_OPTIONS}
 
 
 def _trigger_initial_sync_if_required(tenant_id: str | None) -> None:
@@ -176,10 +178,209 @@ def _set_active_tenant(tenant_id: str | None) -> None:
         session.pop("xero_tenant_name", None)
 
 
+def _normalize_decimal_separator(value: str | None) -> str:
+    """Coerce the decimal separator to a supported value."""
+    if value in DECIMAL_SEPARATOR_VALUES:
+        return value or DEFAULT_DECIMAL_SEPARATOR
+    return DEFAULT_DECIMAL_SEPARATOR
+
+
+def _normalize_thousands_separator(value: str | None) -> str:
+    """Coerce the thousands separator to a supported value."""
+    if value in THOUSANDS_SEPARATOR_VALUES:
+        return value if value is not None else DEFAULT_THOUSANDS_SEPARATOR
+    return DEFAULT_THOUSANDS_SEPARATOR
+
+
+def _build_config_rows(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build table rows for canonical fields using existing config values."""
+    # Flatten mapping sources: nested 'statement_items' + root-level keys.
+    nested = cfg.get("statement_items") if isinstance(cfg, dict) else None
+    nested = nested if isinstance(nested, dict) else {}
+    flat: dict[str, Any] = {}
+    flat.update(nested)
+    allowed_keys = set(StatementItem.model_fields.keys())
+    disallowed = {"raw", "statement_item_id"}
+    if isinstance(cfg, dict):
+        for k, v in cfg.items():
+            if k in allowed_keys and k not in disallowed:
+                flat[k] = v
+
+    flat.pop("reference", None)
+    flat.pop("item_type", None)
+
+    # Canonical field order from the Pydantic model, prioritising config UI alignment.
+    preferred_order = ["number", "total", "date", "due_date"]
+    model_fields = [f for f in StatementItem.model_fields if f not in {"raw", "statement_item_id", "item_type"}]
+    remaining_fields = [f for f in model_fields if f not in preferred_order]
+    canonical_order = preferred_order + remaining_fields
+
+    rows: list[dict[str, Any]] = []
+    for f in canonical_order:
+        if f in {"reference", "item_type"}:
+            continue
+        val = flat.get(f)
+        if f == "total":
+            values = [str(v) for v in val] if isinstance(val, list) else ([str(val)] if isinstance(val, str) else [""])
+            rows.append({"field": f, "values": values or [""], "is_multi": True})
+        else:
+            values = [str(val)] if isinstance(val, str) else [""]
+            rows.append({"field": f, "values": values, "is_multi": False})
+    return rows
+
+
+def _load_config_context(
+    tenant_id: str | None,
+    contact_lookup: dict[str, str],
+    selected_contact_name: str,
+) -> dict[str, Any]:
+    """Load a contact config and return updates for the template context."""
+    selected_contact_id = contact_lookup.get(selected_contact_name)
+    logger.info(
+        "Config load submitted",
+        tenant_id=tenant_id,
+        contact_name=selected_contact_name,
+        contact_id=selected_contact_id,
+    )
+
+    updates: dict[str, Any] = {
+        "selected_contact_name": selected_contact_name,
+        "selected_contact_id": selected_contact_id,
+    }
+
+    if not selected_contact_id:
+        updates["error"] = "Please select a valid contact."
+        logger.info(
+            "Config load failed",
+            tenant_id=tenant_id,
+            contact_name=selected_contact_name,
+        )
+        return updates
+
+    try:
+        cfg = get_contact_config(tenant_id, selected_contact_id)
+        updates["mapping_rows"] = _build_config_rows(cfg)
+        updates["decimal_separator"] = _normalize_decimal_separator(str(cfg.get("decimal_separator", "")))
+        updates["thousands_separator"] = _normalize_thousands_separator(str(cfg.get("thousands_separator", "")))
+        updates["date_format"] = str(cfg.get("date_format") or "") if isinstance(cfg, dict) else ""
+        logger.info(
+            "Config loaded",
+            tenant_id=tenant_id,
+            contact_id=selected_contact_id,
+            keys=len(cfg) if isinstance(cfg, dict) else 0,
+        )
+        return updates
+    except KeyError:
+        updates["mapping_rows"] = _build_config_rows({})
+        updates["decimal_separator"] = DEFAULT_DECIMAL_SEPARATOR
+        updates["thousands_separator"] = DEFAULT_THOUSANDS_SEPARATOR
+        updates["date_format"] = ""
+        updates["message"] = "No existing config found. You can create one below."
+        logger.info(
+            "Config not found",
+            tenant_id=tenant_id,
+            contact_id=selected_contact_id,
+        )
+        return updates
+    except Exception as exc:
+        updates["error"] = f"Failed to load config: {exc}"
+        logger.info(
+            "Config load error",
+            tenant_id=tenant_id,
+            contact_id=selected_contact_id,
+            error=exc,
+        )
+        return updates
+
+
+def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
+    """Persist config edits and return updates for the template context."""
+    selected_contact_id = form.get("contact_id")
+    selected_contact_name = form.get("contact_name")
+    logger.info(
+        "Config save submitted",
+        tenant_id=tenant_id,
+        contact_id=selected_contact_id,
+        contact_name=selected_contact_name,
+    )
+
+    updates: dict[str, Any] = {
+        "selected_contact_id": selected_contact_id,
+        "selected_contact_name": selected_contact_name,
+    }
+
+    try:
+        try:
+            existing = get_contact_config(tenant_id, selected_contact_id)
+        except KeyError:
+            existing = {}
+        posted_fields = [f for f in form.getlist("fields[]") if f]
+
+        selected_decimal_separator = _normalize_decimal_separator(form.get("decimal_separator"))
+        selected_thousands_separator = _normalize_thousands_separator(form.get("thousands_separator"))
+        selected_date_format = (form.get("date_format") or "").strip()
+
+        # Preserve any root keys not shown in the mapping editor.
+        # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
+        preserved = {k: v for k, v in existing.items() if k not in [*posted_fields, "statement_items"] and k not in {"reference", "item_type"}}
+
+        new_map: dict[str, Any] = {}
+        for f in posted_fields:
+            if f == "total":
+                total_vals = [v.strip() for v in form.getlist("map[total][]") if v.strip()]
+                new_map["total"] = total_vals
+            else:
+                val = form.get(f"map[{f}]")
+                new_map[f] = (val or "").strip()
+        combined = {
+            **preserved,
+            **new_map,
+            "date_format": selected_date_format,
+            "decimal_separator": selected_decimal_separator,
+            "thousands_separator": selected_thousands_separator,
+        }
+
+        updates["decimal_separator"] = selected_decimal_separator
+        updates["thousands_separator"] = selected_thousands_separator
+        updates["date_format"] = selected_date_format
+
+        # Validate required mappings before saving.
+        number_value = (new_map.get("number") or "").strip()
+        total_values = new_map.get("total") if isinstance(new_map.get("total"), list) else []
+        if not number_value:
+            updates["error"] = "The 'Number' field is mandatory. Please map the statement column that contains item numbers (e.g. invoice number)."
+            updates["message"] = None
+            updates["mapping_rows"] = _build_config_rows(combined)
+        elif not total_values:
+            updates["error"] = "The 'Total' field is mandatory. Please map at least one statement column with totals."
+            updates["message"] = None
+            updates["mapping_rows"] = _build_config_rows(combined)
+        else:
+            set_contact_config(tenant_id, selected_contact_id, combined)
+            logger.info(
+                "Contact config saved",
+                tenant_id=tenant_id,
+                contact_id=selected_contact_id,
+                contact_name=selected_contact_name,
+                config=combined,
+            )
+            updates["message"] = "Config updated successfully."
+            updates["mapping_rows"] = _build_config_rows(combined)
+    except Exception as exc:
+        updates["error"] = f"Failed to save config: {exc}"
+        logger.info(
+            "Config save failed",
+            tenant_id=tenant_id,
+            contact_id=selected_contact_id,
+            error=exc,
+        )
+    return updates
+
+
 @app.route("/api/tenant-statuses", methods=["GET"])
 @xero_token_required
 def tenant_status():
-    """Return the list of tenant IDs currently syncing."""
+    """Return tenant sync statuses and refresh cached status values."""
     tenant_records = session.get("xero_tenants", []) or []
     tenant_ids = [t.get("tenantId") for t in tenant_records if isinstance(t, dict)]
     try:
@@ -188,6 +389,7 @@ def tenant_status():
         logger.exception("Failed to load tenant sync status", tenant_ids=tenant_ids, error=exc)
         return jsonify({"error": "Unable to determine sync status"}), 500
 
+    # Cache statuses so polling endpoints can respond quickly.
     for tenant_id, status in tenant_statuses.items():
         if tenant_id:
             cache_provider.set_tenant_status_cache(tenant_id, str(status))
@@ -203,6 +405,7 @@ def trigger_tenant_sync(tenant_id: str):
     if not tenant_id:
         return jsonify({"error": "TenantID is required"}), 400
 
+    # Only allow syncs for tenants already connected in this session.
     tenant_records = session.get("xero_tenants", []) or []
     tenant_ids = {t.get("tenantId") for t in tenant_records if isinstance(t, dict)}
     if tenant_id not in tenant_ids:
@@ -215,6 +418,7 @@ def trigger_tenant_sync(tenant_id: str):
         return jsonify({"error": "Missing OAuth token"}), 400
 
     try:
+        # Fire-and-forget: sync runs in the background.
         _executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token)  # TODO: Perhaps worth checking if there is row in DDB/files in S3
         logger.info("Manual tenant sync triggered", tenant_id=tenant_id)
         return jsonify({"started": True}), 202
@@ -226,6 +430,7 @@ def trigger_tenant_sync(tenant_id: str):
 @app.route("/")
 @route_handler_logging
 def index():
+    """Render the landing page."""
     logger.info("Rendering index")
     return render_template("index.html")
 
@@ -234,8 +439,10 @@ def index():
 @route_handler_logging
 @xero_token_required
 def tenant_management():
+    """Render tenant management, consuming one-time messages from session."""
     tenants = session.get("xero_tenants") or []
     active_tenant_id = session.get("xero_tenant_id")
+    # Messages are popped so they only display once.
     message = session.pop("tenant_message", None)
     error = session.pop("tenant_error", None)
 
@@ -414,7 +621,6 @@ def upload_statements():
     if request.method == "POST":
         files = [f for f in request.files.getlist("statements") if f and f.filename]
         names = request.form.getlist("contact_names")
-        uploads_ok = 0
         logger.info(
             "Upload statements submitted",
             tenant_id=tenant_id,
@@ -474,6 +680,7 @@ def upload_statements():
 @xero_token_required
 @route_handler_logging
 def instructions():
+    """Render the user instructions page."""
     return render_template("instructions.html")
 
 
@@ -483,8 +690,10 @@ def instructions():
 @route_handler_logging
 @block_when_loading
 def statements():
+    """Render the statement list with filtering and sorting."""
     tenant_id = session.get("xero_tenant_id")
 
+    # Read query params and normalize sort direction.
     view = request.args.get("view", "incomplete").lower()
     show_completed = view == "completed"
     statement_rows = get_completed_statements() if show_completed else get_incomplete_statements()
@@ -521,6 +730,7 @@ def statements():
         except ValueError:
             return None
 
+    # Add derived fields for display and sorting.
     for row in statement_rows:
         earliest = _parse_iso_date(row.get("EarliestItemDate"))
         latest = _parse_iso_date(row.get("LatestItemDate"))
@@ -548,11 +758,13 @@ def statements():
         nonempty.sort(key=lambda r: str(r.get("ContactName")).strip().casefold(), reverse=reverse)
         statement_rows = nonempty + empty
 
+    # Remove helper fields before rendering.
     for row in statement_rows:
         row.pop("_earliest_item_date", None)
         row.pop("_latest_item_date", None)
         row.pop("_uploaded_at", None)
 
+    # Preserve filters when building sort URLs.
     base_args: dict[str, Any] = {}
     if show_completed:
         base_args["view"] = "completed"
@@ -602,6 +814,7 @@ def statements():
 @route_handler_logging
 @block_when_loading
 def delete_statement(statement_id: str):
+    """Delete the statement and redirect back to the list view."""
     tenant_id = session.get("xero_tenant_id")
 
     try:
@@ -1388,11 +1601,13 @@ def statement(statement_id: str):
 @xero_token_required
 @route_handler_logging
 def select_tenant():
+    """Persist the selected tenant in session and return to management view."""
     tenant_id = (request.form.get("tenant_id") or "").strip()
     tenants = session.get("xero_tenants") or []
     logger.info("Tenant selection submitted", tenant_id=tenant_id, available=len(tenants))
 
     if tenant_id and any(t.get("tenantId") == tenant_id for t in tenants):
+        # Update the active tenant and display a success message.
         _set_active_tenant(tenant_id)
         tenant_name = session.get("xero_tenant_name") or tenant_id
         session["tenant_message"] = f"Switched to tenant: {tenant_name}."
@@ -1408,13 +1623,15 @@ def select_tenant():
 @xero_token_required
 @route_handler_logging
 def disconnect_tenant():
+    """Disconnect the tenant from Xero and update the local session state."""
     tenant_id = (request.form.get("tenant_id") or "").strip()
     tenants = session.get("xero_tenants") or []
     tenant = next((t for t in tenants if t.get("tenantId") == tenant_id), None)
+    management_url = url_for("tenant_management")
 
     if not tenant:
         session["tenant_error"] = "Tenant not found in session."
-        return redirect(url_for("tenant_management"))
+        return redirect(management_url)
 
     connection_id = tenant.get("connectionId")
     access_token = session.get("access_token")
@@ -1439,13 +1656,13 @@ def disconnect_tenant():
                     body=resp.text,
                 )
                 session["tenant_error"] = "Unable to disconnect tenant from Xero."
-                return redirect(url_for("tenant_management"))
+                return redirect(management_url)
         except Exception as exc:
             logger.exception("Exception disconnecting tenant", tenant_id=tenant_id, error=exc)
             session["tenant_error"] = "An error occurred while disconnecting the tenant."
-            return redirect(url_for("tenant_management"))
+            return redirect(management_url)
 
-    # Remove tenant locally regardless (in case it was already disconnected)
+    # Remove tenant locally regardless (in case it was already disconnected).
     updated = [t for t in tenants if t.get("tenantId") != tenant_id]
     session["xero_tenants"] = updated
 
@@ -1457,7 +1674,7 @@ def disconnect_tenant():
     logger.info("Tenant disconnected", tenant_id=tenant_id, remaining=len(updated))
     if not updated:
         return redirect(url_for("index"))
-    return redirect(url_for("tenant_management"))
+    return redirect(management_url)
 
 
 @app.route("/configs", methods=["GET", "POST"])
@@ -1466,7 +1683,7 @@ def disconnect_tenant():
 @route_handler_logging
 @block_when_loading
 def configs():
-    """View and edit contact-specific mapping configuration."""
+    """Render and update the contact mapping configuration UI."""
     tenant_id = session.get("xero_tenant_id")
 
     contacts_raw = get_contacts()
@@ -1475,224 +1692,49 @@ def configs():
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     logger.info("Rendering configs", tenant_id=tenant_id, contacts=len(contacts_list))
 
-    selected_contact_name: str | None = None
-    selected_contact_id: str | None = None
-    mapping_rows: list[dict[str, Any]] = []  # {field, values:list[str], is_multi:bool}
-    message: str | None = None
-    error: str | None = None
-    selected_decimal_separator: str = DEFAULT_DECIMAL_SEPARATOR
-    selected_thousands_separator: str = DEFAULT_THOUSANDS_SEPARATOR
-    selected_date_format: str = ""
-
-    # Normalise dropdown values so we only persist supported separators.
-    def _normalize_decimal_separator(value: str | None) -> str:
-        if value in {opt[0] for opt in DECIMAL_SEPARATOR_OPTIONS}:
-            return value or DEFAULT_DECIMAL_SEPARATOR
-        return DEFAULT_DECIMAL_SEPARATOR
-
-    def _normalize_thousands_separator(value: str | None) -> str:
-        if value in {opt[0] for opt in THOUSANDS_SEPARATOR_OPTIONS}:
-            return value if value is not None else DEFAULT_THOUSANDS_SEPARATOR
-        return DEFAULT_THOUSANDS_SEPARATOR
-
-    def _build_rows(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-        """Build table rows for canonical fields using existing config values."""
-        # Flatten mapping sources: nested 'statement_items' + root-level keys
-        nested = cfg.get("statement_items") if isinstance(cfg, dict) else None
-        nested = nested if isinstance(nested, dict) else {}
-        flat: dict[str, Any] = {}
-        flat.update(nested)
-        allowed_keys = set(StatementItem.model_fields.keys())
-        disallowed = {"raw", "statement_item_id"}
-        if isinstance(cfg, dict):
-            for k, v in cfg.items():
-                if k in allowed_keys and k not in disallowed:
-                    flat[k] = v
-
-        flat.pop("reference", None)
-        flat.pop("item_type", None)
-
-        # Canonical field order from the Pydantic model, prioritising config UI alignment
-        preferred_order = ["number", "total", "date", "due_date"]
-        model_fields = [f for f in StatementItem.model_fields if f not in {"raw", "statement_item_id", "item_type"}]
-        remaining_fields = [f for f in model_fields if f not in preferred_order]
-        canonical_order = preferred_order + remaining_fields
-
-        rows: list[dict[str, Any]] = []
-        for f in canonical_order:
-            if f in {"reference", "item_type"}:
-                continue
-            val = flat.get(f)
-            if f == "total":
-                values = [str(v) for v in val] if isinstance(val, list) else ([str(val)] if isinstance(val, str) else [""])
-                rows.append({"field": f, "values": values or [""], "is_multi": True})
-            else:
-                values = [str(val)] if isinstance(val, str) else [""]
-                rows.append({"field": f, "values": values, "is_multi": False})
-        return rows
+    context: dict[str, Any] = {
+        "contacts": contacts_list,
+        "selected_contact_name": None,
+        "selected_contact_id": None,
+        "mapping_rows": [],  # {field, values:list[str], is_multi:bool}
+        "message": None,
+        "error": None,
+        "field_descriptions": FIELD_DESCRIPTIONS,
+        "date_format": "",
+        "decimal_separator": DEFAULT_DECIMAL_SEPARATOR,
+        "thousands_separator": DEFAULT_THOUSANDS_SEPARATOR,
+        "decimal_separator_options": DECIMAL_SEPARATOR_OPTIONS,
+        "thousands_separator_options": THOUSANDS_SEPARATOR_OPTIONS,
+    }
 
     if request.method == "POST":
         action = request.form.get("action")
         if action == "load":
-            # Load existing config for the chosen contact name
+            # Load existing config for the chosen contact name.
             selected_contact_name = (request.form.get("contact_name") or "").strip()
-            selected_contact_id = contact_lookup.get(selected_contact_name)
-            logger.info(
-                "Config load submitted",
-                tenant_id=tenant_id,
-                contact_name=selected_contact_name,
-                contact_id=selected_contact_id,
-            )
-            if not selected_contact_id:
-                error = "Please select a valid contact."
-                logger.info(
-                    "Config load failed",
-                    tenant_id=tenant_id,
-                    contact_name=selected_contact_name,
-                )
-            else:
-                try:
-                    cfg = get_contact_config(tenant_id, selected_contact_id)
-                    # Build rows including canonical fields; do not error if keys are missing
-                    mapping_rows = _build_rows(cfg)
-                    selected_decimal_separator = _normalize_decimal_separator(str(cfg.get("decimal_separator", "")))
-                    selected_thousands_separator = _normalize_thousands_separator(str(cfg.get("thousands_separator", "")))
-                    selected_date_format = str(cfg.get("date_format") or "") if isinstance(cfg, dict) else ""
-                    logger.info(
-                        "Config loaded",
-                        tenant_id=tenant_id,
-                        contact_id=selected_contact_id,
-                        keys=len(cfg) if isinstance(cfg, dict) else 0,
-                    )
-                except KeyError:
-                    # No existing config: show canonical fields with empty mapping values
-                    mapping_rows = _build_rows({})
-                    selected_decimal_separator = DEFAULT_DECIMAL_SEPARATOR
-                    selected_thousands_separator = DEFAULT_THOUSANDS_SEPARATOR
-                    selected_date_format = ""
-                    message = "No existing config found. You can create one below."
-                    logger.info(
-                        "Config not found",
-                        tenant_id=tenant_id,
-                        contact_id=selected_contact_id,
-                    )
-                except Exception as e:
-                    error = f"Failed to load config: {e}"
-                    logger.info(
-                        "Config load error",
-                        tenant_id=tenant_id,
-                        contact_id=selected_contact_id,
-                        error=e,
-                    )
-
+            context.update(_load_config_context(tenant_id, contact_lookup, selected_contact_name))
         elif action == "save_map":
-            # Save edited mapping
-            selected_contact_id = request.form.get("contact_id")
-            selected_contact_name = request.form.get("contact_name")
-            logger.info(
-                "Config save submitted",
-                tenant_id=tenant_id,
-                contact_id=selected_contact_id,
-                contact_name=selected_contact_name,
-            )
-            try:
-                try:
-                    existing = get_contact_config(tenant_id, selected_contact_id)
-                except KeyError:
-                    existing = {}
-                # Determine which fields were displayed/edited
-                posted_fields = [f for f in request.form.getlist("fields[]") if f]
+            # Save edited mapping.
+            context.update(_save_config_context(tenant_id, request.form))
 
-                selected_decimal_separator = _normalize_decimal_separator(request.form.get("decimal_separator"))
-                selected_thousands_separator = _normalize_thousands_separator(request.form.get("thousands_separator"))
-                selected_date_format = (request.form.get("date_format") or "").strip()
-
-                # Preserve any root keys not shown in the mapping editor.
-                # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
-                preserved = {k: v for k, v in existing.items() if k not in [*posted_fields, "statement_items"] and k not in {"reference", "item_type"}}
-
-                # Rebuild mapping from form
-                new_map: dict[str, Any] = {}
-                for f in posted_fields:
-                    if f == "total":
-                        total_vals = [v.strip() for v in request.form.getlist("map[total][]") if v.strip()]
-                        new_map["total"] = total_vals
-                    else:
-                        val = request.form.get(f"map[{f}]")
-                        new_map[f] = (val or "").strip()
-                # Build merged config so we can validate and re-render with edits intact.
-                combined = {
-                    **preserved,
-                    **new_map,
-                    "date_format": selected_date_format,
-                    "decimal_separator": selected_decimal_separator,
-                    "thousands_separator": selected_thousands_separator,
-                }
-                # Validate required mappings before saving.
-                number_value = (new_map.get("number") or "").strip()
-                total_values = new_map.get("total") if isinstance(new_map.get("total"), list) else []
-                if not number_value:
-                    error = "The 'Number' field is mandatory. Please map the statement column that contains item numbers (e.g. invoice number)."
-                    message = None
-                    mapping_rows = _build_rows(combined)
-                elif not total_values:
-                    error = "The 'Total' field is mandatory. Please map at least one statement column with totals."
-                    message = None
-                    mapping_rows = _build_rows(combined)
-                else:
-                    # Merge and save (root-level only; no nested 'statement_items')
-                    set_contact_config(tenant_id, selected_contact_id, combined)
-                    logger.info(
-                        "Contact config saved",
-                        tenant_id=tenant_id,
-                        contact_id=selected_contact_id,
-                        contact_name=selected_contact_name,
-                        config=combined,
-                    )
-                    message = "Config updated successfully."
-                    mapping_rows = _build_rows(combined)
-            except Exception as e:
-                error = f"Failed to save config: {e}"
-                logger.info(
-                    "Config save failed",
-                    tenant_id=tenant_id,
-                    contact_id=selected_contact_id,
-                    error=e,
-                )
-
-    example_rows = _build_rows(EXAMPLE_CONFIG)
-    example_date_format = str(EXAMPLE_CONFIG.get("date_format") or "")
-    example_decimal_separator = EXAMPLE_CONFIG.get("decimal_separator", DEFAULT_DECIMAL_SEPARATOR)
-    example_thousands_separator = EXAMPLE_CONFIG.get("thousands_separator", DEFAULT_THOUSANDS_SEPARATOR)
-    decimal_separator_labels = dict(DECIMAL_SEPARATOR_OPTIONS)
-    thousands_separator_labels = dict(THOUSANDS_SEPARATOR_OPTIONS)
-
-    return render_template(
-        "configs.html",
-        contacts=contacts_list,
-        selected_contact_name=selected_contact_name,
-        selected_contact_id=selected_contact_id,
-        mapping_rows=mapping_rows,
-        example_rows=example_rows,
-        message=message,
-        error=error,
-        field_descriptions=FIELD_DESCRIPTIONS,
-        date_format=selected_date_format,
-        decimal_separator=selected_decimal_separator,
-        thousands_separator=selected_thousands_separator,
-        decimal_separator_options=DECIMAL_SEPARATOR_OPTIONS,
-        thousands_separator_options=THOUSANDS_SEPARATOR_OPTIONS,
-        example_date_format=example_date_format,
-        example_decimal_separator=example_decimal_separator,
-        example_thousands_separator=example_thousands_separator,
-        decimal_separator_labels=decimal_separator_labels,
-        thousands_separator_labels=thousands_separator_labels,
+    context.update(
+        {
+            "example_rows": _build_config_rows(EXAMPLE_CONFIG),
+            "example_date_format": str(EXAMPLE_CONFIG.get("date_format") or ""),
+            "example_decimal_separator": EXAMPLE_CONFIG.get("decimal_separator", DEFAULT_DECIMAL_SEPARATOR),
+            "example_thousands_separator": EXAMPLE_CONFIG.get("thousands_separator", DEFAULT_THOUSANDS_SEPARATOR),
+            "decimal_separator_labels": dict(DECIMAL_SEPARATOR_OPTIONS),
+            "thousands_separator_labels": dict(THOUSANDS_SEPARATOR_OPTIONS),
+        }
     )
+
+    return render_template("configs.html", **context)
 
 
 @app.route("/login")
 @route_handler_logging
 def login():
+    """Start the Xero OAuth flow and redirect to the authorize URL."""
     logger.info("Login initiated")
     if not CLIENT_ID or not CLIENT_SECRET:
         return "Missing XERO_CLIENT_ID or XERO_CLIENT_SECRET env vars", 500
@@ -1709,29 +1751,30 @@ def login():
 @app.route("/callback")
 @route_handler_logging
 def callback():
+    """Handle the OAuth callback, validate tokens, and load tenant context."""
     # Handle user-denied or error cases
-    if "error" in request.args:
+    error = request.args.get("error")
+    if error is not None:
+        error_description = request.args.get("error_description") or error
         logger.error(
             "OAuth error",
             error_code=400,
-            error_description=request.args.get("error_description"),
-            error=request.args["error"],
+            error_description=error_description,
+            error=error,
         )
-        return (
-            f"OAuth error: {request.args.get('error_description', request.args['error'])}",
-            400,
-        )
+        return f"OAuth error: {error_description}", 400
 
     try:
         tokens = oauth.xero.authorize_access_token()
     except OAuthError as exc:
+        error_description = exc.description or exc.error
         logger.error(
             "OAuth error",
             error_code=400,
-            error_description=exc.description,
+            error_description=error_description,
             error=exc.error,
         )
-        return f"OAuth error: {exc.description or exc.error}", 400
+        return f"OAuth error: {error_description}", 400
 
     if not isinstance(tokens, dict):
         logger.error("Invalid token response from Xero", error_code=400)
@@ -1756,11 +1799,12 @@ def callback():
         return "Invalid id_token", 400
 
     save_xero_oauth2_token(tokens)
-    session["access_token"] = tokens.get("access_token")
+    access_token = tokens.get("access_token")
+    session["access_token"] = access_token
 
     conn_res = requests.get(
         "https://api.xero.com/connections",
-        headers={"Authorization": f"Bearer {session['access_token']}"},
+        headers={"Authorization": f"Bearer {access_token}"},
         timeout=20,
     )
 
@@ -1805,6 +1849,7 @@ def callback():
 @app.route("/logout")
 @route_handler_logging
 def logout():
+    """Clear the session and return to the landing page."""
     logger.info("Logout requested", had_tenant=bool(session.get("xero_tenant_id")))
     session.clear()
     return redirect(url_for("index"))
