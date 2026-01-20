@@ -44,7 +44,7 @@ def _normalise(s: str) -> str:
     return re.sub(r"[\s\-_/\.]", "", s)
 
 
-def make_family_regex_from_examples( # pylint: disable=too-many-locals,too-many-branches
+def make_family_regex_from_examples(  # pylint: disable=too-many-locals,too-many-branches
     refs: list[str],
     digit_prefix_len: int = 3,
     min_samples_for_prefixing: int = 3,
