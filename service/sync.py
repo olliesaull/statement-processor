@@ -101,7 +101,7 @@ def _sync_resource(
         return False
 
 
-def _resolve_modified_since(record: dict[str, Any] | None) -> datetime | None:
+def _resolve_modified_since(record: dict[str, Any] | None) -> datetime | None:  # pylint: disable=too-many-return-statements
     """Return LastSyncTime as a timezone-aware datetime if present."""
     if not record:
         return None
@@ -140,12 +140,10 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
     Combine newly fetched records with any previously cached dataset.
     When we only pull a delta, this keeps the local/S3 files authoritative.
     """
-    if delta is None:  # Nothing changed
+    if delta is None or (isinstance(delta, (list, dict)) and not delta):  # Nothing changed
         return existing
     if existing is None:  # Only new data exists (initial load)
         return delta
-    if isinstance(delta, (list, dict)) and not delta:
-        return existing
 
     def _as_list(value: Any) -> list[dict[str, Any]]:
         if isinstance(value, list):
@@ -166,39 +164,28 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
 
     existing_list = _as_list(existing)
     delta_list = _as_list(delta)
-    if not existing_list:
-        return delta_list
-    if not delta_list:
-        return existing_list
 
     merged: dict[str, dict[str, Any]] = {}
     extras: list[dict[str, Any]] = []
-
-    for item in existing_list:
-        if isinstance(item, dict) and item.get(key):
-            merged[item[key]] = item
-        elif isinstance(item, dict):
-            extras.append(item)
-
-    for item in delta_list:
-        if not isinstance(item, dict):
-            continue
-        identifier = item.get(key)
-        if identifier:
-            merged[identifier] = item
-        else:
-            extras.append(item)
+    for source in (existing_list, delta_list):
+        for item in source:
+            identifier = item.get(key)
+            if identifier:
+                merged[identifier] = item
+            else:
+                extras.append(item)
 
     combined = list(merged.values()) + extras
 
-    if resource == XeroType.CONTACTS:
-        combined.sort(key=lambda c: (c.get("name") or "").casefold())
-    elif resource == XeroType.CREDIT_NOTES:
-        combined.sort(key=lambda note: (note.get("credit_note_id") or ""))
-    elif resource == XeroType.PAYMENTS:
-        combined.sort(key=lambda payment: (payment.get("payment_id") or ""))
-    elif resource == XeroType.INVOICES:
-        combined.sort(key=lambda inv: str(inv.get("number") or "").casefold())
+    sort_keys = {
+        XeroType.CONTACTS: lambda c: (c.get("name") or "").casefold(),
+        XeroType.CREDIT_NOTES: lambda note: (note.get("credit_note_id") or ""),
+        XeroType.PAYMENTS: lambda payment: (payment.get("payment_id") or ""),
+        XeroType.INVOICES: lambda inv: str(inv.get("number") or "").casefold(),
+    }
+    sort_key = sort_keys.get(resource)
+    if sort_key:
+        combined.sort(key=sort_key)
 
     return combined
 

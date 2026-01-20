@@ -59,11 +59,28 @@ SCOPES = [
     "files.read",
 ]
 _DDB_UPDATE_MAX_WORKERS = max(4, min(16, (os.cpu_count() or 4)))
+_XERO_TOKEN_FIELDS = {
+    "access_token",
+    "refresh_token",
+    "expires_in",
+    "expires_at",
+    "token_type",
+    "scope",
+    "id_token",
+}
+
+
+def _sanitize_xero_token(token: dict | None) -> dict | None:
+    """Return only fields accepted by the Xero SDK token updater."""
+    if not isinstance(token, dict):
+        return None
+    # Authlib includes OIDC userinfo in the token dict; the Xero SDK rejects unknown keys.
+    return {key: value for key, value in token.items() if key in _XERO_TOKEN_FIELDS}
 
 
 def get_xero_oauth2_token() -> dict | None:
     """Return the token dict the SDK expects, or None if not set."""
-    return session.get("xero_oauth2_token")
+    return _sanitize_xero_token(session.get("xero_oauth2_token"))
 
 
 def save_xero_oauth2_token(token: dict) -> None:
@@ -79,7 +96,7 @@ def get_xero_api_client(oauth_token: dict | None = None) -> AccountingApi:
     else:
 
         def token_getter() -> dict | None:
-            return oauth_token
+            return _sanitize_xero_token(oauth_token)
 
         def token_saver(new_token: dict) -> None:
             oauth_token.update(new_token)
@@ -94,7 +111,9 @@ def get_xero_api_client(oauth_token: dict | None = None) -> AccountingApi:
     )
 
     if oauth_token:
-        api_client.set_oauth2_token(oauth_token)
+        sanitized_token = _sanitize_xero_token(oauth_token)
+        if sanitized_token:
+            api_client.set_oauth2_token(sanitized_token)
 
     return AccountingApi(api_client)
 

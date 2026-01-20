@@ -60,7 +60,9 @@ lint-all:
 	@echo "🔍 Running pylint on service and lambdas (sequential)..."
 	@for dir in $(SERVICE_DIR) $(LAMBDA_DIRS); do \
 		if [ -d "$$dir" ]; then \
+			echo "----------------------------------------------"; \
 			echo "Linting: $$dir"; \
+			echo "----------------------------------------------"; \
 			bash -c "cd $$dir && source venv/bin/activate && $(PY_FIND) | xargs pylint --disable=$(PYLINT_DISABLE) 2>/dev/null || true"; \
 		fi; \
 	done
@@ -70,7 +72,9 @@ type-check-all:
 	@echo "🔍 Running mypy on service and lambdas (sequential)..."
 	@for dir in $(SERVICE_DIR) $(LAMBDA_DIRS); do \
 		if [ -d "$$dir" ]; then \
+			echo "----------------------------------------------"; \
 			echo "Type checking: $$dir"; \
+			echo "----------------------------------------------"; \
 			bash -c "cd $$dir && source venv/bin/activate && $(PY_FIND) | xargs mypy --ignore-missing-imports --check-untyped-defs 2>/dev/null || true"; \
 		fi; \
 	done

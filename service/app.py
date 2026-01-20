@@ -1368,6 +1368,7 @@ def _build_statement_rows(
 @route_handler_logging
 @block_when_loading
 def statement(statement_id: str):
+    """Render the statement detail view, handling actions and exports."""
     tenant_id = session.get("xero_tenant_id")
 
     record = get_statement_record(tenant_id, statement_id)
@@ -1386,13 +1387,8 @@ def statement(statement_id: str):
         method=request.method,
     )
 
-    contact_name = ""
-    if record:
-        raw_contact_name = record.get("ContactName")
-        if isinstance(raw_contact_name, str):
-            contact_name = raw_contact_name.strip()
-        elif raw_contact_name is not None:
-            contact_name = str(raw_contact_name).strip()
+    raw_contact_name = record.get("ContactName")
+    contact_name = str(raw_contact_name).strip() if raw_contact_name is not None else ""
     page_heading = contact_name or f"Statement {statement_id}"
 
     if request.method == "POST":
@@ -1410,6 +1406,14 @@ def statement(statement_id: str):
 
     contact_id = record.get("ContactID")
     is_completed = str(record.get("Completed", "")).lower() == "true"
+    base_context: dict[str, Any] = {
+        "statement_id": statement_id,
+        "contact_name": contact_name,
+        "page_heading": page_heading,
+        "items_view": items_view,
+        "show_payments": show_payments,
+        "is_completed": is_completed,
+    }
     try:
         data, _ = fetch_json_statement(
             tenant_id=tenant_id,
@@ -1426,19 +1430,14 @@ def statement(statement_id: str):
         )
         return render_template(
             "statement.html",
-            statement_id=statement_id,
-            contact_name=contact_name,
-            page_heading=page_heading,
             is_processing=True,
-            is_completed=is_completed,
-            items_view=items_view,
-            show_payments=show_payments,
             incomplete_count=0,
             completed_count=0,
             all_statement_rows=[],
             statement_rows=[],
             raw_statement_headers=[],
             has_payment_rows=False,
+            **base_context,
         )
 
     # 1) Parse display configuration and left-side rows
@@ -1578,23 +1577,18 @@ def statement(statement_id: str):
         show_payments=show_payments,
     )
 
-    return render_template(
-        "statement.html",
-        statement_id=statement_id,
-        contact_name=contact_name,
-        page_heading=page_heading,
-        is_processing=False,
-        is_completed=is_completed,
-        raw_statement_headers=display_headers,
-        statement_rows=visible_rows,
-        all_statement_rows=statement_rows,
-        row_comparisons=row_comparisons,
-        completed_count=completed_count,
-        incomplete_count=incomplete_count,
-        items_view=items_view,
-        show_payments=show_payments,
-        has_payment_rows=has_payment_rows,
-    )
+    context: dict[str, Any] = {
+        **base_context,
+        "is_processing": False,
+        "raw_statement_headers": display_headers,
+        "statement_rows": visible_rows,
+        "all_statement_rows": statement_rows,
+        "row_comparisons": row_comparisons,
+        "completed_count": completed_count,
+        "incomplete_count": incomplete_count,
+        "has_payment_rows": has_payment_rows,
+    }
+    return render_template("statement.html", **context)
 
 
 @app.route("/tenants/select", methods=["POST"])
