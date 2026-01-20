@@ -389,7 +389,6 @@ def _process_statement_upload(
     else:
         logger.error("Failed to start textraction workflow", **log_kwargs)
 
-
     return statement_id
 
 
@@ -827,10 +826,7 @@ def _classify_statement_items(
                 source=source,
             )
 
-    item_types = [
-        str((it.get("item_type") if isinstance(it, dict) else "") or "").strip().lower()
-        for it in items
-    ]
+    item_types = [str((it.get("item_type") if isinstance(it, dict) else "") or "").strip().lower() for it in items]
     return item_types, classification_updates
 
 
@@ -1144,10 +1140,7 @@ def _build_statement_rows(
                 "matches": row_matches[idx] if idx < len(row_matches) else False,
                 "is_completed": is_item_completed,
                 "flags": flags,
-                "item_type": (
-                    (item.get("item_type") if isinstance(item, dict) else None)
-                    or (item_types[idx] if idx < len(item_types) else "invoice")
-                ),
+                "item_type": ((item.get("item_type") if isinstance(item, dict) else None) or (item_types[idx] if idx < len(item_types) else "invoice")),
                 "xero_invoice_id": xero_invoice_id,
                 "xero_credit_note_id": xero_credit_note_id,
             }
@@ -1627,37 +1620,37 @@ def configs():
                     else:
                         val = request.form.get(f"map[{f}]")
                         new_map[f] = (val or "").strip()
+                # Build merged config so we can validate and re-render with edits intact.
+                combined = {
+                    **preserved,
+                    **new_map,
+                    "date_format": selected_date_format,
+                    "decimal_separator": selected_decimal_separator,
+                    "thousands_separator": selected_thousands_separator,
+                }
+                # Validate required mappings before saving.
                 number_value = (new_map.get("number") or "").strip()
+                total_values = new_map.get("total") if isinstance(new_map.get("total"), list) else []
                 if not number_value:
-                    error = "The 'Number' field is mandatory. Please map the statement column that contains invoice numbers."
+                    error = "The 'Number' field is mandatory. Please map the statement column that contains item numbers (e.g. invoice number)."
                     message = None
-                    combined = {
-                        **preserved,
-                        **new_map,
-                        "date_format": selected_date_format,
-                        "decimal_separator": selected_decimal_separator,
-                        "thousands_separator": selected_thousands_separator,
-                    }
+                    mapping_rows = _build_rows(combined)
+                elif not total_values:
+                    error = "The 'Total' field is mandatory. Please map at least one statement column with totals."
+                    message = None
                     mapping_rows = _build_rows(combined)
                 else:
                     # Merge and save (root-level only; no nested 'statement_items')
-                    to_save = {
-                        **preserved,
-                        **new_map,
-                        "date_format": selected_date_format,
-                        "decimal_separator": selected_decimal_separator,
-                        "thousands_separator": selected_thousands_separator,
-                    }
-                    set_contact_config(tenant_id, selected_contact_id, to_save)
+                    set_contact_config(tenant_id, selected_contact_id, combined)
                     logger.info(
                         "Contact config saved",
                         tenant_id=tenant_id,
                         contact_id=selected_contact_id,
                         contact_name=selected_contact_name,
-                        config=to_save,
+                        config=combined,
                     )
                     message = "Config updated successfully."
-                    mapping_rows = _build_rows(to_save)
+                    mapping_rows = _build_rows(combined)
             except Exception as e:
                 error = f"Failed to save config: {e}"
                 logger.info(

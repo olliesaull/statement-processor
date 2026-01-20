@@ -34,7 +34,7 @@
                   {% set field_key = row['field'] %}
                   {% set field_label_raw = (field_key or '').replace('_', ' ') %}
                   {% set field_label = field_label_raw.title() %}
-                  {% if field_key == 'number' %}
+                  {% if field_key in ['number', 'total'] %}
                   {% set field_label = field_label + ' (Mandatory)' %}
                   {% endif %}
                   <tr>
@@ -142,7 +142,7 @@
           {% set field_key = row.field %}
           {% set field_label_raw = field_key.replace('_', ' ') %}
           {% set field_label = field_label_raw.title() %}
-          {% if field_key == 'number' %}
+          {% if field_key in ['number', 'total'] %}
           {% set field_label = field_label + ' (Mandatory)' %}
           {% endif %}
           <tr>
@@ -160,8 +160,8 @@
               <div id="container-{{ field_key }}">
                 {% for v in values %}
                 <div class="input-group mb-2">
-                  <input type="text" class="form-control" name="map[{{ field_key }}][]" value="{{ v }}" placeholder="Enter column heading">
-                  <button type="button" class="btn btn-outline-danger" onclick="this.parentElement.remove()">Remove</button>
+                  <input type="text" class="form-control" name="map[{{ field_key }}][]" value="{{ v }}" placeholder="Enter column heading" {% if field_key == 'total' %}required{% endif %}>
+                  <button type="button" class="btn btn-outline-danger" onclick="removeInput(this, '{{ field_key }}')">Remove</button>
                 </div>
                 {% endfor %}
               </div>
@@ -243,11 +243,29 @@ function addInput(field) {
   if (!container) return;
   const wrapper = document.createElement('div');
   wrapper.className = 'input-group mb-2';
+  const requiredAttr = field === "total" ? " required" : "";
   wrapper.innerHTML = `
-    <input type="text" class="form-control" name="map[${field}][]" placeholder="Enter column heading">
-    <button type="button" class="btn btn-outline-danger" onclick="this.parentElement.remove()">Remove</button>
+    <input type="text" class="form-control" name="map[${field}][]" placeholder="Enter column heading"${requiredAttr}>
+    <button type="button" class="btn btn-outline-danger" onclick="removeInput(this, '${field}')">Remove</button>
   `;
   container.appendChild(wrapper);
+}
+
+function removeInput(button, field) {
+  const wrapper = button.closest('.input-group');
+  if (!wrapper) return;
+  if (field === "total") {
+    const container = wrapper.parentElement;
+    if (container) {
+      const inputs = container.querySelectorAll('input[name="map[total][]"]');
+      if (inputs.length <= 1) {
+        inputs[0].value = "";
+        inputs[0].focus();
+        return;
+      }
+    }
+  }
+  wrapper.remove();
 }
 </script>
 {% endblock %}
