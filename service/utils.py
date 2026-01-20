@@ -1,3 +1,5 @@
+"""Shared utilities for statement processing and Xero integration."""
+
 import io
 import json
 import os
