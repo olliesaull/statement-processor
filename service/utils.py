@@ -223,9 +223,11 @@ class RedirectToLogin(HTTPException):
     code = 302
 
     def __init__(self) -> None:
+        """Initialize the redirect exception with a default description."""
         super().__init__(description="Redirecting to login")
 
-    def get_response(self, environ=None):  # type: ignore[override]
+    def get_response(self, environ=None, scope=None):
+        """Return a redirect response to the login route."""
         return redirect(url_for("login"))
 
 
@@ -374,6 +376,7 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def route_handler_logging(function):
+    """Decorator that logs entry into route handlers."""
     @wraps(function)
     def decorator(*args, **kwargs):
         tenant_id = session.get("xero_tenant_id")
@@ -444,6 +447,7 @@ def fmt_date(d: Any) -> str | None:
 
 
 def fmt_invoice_data(inv):
+    """Return a normalized dict of invoice fields for rendering."""
     contact = getattr(inv, "contact", None)
 
     return {
@@ -629,6 +633,7 @@ def delete_statement_data(tenant_id: str, statement_id: str) -> None:
 
 
 def add_statement_to_table(tenant_id: str, entry: dict[str, str]) -> None:
+    """Persist a new statement record in DynamoDB."""
     item = {
         "TenantID": tenant_id,
         "StatementID": entry["statement_id"],
@@ -658,6 +663,7 @@ def add_statement_to_table(tenant_id: str, entry: dict[str, str]) -> None:
 
 
 def _clean_key_segment(value: str | None, label: str) -> str:
+    """Validate and normalize an S3 key segment."""
     segment = (value or "").strip()
     if not segment:
         raise ValueError(f"{label} is required for S3 key construction")
@@ -667,6 +673,7 @@ def _clean_key_segment(value: str | None, label: str) -> str:
 
 
 def _statement_s3_key(tenant_id: str, statement_id: str, extension: str) -> str:
+    """Build the S3 key for a statement asset."""
     tenant_segment = _clean_key_segment(tenant_id, "tenant_id")
     statement_segment = _clean_key_segment(statement_id, "statement_id")
     return f"{tenant_segment}/statements/{statement_segment}{extension}"
@@ -844,6 +851,7 @@ def _to_decimal(
     decimal_separator: str | None = None,
     thousands_separator: str | None = None,
 ) -> Decimal | None:
+    """Normalize and parse a value into a Decimal."""
     if x is None or x == "":
         return None
     normalized = _normalize_separators(x, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
