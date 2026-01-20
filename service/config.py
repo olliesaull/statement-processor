@@ -45,8 +45,8 @@ _SUPPRESSED_LOGGERS: tuple[str, ...] = (
     "botocore",
     "nose",
 )
-for name in _SUPPRESSED_LOGGERS:
-    logging.getLogger(name).setLevel(logging.CRITICAL)
+for n in _SUPPRESSED_LOGGERS:
+    logging.getLogger(n).setLevel(logging.CRITICAL)
 
 ssm_client: SSMClient = session.client("ssm")
 

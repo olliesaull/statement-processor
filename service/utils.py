@@ -257,7 +257,8 @@ def get_cached_tenant_status(tenant_id: str) -> TenantStatus | None:
     if not tenant_id:
         return None
 
-    cached_value = cache_provider.cache.get(f"{tenant_id}_status") if cache_provider.cache else None
+    cache_instance = cache_provider.get_cache()
+    cached_value = cache_instance.get(f"{tenant_id}_status") if cache_instance else None
     if cached_value:
         try:
             return TenantStatus(cached_value)

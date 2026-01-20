@@ -24,6 +24,14 @@ _CREDIT_HINTS: tuple[str, ...] = ("credit", "cr")
 _NUMERIC_CHARS_RE = re.compile(r"[^0-9\-\.,()]")
 
 
+def _safe_decimal(value: str) -> Decimal | None:
+    """Return a Decimal for the string value or None if parsing fails."""
+    try:
+        return Decimal(value)
+    except InvalidOperation:
+        return None
+
+
 def _normalize_label(label: Any) -> str:
     """Lowercase and drop non-alphanumeric characters for label matching."""
     if label is None:
@@ -62,10 +70,7 @@ def _coerce_decimal(value: Any) -> Decimal | None:
     if isinstance(value, Decimal):
         return value
     if isinstance(value, (int, float)):
-        try:
-            return Decimal(str(value))
-        except InvalidOperation:
-            return None
+        return _safe_decimal(str(value))
     text = str(value).strip()
     if not text:
         return None
@@ -78,10 +83,7 @@ def _coerce_decimal(value: Any) -> Decimal | None:
     cleaned = cleaned.strip()
     if cleaned in {"", "-", ".", "-.", ".-"}:
         return None
-    try:
-        return Decimal(cleaned)
-    except InvalidOperation:
-        return None
+    return _safe_decimal(cleaned)
 
 
 def _has_amount(value: Any) -> bool:
@@ -158,6 +160,73 @@ def _iter_total_entries(total_entries: Any) -> Iterable[tuple[str, Any]]:
                     yield label, item.get("value")
 
 
+def _extend_amount_norms(raw_row: dict[str, Any], debit_norms: set[str], credit_norms: set[str]) -> None:
+    """Add debit/credit norms derived from raw row labels."""
+    for key in raw_row or {}:
+        norm = _normalize_label(key)
+        if _is_debit_norm(norm):
+            debit_norms.add(norm)
+        elif _is_credit_norm(norm):
+            credit_norms.add(norm)
+
+
+def _classify_amount_label(label: str, debit_norms: set[str], credit_norms: set[str]) -> str | None:
+    """Classify label as debit/credit and update norms if inferred."""
+    norm = _normalize_label(label)
+    if norm in debit_norms:
+        return "debit"
+    if norm in credit_norms:
+        return "credit"
+    if _is_debit_norm(norm):
+        debit_norms.add(norm)
+        return "debit"
+    if _is_credit_norm(norm):
+        credit_norms.add(norm)
+        return "credit"
+    return None
+
+
+def _scan_total_entries(
+    total_entries: Any,
+    debit_norms: set[str],
+    credit_norms: set[str],
+) -> tuple[bool, bool, list[str], list[str]]:
+    """Inspect total entries and return amount evidence."""
+    debit_has_value = False
+    credit_has_value = False
+    debit_labels_used: list[str] = []
+    credit_labels_used: list[str] = []
+
+    for label, value in _iter_total_entries(total_entries):
+        category = _classify_amount_label(label, debit_norms, credit_norms)
+        if category == "debit":
+            if _has_amount(value):
+                debit_has_value = True
+                debit_labels_used.append(label)
+        elif category == "credit" and _has_amount(value):
+            credit_has_value = True
+            credit_labels_used.append(label)
+
+    return debit_has_value, credit_has_value, debit_labels_used, credit_labels_used
+
+
+def _inverse_row(raw_row: dict[str, Any]) -> dict[str, tuple[str, Any]]:
+    """Build a normalized-label index for raw row values."""
+    return {_normalize_label(key): (key, val) for key, val in (raw_row or {}).items() if isinstance(key, str)}
+
+
+def _scan_inverse_amounts(
+    inverse_raw: dict[str, tuple[str, Any]],
+    norms: set[str],
+) -> tuple[bool, list[str]]:
+    """Check inverse row for any amount values matching known norms."""
+    for norm in norms:
+        match = inverse_raw.get(norm)
+        if match and _has_amount(match[1]):
+            return True, [match[0]]
+    return False, []
+
+
 def _evaluate_amount_hint(
     raw_row: dict[str, Any],
     total_entries: Any,
@@ -171,71 +240,29 @@ def _evaluate_amount_hint(
     """
     debit_norms, credit_norms = _collect_config_amount_labels(contact_config)
 
-    for key in raw_row or {}:
-        norm = _normalize_label(key)
-        if _is_debit_norm(norm):
-            debit_norms.add(norm)
-        elif _is_credit_norm(norm):
-            credit_norms.add(norm)
+    _extend_amount_norms(raw_row, debit_norms, credit_norms)
+    debit_has_value, credit_has_value, debit_labels_used, credit_labels_used = _scan_total_entries(total_entries, debit_norms, credit_norms)
 
-    debit_has_value = False
-    credit_has_value = False
-    debit_labels_used: list[str] = []
-    credit_labels_used: list[str] = []
-
-    for label, value in _iter_total_entries(total_entries):
-        norm = _normalize_label(label)
-        category: str | None = None
-        if norm in debit_norms:
-            category = "debit"
-        elif norm in credit_norms:
-            category = "credit"
-        else:
-            if _is_debit_norm(norm):
-                debit_norms.add(norm)
-                category = "debit"
-            elif _is_credit_norm(norm):
-                credit_norms.add(norm)
-                category = "credit"
-
-        if category == "debit":
-            if _has_amount(value):
+    if not debit_has_value or not credit_has_value:
+        inverse_raw = _inverse_row(raw_row)
+        if not debit_has_value:
+            found, labels = _scan_inverse_amounts(inverse_raw, debit_norms)
+            if found:
                 debit_has_value = True
-                debit_labels_used.append(label)
-        elif category == "credit" and _has_amount(value):
-            credit_has_value = True
-            credit_labels_used.append(label)
-
-    if not debit_has_value:
-        inverse_raw = {_normalize_label(key): (key, val) for key, val in (raw_row or {}).items() if isinstance(key, str)}
-        for norm in debit_norms:
-            match = inverse_raw.get(norm)
-            if match and _has_amount(match[1]):
-                debit_has_value = True
-                debit_labels_used.append(match[0])
-                break
-
-    if not credit_has_value:
-        inverse_raw = {_normalize_label(key): (key, val) for key, val in (raw_row or {}).items() if isinstance(key, str)}
-        for norm in credit_norms:
-            match = inverse_raw.get(norm)
-            if match and _has_amount(match[1]):
+                debit_labels_used.extend(labels)
+        if not credit_has_value:
+            found, labels = _scan_inverse_amounts(inverse_raw, credit_norms)
+            if found:
                 credit_has_value = True
-                credit_labels_used.append(match[0])
-                break
+                credit_labels_used.extend(labels)
 
+    amount_hint = None
     if debit_has_value and not credit_has_value:
-        return "invoice", True, False, debit_labels_used, credit_labels_used
-    if credit_has_value and not debit_has_value:
-        return "credit", False, True, debit_labels_used, credit_labels_used
+        amount_hint = "invoice"
+    elif credit_has_value and not debit_has_value:
+        amount_hint = "credit"
 
-    return (
-        None,
-        debit_has_value,
-        credit_has_value,
-        debit_labels_used,
-        credit_labels_used,
-    )
+    return amount_hint, debit_has_value, credit_has_value, debit_labels_used, credit_labels_used
 
 
 def _default_type(candidate_types: set[str]) -> str:
@@ -246,6 +273,118 @@ def _default_type(candidate_types: set[str]) -> str:
     return "invoice"
 
 
+def _compact_text(value: Any) -> str:
+    """Uppercase and strip non-alphanumeric characters."""
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def _extract_tokens(text: str) -> list[str]:
+    """Extract compact tokens from text for synonym matching."""
+    tokens = [_compact_text(tok) for tok in re.findall(r"[A-Za-z0-9]+", text.upper())]
+    return [token for token in tokens if token]
+
+
+def _candidate_types_from_hint(amount_hint: str | None) -> set[str]:
+    """Return candidate document types given an amount hint."""
+    if amount_hint == "invoice":
+        return {"invoice"}
+    if amount_hint == "credit":
+        return {"credit_note", "payment"}
+    return {"invoice", "credit_note", "payment"}
+
+
+def _score_token_similarity(token: str, syn_norm: str) -> float:
+    """Score a token against a synonym string."""
+    if token == syn_norm:
+        score = 1.0
+    elif token.startswith(syn_norm) or syn_norm.startswith(token):
+        score = 0.9
+    else:
+        score = difflib.SequenceMatcher(None, token, syn_norm).ratio()
+    if len(syn_norm) <= 2 and score > 0.8:
+        score = 0.8
+    return score
+
+
+def _best_match_for_synonyms(
+    synonyms: Sequence[str],
+    tokens: Sequence[str],
+    joined_compact: str,
+) -> tuple[float, dict[str, Any] | None]:
+    """Return the best score/detail for a synonym list."""
+    type_best = 0.0
+    best_detail: dict[str, Any] | None = None
+    for syn in synonyms:
+        syn_norm = _compact_text(syn)
+        if not syn_norm:
+            continue
+
+        if syn_norm in joined_compact:
+            if type_best <= 1.0:
+                type_best = 1.0
+                best_detail = {
+                    "synonym": syn_norm,
+                    "token": None,
+                    "score": 1.0,
+                    "source": "joined_text",
+                }
+            continue
+
+        for token in tokens:
+            score = _score_token_similarity(token, syn_norm)
+            if score > type_best:
+                type_best = score
+                best_detail = {
+                    "synonym": syn_norm,
+                    "token": token,
+                    "score": score,
+                    "source": "token",
+                }
+
+    return type_best, best_detail
+
+
+def _choose_best_type(
+    candidate_types: set[str],
+    joined_text: str,
+    tokens: list[str],
+    default_type: str,
+) -> tuple[str, float, dict[str, dict[str, Any]]]:
+    """Pick the best type and metadata from matched tokens."""
+    type_synonyms: dict[str, list[str]] = {
+        "payment": [
+            "payment",
+            "paid",
+            "receipt",
+            "remittance",
+            "banktransfer",
+            "directdebit",
+            "ddpayment",
+            "cashreceipt",
+        ],
+        "credit_note": ["creditnote", "credit", "creditmemo", "crn", "cr", "cn"],
+        "invoice": ["invoice", "inv", "taxinvoice", "bill"],
+    }
+
+    joined_compact = _compact_text(joined_text)
+
+    best_type = default_type
+    best_score = 0.0
+    type_details: dict[str, dict[str, Any]] = {}
+
+    for doc_type, synonyms in type_synonyms.items():
+        if doc_type not in candidate_types:
+            continue
+        type_best, best_detail = _best_match_for_synonyms(synonyms, tokens, joined_compact)
+        if best_detail:
+            type_details[doc_type] = best_detail
+        if type_best > best_score:
+            best_score = type_best
+            best_type = doc_type
+
+    return best_type, best_score, type_details
+
+
 def guess_statement_item_type(
     raw_row: dict[str, Any],
     total_entries: dict[str, Any] | None = None,
@@ -254,11 +393,7 @@ def guess_statement_item_type(
     """Heuristically classify a row as ``invoice``, ``credit_note``, or ``payment``."""
     amount_hint, debit_has_value, credit_has_value, debit_labels, credit_labels = _evaluate_amount_hint(raw_row or {}, total_entries, contact_config)
 
-    candidate_types: set[str] = {"invoice", "credit_note", "payment"}
-    if amount_hint == "invoice":
-        candidate_types = {"invoice"}
-    elif amount_hint == "credit":
-        candidate_types = {"credit_note", "payment"}
+    candidate_types = _candidate_types_from_hint(amount_hint)
 
     default_type = _default_type(candidate_types)
 
@@ -277,11 +412,7 @@ def guess_statement_item_type(
         )
         return default_type
 
-    def _compact(s: str) -> str:
-        return "".join(ch for ch in str(s or "").upper() if ch.isalnum())
-
-    tokens = [_compact(tok) for tok in re.findall(r"[A-Za-z0-9]+", joined_text.upper())]
-    tokens = [t for t in tokens if t]
+    tokens = _extract_tokens(joined_text)
     if not tokens:
         logger.debug(
             "Statement item classification",
@@ -295,70 +426,7 @@ def guess_statement_item_type(
         )
         return default_type
 
-    type_synonyms: dict[str, list[str]] = {
-        "payment": [
-            "payment",
-            "paid",
-            "receipt",
-            "remittance",
-            "banktransfer",
-            "directdebit",
-            "ddpayment",
-            "cashreceipt",
-        ],
-        "credit_note": ["creditnote", "credit", "creditmemo", "crn", "cr", "cn"],
-        "invoice": ["invoice", "inv", "taxinvoice", "bill"],
-    }
-
-    joined_compact = _compact(joined_text)
-
-    best_type = default_type
-    best_score = 0.0
-    type_details: dict[str, dict[str, Any]] = {}
-
-    for doc_type, synonyms in type_synonyms.items():
-        if doc_type not in candidate_types:
-            continue
-        type_best = 0.0
-        for syn in synonyms:
-            syn_norm = _compact(syn)
-            if not syn_norm:
-                continue
-
-            if syn_norm in joined_compact:
-                if type_best <= 1.0:
-                    type_best = 1.0
-                    type_details[doc_type] = {
-                        "synonym": syn_norm,
-                        "token": None,
-                        "score": 1.0,
-                        "source": "joined_text",
-                    }
-                continue
-
-            for token in tokens:
-                if token == syn_norm:
-                    score = 1.0
-                elif token.startswith(syn_norm) or syn_norm.startswith(token):
-                    score = 0.9
-                else:
-                    score = difflib.SequenceMatcher(None, token, syn_norm).ratio()
-
-                if len(syn_norm) <= 2 and score > 0.8:
-                    score = 0.8
-
-                if score > type_best:
-                    type_best = score
-                    type_details[doc_type] = {
-                        "synonym": syn_norm,
-                        "token": token,
-                        "score": score,
-                        "source": "token",
-                    }
-
-        if type_best > best_score:
-            best_score = type_best
-            best_type = doc_type
+    best_type, best_score, type_details = _choose_best_type(candidate_types, joined_text, tokens, default_type)
 
     min_confidence = {"payment": 0.6, "credit_note": 0.65, "invoice": 0.0}
 

@@ -1,3 +1,5 @@
+"""Module containing /config metadata."""
+
 FIELD_DESCRIPTIONS: dict[str, str] = {
     "date": ("Transaction date as it appears on the statement."),
     "due_date": ("Payment due date from the statement line. If you do not care about due date, leave it blank."),

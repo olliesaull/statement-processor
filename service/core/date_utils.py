@@ -50,9 +50,7 @@ MONTH_NAME_TO_NUM["sept"] = 9  # common alternative abbreviation
 
 def parse_with_format(value: Any, template: str | None) -> datetime | None:
     """Parse ``value`` using the custom supplier date-format tokens."""
-    if value is None:
-        return None
-    if not template:
+    if value is None or not template:
         return None
     s = str(value).strip()
     if not s:
@@ -72,6 +70,35 @@ def parse_with_format(value: Any, template: str | None) -> datetime | None:
     if not match:
         return None
 
+    components = _components_from_match(match, group_order, template)
+    if {"year", "month", "day"} - components.keys():
+        return None
+
+    year = components["year"]
+    month = components["month"]
+    day = components["day"]
+
+    if not has_textual_month and numeric_month and numeric_day and not uses_ordinal:
+        # Historically we rejected dates where day/month were both <= 12 to avoid
+        # ambiguity. In practice the configured template explicitly encodes the
+        # expected order (e.g., DD/MM/YY), so honour the template instead of
+        # forcing users to switch to a longer format.
+        # We keep the branch to document intent but no longer raise.
+        pass
+
+    try:
+        dt = datetime(year, month, day)
+    except ValueError:
+        return None
+    return dt
+
+
+def _components_from_match(
+    match: re.Match[str],
+    group_order: Sequence[tuple[str, str]],
+    template: str,
+) -> dict[str, int]:
+    """Extract date components from a regex match."""
     components: dict[str, int] = {}
     for group_name, token in group_order:
         raw = match.group(group_name)
@@ -94,26 +121,7 @@ def parse_with_format(value: Any, template: str | None) -> datetime | None:
             _set_component(components, "day", _parse_ordinal(raw))
         elif token == "dddd":
             continue
-
-    if {"year", "month", "day"} - components.keys():
-        return None
-
-    year = components["year"]
-    month = components["month"]
-    day = components["day"]
-
-    if not has_textual_month and numeric_month and numeric_day and not uses_ordinal:
-        # Historically we rejected dates where day/month were both <= 12 to avoid
-        # ambiguity. In practice the configured template explicitly encodes the
-        # expected order (e.g., DD/MM/YY), so honour the template instead of
-        # forcing users to switch to a longer format.
-        # We keep the branch to document intent but no longer raise.
-        pass
-
-    try:
-        return datetime(year, month, day)
-    except ValueError:
-        return None
+    return components
 
 
 def format_iso_with(value: Any, template: str | None) -> str:
@@ -198,15 +206,15 @@ def _coerce_to_datetime(value: Any) -> datetime | None:
     s = str(value).strip()
     if not s:
         return None
+    dt: datetime | None = None
     try:
-        if len(s) >= 10 and s[4] == "-" and s[7] == "-":
-            return datetime.strptime(s[:10], "%Y-%m-%d")
-        return datetime.strptime(s, "%Y-%m-%d")
+        dt = datetime.strptime(s[:10], "%Y-%m-%d") if len(s) >= 10 and s[4] == "-" and s[7] == "-" else datetime.strptime(s, "%Y-%m-%d")
     except Exception:
         try:
-            return datetime.fromisoformat(s)
+            dt = datetime.fromisoformat(s)
         except Exception:
-            return None
+            dt = None
+    return dt
 
 
 def _format_tokens(tokens: Sequence, dt: datetime) -> str:
@@ -226,27 +234,28 @@ def _format_tokens(tokens: Sequence, dt: datetime) -> str:
 
 def _format_token(token: str, dt: datetime) -> str:
     """Format a single token value."""
+    value = token
     if token == "YYYY":
-        return f"{dt.year:04d}"
-    if token == "YY":
-        return f"{dt.year % 100:02d}"
-    if token == "MMMM":
-        return calendar.month_name[dt.month]
-    if token == "MMM":
-        return calendar.month_abbr[dt.month]
-    if token == "MM":
-        return f"{dt.month:02d}"
-    if token == "M":
-        return str(dt.month)
-    if token == "DD":
-        return f"{dt.day:02d}"
-    if token == "D":
-        return str(dt.day)
-    if token == "Do":
-        return _ordinal(dt.day)
-    if token == "dddd":
-        return dt.strftime("%A")
-    return token
+        value = f"{dt.year:04d}"
+    elif token == "YY":
+        value = f"{dt.year % 100:02d}"
+    elif token == "MMMM":
+        value = calendar.month_name[dt.month]
+    elif token == "MMM":
+        value = calendar.month_abbr[dt.month]
+    elif token == "MM":
+        value = f"{dt.month:02d}"
+    elif token == "M":
+        value = str(dt.month)
+    elif token == "DD":
+        value = f"{dt.day:02d}"
+    elif token == "D":
+        value = str(dt.day)
+    elif token == "Do":
+        value = _ordinal(dt.day)
+    elif token == "dddd":
+        value = dt.strftime("%A")
+    return value
 
 
 def _ordinal(day: int) -> str:

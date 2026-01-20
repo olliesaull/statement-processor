@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Dict, Optional
+from typing import Any
 
 from config import tenant_data_table
 
@@ -71,7 +71,7 @@ class TenantDataRepository:
         if not unique_ids:
             return {}
 
-        statuses: dict[str, TenantStatus] = {tenant_id: TenantStatus.FREE for tenant_id in unique_ids}
+        statuses: dict[str, TenantStatus] = dict.fromkeys(unique_ids, TenantStatus.FREE)
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(cls.get_item, tenant_id): tenant_id for tenant_id in unique_ids}
