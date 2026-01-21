@@ -13,11 +13,7 @@ def _parse_tenant_status_value(status: object, tenant_id: str) -> TenantStatus |
         try:
             return TenantStatus(status)
         except ValueError:
-            logger.warning(
-                "Encountered unexpected tenant status value",
-                tenant_id=tenant_id,
-                status=status,
-            )
+            logger.warning("Encountered unexpected tenant status value", tenant_id=tenant_id, status=status)
             return None
 
     logger.warning("Tenant record missing status", tenant_id=tenant_id)

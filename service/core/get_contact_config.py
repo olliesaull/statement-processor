@@ -23,11 +23,7 @@ def get_contact_config(tenant_id: str, contact_id: str) -> dict[str, Any]:
         TypeError: When the config attribute is not a dict.
     """
     try:
-        resp = tenant_contacts_config_table.get_item(
-            Key={"TenantID": tenant_id, "ContactID": contact_id},
-            ProjectionExpression="#cfg",
-            ExpressionAttributeNames={"#cfg": CONFIG_ATTR},
-        )
+        resp = tenant_contacts_config_table.get_item(Key={"TenantID": tenant_id, "ContactID": contact_id}, ProjectionExpression="#cfg", ExpressionAttributeNames={"#cfg": CONFIG_ATTR})
     except ClientError as exc:
         raise RuntimeError(f"DynamoDB error fetching config for TenantID={tenant_id}, ContactID={contact_id}") from exc
 
@@ -48,10 +44,7 @@ def set_contact_config(tenant_id: str, contact_id: str, config: dict[str, Any]) 
         raise TypeError("config must be a dict")
     try:
         tenant_contacts_config_table.update_item(
-            Key={"TenantID": tenant_id, "ContactID": contact_id},
-            UpdateExpression="SET #cfg = :cfg",
-            ExpressionAttributeNames={"#cfg": CONFIG_ATTR},
-            ExpressionAttributeValues={":cfg": config},
+            Key={"TenantID": tenant_id, "ContactID": contact_id}, UpdateExpression="SET #cfg = :cfg", ExpressionAttributeNames={"#cfg": CONFIG_ATTR}, ExpressionAttributeValues={":cfg": config}
         )
     except ClientError as exc:
         raise RuntimeError(f"DynamoDB error updating config for TenantID={tenant_id}, ContactID={contact_id}") from exc

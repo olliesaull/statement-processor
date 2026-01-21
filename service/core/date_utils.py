@@ -17,18 +17,7 @@ from datetime import date, datetime
 from functools import lru_cache
 from typing import Any
 
-TOKEN_ORDER: Sequence[str] = (
-    "YYYY",
-    "MMMM",
-    "MMM",
-    "MM",
-    "DD",
-    "YY",
-    "Do",
-    "dddd",
-    "M",
-    "D",
-)
+TOKEN_ORDER: Sequence[str] = ("YYYY", "MMMM", "MMM", "MM", "DD", "YY", "Do", "dddd", "M", "D")
 
 TOKEN_REGEX = {
     "YYYY": r"(?P<{name}>\d{{4}})",
@@ -93,11 +82,7 @@ def parse_with_format(value: Any, template: str | None) -> datetime | None:
     return dt
 
 
-def _components_from_match(
-    match: re.Match[str],
-    group_order: Sequence[tuple[str, str]],
-    template: str,
-) -> dict[str, int]:
+def _components_from_match(match: re.Match[str], group_order: Sequence[tuple[str, str]], template: str) -> dict[str, int]:
     """Extract date components from a regex match."""
     components: dict[str, int] = {}
     for group_name, token in group_order:
@@ -277,23 +262,10 @@ def _prepare_template(template: str):
     numeric_month = any(t in {"M", "MM"} for t in flat_tokens)
     numeric_day = any(t in {"D", "DD"} for t in flat_tokens)
     uses_ordinal = any(t == "Do" for t in flat_tokens)
-    return (
-        regex,
-        tuple(group_order),
-        tokens,
-        has_textual_month,
-        numeric_month,
-        numeric_day,
-        uses_ordinal,
-    )
+    return (regex, tuple(group_order), tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal)
 
 
-def _tokens_to_regex(
-    tokens: Sequence,
-    template: str,
-    group_order: list[tuple[str, str]],
-    counts: Counter,
-) -> str:
+def _tokens_to_regex(tokens: Sequence, template: str, group_order: list[tuple[str, str]], counts: Counter) -> str:
     """Convert parsed tokens into a regex pattern string."""
     parts: list[str] = []
     for kind, value in tokens:

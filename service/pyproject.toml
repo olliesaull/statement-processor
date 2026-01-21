@@ -49,7 +49,7 @@ unfixable = []
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
-skip-magic-trailing-comma = false
+skip-magic-trailing-comma = true
 
 # MyPy configuration for type checking
 [tool.mypy]

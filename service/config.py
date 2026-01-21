@@ -38,14 +38,7 @@ tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME)
 
 logger: Logger = Logger()
 
-_SUPPRESSED_LOGGERS: tuple[str, ...] = (
-    "boto",
-    "urllib3",
-    "s3transfer",
-    "boto3",
-    "botocore",
-    "nose",
-)
+_SUPPRESSED_LOGGERS: tuple[str, ...] = ("boto", "urllib3", "s3transfer", "boto3", "botocore", "nose")
 for n in _SUPPRESSED_LOGGERS:
     logging.getLogger(n).setLevel(logging.CRITICAL)
 

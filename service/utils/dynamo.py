@@ -27,62 +27,32 @@ def _query_statements_by_completed(tenant_id: str | None, completed_value: str) 
         "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("Completed").eq(completed_value),
         "FilterExpression": Attr("RecordType").not_exists() | Attr("RecordType").eq("statement"),
     }
-    logger.info(
-        "Querying statements by completion",
-        tenant_id=tenant_id,
-        completed=completed_value,
-    )
+    logger.info("Querying statements by completion", tenant_id=tenant_id, completed=completed_value)
 
     while True:
         resp = tenant_statements_table.query(**kwargs)
         batch = resp.get("Items", [])
         items.extend(batch)
         lek = resp.get("LastEvaluatedKey")
-        logger.debug(
-            "Fetched statement batch",
-            tenant_id=tenant_id,
-            completed=completed_value,
-            batch=len(batch),
-            has_more=bool(lek),
-        )
+        logger.debug("Fetched statement batch", tenant_id=tenant_id, completed=completed_value, batch=len(batch), has_more=bool(lek))
         if not lek:
             break
         kwargs["ExclusiveStartKey"] = lek
 
-    logger.info(
-        "Collected statements by completion",
-        tenant_id=tenant_id,
-        completed=completed_value,
-        count=len(items),
-    )
+    logger.info("Collected statements by completion", tenant_id=tenant_id, completed=completed_value, count=len(items))
     return items
 
 
 def get_statement_record(tenant_id: str, statement_id: str) -> dict[str, Any] | None:
     """Return the full DynamoDB record for a tenant/statement pair."""
     logger.info("Fetching statement record", tenant_id=tenant_id, statement_id=statement_id)
-    response = tenant_statements_table.get_item(
-        Key={
-            "TenantID": tenant_id,
-            "StatementID": statement_id,
-        }
-    )
+    response = tenant_statements_table.get_item(Key={"TenantID": tenant_id, "StatementID": statement_id})
     item = response.get("Item")
-    logger.debug(
-        "Statement record fetched",
-        tenant_id=tenant_id,
-        statement_id=statement_id,
-        found=bool(item),
-    )
+    logger.debug("Statement record fetched", tenant_id=tenant_id, statement_id=statement_id, found=bool(item))
     return item
 
 
-def persist_item_types_to_dynamo(
-    tenant_id: str | None,
-    classification_updates: dict[str, str],
-    *,
-    max_workers: int | None = None,
-) -> None:
+def persist_item_types_to_dynamo(tenant_id: str | None, classification_updates: dict[str, str], *, max_workers: int | None = None) -> None:
     """Update DynamoDB item types using a thread pool to hide network latency."""
     if not tenant_id or not classification_updates:
         return
@@ -95,18 +65,10 @@ def persist_item_types_to_dynamo(
         statement_item_id, new_type = entry
         try:
             tenant_statements_table.update_item(
-                Key={"TenantID": tenant_id, "StatementID": statement_item_id},
-                UpdateExpression="SET item_type = :item_type",
-                ExpressionAttributeValues={":item_type": new_type},
+                Key={"TenantID": tenant_id, "StatementID": statement_item_id}, UpdateExpression="SET item_type = :item_type", ExpressionAttributeValues={":item_type": new_type}
             )
         except ClientError as exc:
-            logger.exception(
-                "Failed to persist item type to DynamoDB",
-                tenant_id=tenant_id,
-                statement_id=statement_item_id,
-                item_type=new_type,
-                error=str(exc),
-            )
+            logger.exception("Failed to persist item type to DynamoDB", tenant_id=tenant_id, statement_id=statement_item_id, item_type=new_type, error=str(exc))
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         executor.map(_update, items)
@@ -129,10 +91,7 @@ def get_completed_statements() -> list[dict[str, Any]]:
 def mark_statement_completed(tenant_id: str, statement_id: str, completed: bool) -> None:
     """Persist a completion flag on the statement record in DynamoDB."""
     tenant_statements_table.update_item(
-        Key={
-            "TenantID": tenant_id,
-            "StatementID": statement_id,
-        },
+        Key={"TenantID": tenant_id, "StatementID": statement_id},
         UpdateExpression="SET #completed = :completed",
         ExpressionAttributeNames={"#completed": "Completed"},
         ExpressionAttributeValues={":completed": "true" if completed else "false"},
@@ -145,11 +104,7 @@ def get_statement_item_status_map(tenant_id: str, statement_id: str) -> dict[str
     if not tenant_id or not statement_id:
         return {}
 
-    logger.info(
-        "Fetching statement item statuses",
-        tenant_id=tenant_id,
-        statement_id=statement_id,
-    )
+    logger.info("Fetching statement item statuses", tenant_id=tenant_id, statement_id=statement_id)
     statuses: dict[str, bool] = {}
     prefix = f"{statement_id}#item-"
     kwargs: dict[str, Any] = {
@@ -172,12 +127,7 @@ def get_statement_item_status_map(tenant_id: str, statement_id: str) -> dict[str
             break
         kwargs["ExclusiveStartKey"] = lek
 
-    logger.info(
-        "Fetched statement item statuses",
-        tenant_id=tenant_id,
-        statement_id=statement_id,
-        count=len(statuses),
-    )
+    logger.info("Fetched statement item statuses", tenant_id=tenant_id, statement_id=statement_id, count=len(statuses))
     return statuses
 
 
@@ -187,10 +137,7 @@ def set_statement_item_completed(tenant_id: str, statement_item_id: str, complet
         return
 
     tenant_statements_table.update_item(
-        Key={
-            "TenantID": tenant_id,
-            "StatementID": statement_item_id,
-        },
+        Key={"TenantID": tenant_id, "StatementID": statement_item_id},
         UpdateExpression="SET #completed = :completed",
         ExpressionAttributeNames={"#completed": "Completed"},
         ExpressionAttributeValues={":completed": "true" if completed else "false"},
@@ -241,43 +188,18 @@ def delete_statement_data(tenant_id: str, statement_id: str) -> None:
         query_kwargs["ExclusiveStartKey"] = lek
 
     # Remove S3 artifacts
-    s3_keys = [
-        statement_pdf_s3_key(tenant_id, statement_id),
-        statement_json_s3_key(tenant_id, statement_id),
-    ]
+    s3_keys = [statement_pdf_s3_key(tenant_id, statement_id), statement_json_s3_key(tenant_id, statement_id)]
     for key in s3_keys:
         try:
             s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=key)
-            logger.info(
-                "Deleted statement S3 object",
-                tenant_id=tenant_id,
-                statement_id=statement_id,
-                s3_key=key,
-            )
+            logger.info("Deleted statement S3 object", tenant_id=tenant_id, statement_id=statement_id, s3_key=key)
         except s3_client.exceptions.NoSuchKey:
-            logger.info(
-                "Statement S3 object already missing",
-                tenant_id=tenant_id,
-                statement_id=statement_id,
-                s3_key=key,
-            )
+            logger.info("Statement S3 object already missing", tenant_id=tenant_id, statement_id=statement_id, s3_key=key)
         except Exception as exc:
-            logger.exception(
-                "Failed to delete statement S3 object",
-                tenant_id=tenant_id,
-                statement_id=statement_id,
-                s3_key=key,
-                error=exc,
-            )
+            logger.exception("Failed to delete statement S3 object", tenant_id=tenant_id, statement_id=statement_id, s3_key=key, error=exc)
             raise
 
-    logger.info(
-        "Statement deletion complete",
-        tenant_id=tenant_id,
-        statement_id=statement_id,
-        items_deleted=deleted_items,
-        s3_objects=len(s3_keys),
-    )
+    logger.info("Statement deletion complete", tenant_id=tenant_id, statement_id=statement_id, items_deleted=deleted_items, s3_objects=len(s3_keys))
 
 
 def add_statement_to_table(tenant_id: str, entry: dict[str, str]) -> None:
@@ -297,12 +219,7 @@ def add_statement_to_table(tenant_id: str, entry: dict[str, str]) -> None:
         # Ensure we don't overwrite an existing statement for this tenant.
         # NOTE: Table key schema is (TenantID, StatementID). Using StatementID here is intentional.
         tenant_statements_table.put_item(Item=item, ConditionExpression=Attr("StatementID").not_exists())
-        logger.info(
-            "Statement added to table",
-            tenant_id=tenant_id,
-            statement_id=entry["statement_id"],
-            contact_id=entry.get("contact_id"),
-        )
+        logger.info("Statement added to table", tenant_id=tenant_id, statement_id=entry["statement_id"], contact_id=entry.get("contact_id"))
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             # Using single-quotes to simplify nested quotes in f-string

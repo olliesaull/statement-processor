@@ -108,9 +108,7 @@ def _extract_total_template(contact_config: dict[str, Any] | None) -> Any:
     return source.get("total")
 
 
-def _collect_config_amount_labels(
-    contact_config: dict[str, Any] | None,
-) -> tuple[set[str], set[str]]:
+def _collect_config_amount_labels(contact_config: dict[str, Any] | None) -> tuple[set[str], set[str]]:
     """Collect normalized debit/credit labels from contact config."""
     total_cfg = _extract_total_template(contact_config)
     debit_norms: set[str] = set()
@@ -186,11 +184,7 @@ def _classify_amount_label(label: str, debit_norms: set[str], credit_norms: set[
     return None
 
 
-def _scan_total_entries(
-    total_entries: Any,
-    debit_norms: set[str],
-    credit_norms: set[str],
-) -> tuple[bool, bool, list[str], list[str]]:
+def _scan_total_entries(total_entries: Any, debit_norms: set[str], credit_norms: set[str]) -> tuple[bool, bool, list[str], list[str]]:
     """Inspect total entries and return amount evidence."""
     debit_has_value = False
     credit_has_value = False
@@ -215,10 +209,7 @@ def _inverse_row(raw_row: dict[str, Any]) -> dict[str, tuple[str, Any]]:
     return {_normalize_label(key): (key, val) for key, val in (raw_row or {}).items() if isinstance(key, str)}
 
 
-def _scan_inverse_amounts(
-    inverse_raw: dict[str, tuple[str, Any]],
-    norms: set[str],
-) -> tuple[bool, list[str]]:
+def _scan_inverse_amounts(inverse_raw: dict[str, tuple[str, Any]], norms: set[str]) -> tuple[bool, list[str]]:
     """Check inverse row for any amount values matching known norms."""
     for norm in norms:
         match = inverse_raw.get(norm)
@@ -227,11 +218,7 @@ def _scan_inverse_amounts(
     return False, []
 
 
-def _evaluate_amount_hint(
-    raw_row: dict[str, Any],
-    total_entries: Any,
-    contact_config: dict[str, Any] | None,
-) -> tuple[str | None, bool, bool, list[str], list[str]]:
+def _evaluate_amount_hint(raw_row: dict[str, Any], total_entries: Any, contact_config: dict[str, Any] | None) -> tuple[str | None, bool, bool, list[str], list[str]]:
     """
     Infer debit/credit signals and return a type hint plus evidence details.
 
@@ -306,11 +293,7 @@ def _score_token_similarity(token: str, syn_norm: str) -> float:
     return score
 
 
-def _best_match_for_synonyms(
-    synonyms: Sequence[str],
-    tokens: Sequence[str],
-    joined_compact: str,
-) -> tuple[float, dict[str, Any] | None]:
+def _best_match_for_synonyms(synonyms: Sequence[str], tokens: Sequence[str], joined_compact: str) -> tuple[float, dict[str, Any] | None]:
     """Return the best score/detail for a synonym list."""
     type_best = 0.0
     best_detail: dict[str, Any] | None = None
@@ -322,46 +305,22 @@ def _best_match_for_synonyms(
         if syn_norm in joined_compact:
             if type_best <= 1.0:
                 type_best = 1.0
-                best_detail = {
-                    "synonym": syn_norm,
-                    "token": None,
-                    "score": 1.0,
-                    "source": "joined_text",
-                }
+                best_detail = {"synonym": syn_norm, "token": None, "score": 1.0, "source": "joined_text"}
             continue
 
         for token in tokens:
             score = _score_token_similarity(token, syn_norm)
             if score > type_best:
                 type_best = score
-                best_detail = {
-                    "synonym": syn_norm,
-                    "token": token,
-                    "score": score,
-                    "source": "token",
-                }
+                best_detail = {"synonym": syn_norm, "token": token, "score": score, "source": "token"}
 
     return type_best, best_detail
 
 
-def _choose_best_type(
-    candidate_types: set[str],
-    joined_text: str,
-    tokens: list[str],
-    default_type: str,
-) -> tuple[str, float, dict[str, dict[str, Any]]]:
+def _choose_best_type(candidate_types: set[str], joined_text: str, tokens: list[str], default_type: str) -> tuple[str, float, dict[str, dict[str, Any]]]:
     """Pick the best type and metadata from matched tokens."""
     type_synonyms: dict[str, list[str]] = {
-        "payment": [
-            "payment",
-            "paid",
-            "receipt",
-            "remittance",
-            "banktransfer",
-            "directdebit",
-            "ddpayment",
-            "cashreceipt",
-        ],
+        "payment": ["payment", "paid", "receipt", "remittance", "banktransfer", "directdebit", "ddpayment", "cashreceipt"],
         "credit_note": ["creditnote", "credit", "creditmemo", "crn", "cr", "cn"],
         "invoice": ["invoice", "inv", "taxinvoice", "bill"],
     }
@@ -385,11 +344,7 @@ def _choose_best_type(
     return best_type, best_score, type_details
 
 
-def guess_statement_item_type(
-    raw_row: dict[str, Any],
-    total_entries: dict[str, Any] | None = None,
-    contact_config: dict[str, Any] | None = None,
-) -> str:
+def guess_statement_item_type(raw_row: dict[str, Any], total_entries: dict[str, Any] | None = None, contact_config: dict[str, Any] | None = None) -> str:
     """Heuristically classify a row as ``invoice``, ``credit_note``, or ``payment``."""
     amount_hint, debit_has_value, credit_has_value, debit_labels, credit_labels = _evaluate_amount_hint(raw_row or {}, total_entries, contact_config)
 

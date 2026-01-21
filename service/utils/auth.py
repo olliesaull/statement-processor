@@ -31,15 +31,7 @@ SCOPES = [
     "projects",
     "files.read",
 ]
-_XERO_TOKEN_FIELDS = {
-    "access_token",
-    "refresh_token",
-    "expires_in",
-    "expires_at",
-    "token_type",
-    "scope",
-    "id_token",
-}
+_XERO_TOKEN_FIELDS = {"access_token", "refresh_token", "expires_in", "expires_at", "token_type", "scope", "id_token"}
 
 
 def _sanitize_xero_token(token: dict | None) -> dict | None:
@@ -73,14 +65,7 @@ def get_xero_api_client(oauth_token: dict | None = None) -> AccountingApi:
         def token_saver(new_token: dict) -> None:
             oauth_token.update(new_token)
 
-    api_client = ApiClient(
-        Configuration(
-            oauth2_token=OAuth2Token(client_id=CLIENT_ID, client_secret=CLIENT_SECRET),
-        ),
-        pool_threads=1,
-        oauth2_token_getter=token_getter,
-        oauth2_token_saver=token_saver,
-    )
+    api_client = ApiClient(Configuration(oauth2_token=OAuth2Token(client_id=CLIENT_ID, client_secret=CLIENT_SECRET)), pool_threads=1, oauth2_token_getter=token_getter, oauth2_token_saver=token_saver)
 
     if oauth_token:
         sanitized_token = _sanitize_xero_token(oauth_token)
@@ -127,10 +112,7 @@ def raise_for_unauthorized(error: Exception) -> None:
             continue
 
         if status_code in {401, 403}:
-            logger.info(
-                "Xero API returned unauthorized/forbidden; redirecting to login",
-                status_code=status_code,
-            )
+            logger.info("Xero API returned unauthorized/forbidden; redirecting to login", status_code=status_code)
             raise RedirectToLogin()
 
 
@@ -142,11 +124,7 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
         tenant_id = session.get("xero_tenant_id")
         token = get_xero_oauth2_token()
         if not tenant_id or not token:
-            logger.info(
-                "Missing Xero token or tenant; redirecting",
-                route=request.path,
-                tenant_id=tenant_id,
-            )
+            logger.info("Missing Xero token or tenant; redirecting", route=request.path, tenant_id=tenant_id)
             return redirect(url_for("login"))
 
         try:
@@ -155,11 +133,7 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
             expires_at = 0.0
 
         if expires_at and time.time() > expires_at:
-            logger.info(
-                "Xero token expired; redirecting",
-                route=request.path,
-                tenant_id=tenant_id,
-            )
+            logger.info("Xero token expired; redirecting", route=request.path, tenant_id=tenant_id)
             return redirect(url_for("login"))
 
         return f(*args, **kwargs)
@@ -168,9 +142,7 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def active_tenant_required(
-    message: str = "Please select a tenant before continuing.",
-    redirect_endpoint: str = "tenant_management",
-    flash_key: str = "tenant_error",
+    message: str = "Please select a tenant before continuing.", redirect_endpoint: str = "tenant_management", flash_key: str = "tenant_error"
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Ensure the user has an active tenant selected; otherwise redirect with a message."""
 
@@ -200,11 +172,7 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
         if tenant_id:
             status = get_cached_tenant_status(tenant_id)
             if status == TenantStatus.LOADING:
-                logger.info(
-                    "Blocking route during load",
-                    route=request.path,
-                    tenant_id=tenant_id,
-                )
+                logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id)
                 session["tenant_error"] = "Please wait for the initial load to finish before navigating away."
                 return redirect(url_for("tenant_management"))
 
@@ -219,13 +187,7 @@ def route_handler_logging(function):
     @wraps(function)
     def decorator(*args, **kwargs):
         tenant_id = session.get("xero_tenant_id")
-        logger.info(
-            "Entering route",
-            route=request.path,
-            event_type="USER_TRAIL",
-            path=request.path,
-            tenant_id=tenant_id,
-        )
+        logger.info("Entering route", route=request.path, event_type="USER_TRAIL", path=request.path, tenant_id=tenant_id)
 
         return function(*args, **kwargs)
 

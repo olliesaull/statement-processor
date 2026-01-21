@@ -10,11 +10,7 @@ from config import logger
 _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
 
 
-def _normalize_separators(
-    value: Any,
-    decimal_separator: str | None = None,
-    thousands_separator: str | None = None,
-) -> str | None:
+def _normalize_separators(value: Any, decimal_separator: str | None = None, thousands_separator: str | None = None) -> str | None:
     """Normalize a raw numeric string using configured separators."""
     if value is None or value == "":
         return None
@@ -39,44 +35,23 @@ def _normalize_separators(
     return cleaned
 
 
-def _to_decimal(
-    x: Any,
-    *,
-    decimal_separator: str | None = None,
-    thousands_separator: str | None = None,
-) -> Decimal | None:
+def _to_decimal(x: Any, *, decimal_separator: str | None = None, thousands_separator: str | None = None) -> Decimal | None:
     """Normalize and parse a value into a Decimal."""
     if x is None or x == "":
         return None
     normalized = _normalize_separators(x, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
     if normalized is None:
         if isinstance(x, str) and x.strip():
-            logger.warning(
-                "Unable to normalize numeric value",
-                raw_value=x,
-                decimal_separator=decimal_separator,
-                thousands_separator=thousands_separator,
-            )
+            logger.warning("Unable to normalize numeric value", raw_value=x, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
         return None
     try:
         return Decimal(normalized)
     except InvalidOperation:
-        logger.warning(
-            "Unable to parse numeric value",
-            raw_value=x,
-            normalized_value=normalized,
-            decimal_separator=decimal_separator,
-            thousands_separator=thousands_separator,
-        )
+        logger.warning("Unable to parse numeric value", raw_value=x, normalized_value=normalized, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
         return None
 
 
-def format_money(
-    x: Any,
-    *,
-    decimal_separator: str | None = None,
-    thousands_separator: str | None = None,
-) -> str:
+def format_money(x: Any, *, decimal_separator: str | None = None, thousands_separator: str | None = None) -> str:
     """Format a number with thousands separators and 2 decimals.
 
     Returns empty string for empty input; returns original string if not numeric.

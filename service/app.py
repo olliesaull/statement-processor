@@ -12,16 +12,7 @@ from typing import Any
 import requests
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
-from flask import (
-    Flask,
-    abort,
-    jsonify,
-    redirect,
-    render_template,
-    request,
-    session,
-    url_for,
-)
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from flask_caching import Cache
 from flask_session import Session
 from flask_wtf.csrf import CSRFProtect
@@ -31,27 +22,14 @@ from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 import cache_provider
-from config import (
-    CLIENT_ID,
-    CLIENT_SECRET,
-    S3_BUCKET_NAME,
-    STAGE,
-    logger,
-)
+from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
 from core.models import StatementItem
 from sync import check_load_required, sync_data
 from tenant_data_repository import TenantDataRepository, TenantStatus
-from utils.auth import (
-    active_tenant_required,
-    block_when_loading,
-    route_handler_logging,
-    save_xero_oauth2_token,
-    scope_str,
-    xero_token_required,
-)
+from utils.auth import active_tenant_required, block_when_loading, route_handler_logging, save_xero_oauth2_token, scope_str, xero_token_required
 from utils.dynamo import (
     add_statement_to_table,
     delete_statement_data,
@@ -64,29 +42,10 @@ from utils.dynamo import (
     set_all_statement_items_completed,
     set_statement_item_completed,
 )
-from utils.statement_view import (
-    build_right_rows,
-    build_row_comparisons,
-    get_date_format_from_config,
-    get_number_separators_from_config,
-    match_invoices_to_statement_items,
-    prepare_display_mappings,
-)
-from utils.storage import (
-    StatementJSONNotFoundError,
-    fetch_json_statement,
-    is_allowed_pdf,
-    statement_json_s3_key,
-    statement_pdf_s3_key,
-    upload_statement_to_s3,
-)
+from utils.statement_view import build_right_rows, build_row_comparisons, get_date_format_from_config, get_number_separators_from_config, match_invoices_to_statement_items, prepare_display_mappings
+from utils.storage import StatementJSONNotFoundError, fetch_json_statement, is_allowed_pdf, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
 from utils.workflows import start_textraction_state_machine
-from xero_repository import (
-    get_contacts,
-    get_credit_notes_by_contact,
-    get_invoices_by_contact,
-    get_payments_by_contact,
-)
+from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(16))
@@ -101,12 +60,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 os.makedirs(app.instance_path, exist_ok=True)
 session_dir = os.path.join(app.instance_path, "flask_session")
 os.makedirs(session_dir, exist_ok=True)
-app.config.update(
-    SESSION_TYPE="filesystem",
-    SESSION_FILE_DIR=session_dir,
-    SESSION_PERMANENT=False,
-    SESSION_USE_SIGNER=True,
-)
+app.config.update(SESSION_TYPE="filesystem", SESSION_FILE_DIR=session_dir, SESSION_PERMANENT=False, SESSION_USE_SIGNER=True)
 Session(app)
 
 cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 0})
@@ -117,10 +71,7 @@ cache_provider.set_cache(cache)
 app.config["CLIENT_ID"] = CLIENT_ID
 app.config["CLIENT_SECRET"] = CLIENT_SECRET
 
-XERO_OIDC_METADATA_URL = os.getenv(
-    "XERO_OIDC_METADATA_URL",
-    "https://identity.xero.com/.well-known/openid-configuration",
-)
+XERO_OIDC_METADATA_URL = os.getenv("XERO_OIDC_METADATA_URL", "https://identity.xero.com/.well-known/openid-configuration")
 
 if STAGE == "prod":
     REDIRECT_URI = "https://cloudcathode.com/callback"
@@ -145,17 +96,8 @@ _executor = ThreadPoolExecutor(max_workers=2)
 
 DEFAULT_DECIMAL_SEPARATOR = "."
 DEFAULT_THOUSANDS_SEPARATOR = ","
-DECIMAL_SEPARATOR_OPTIONS = [
-    (".", "Dot (.)"),
-    (",", "Comma (,)"),
-]
-THOUSANDS_SEPARATOR_OPTIONS = [
-    ("", "None"),
-    (",", "Comma (,)"),
-    (".", "Dot (.)"),
-    (" ", "Space ( )"),
-    ("'", "Apostrophe (')"),
-]
+DECIMAL_SEPARATOR_OPTIONS = [(".", "Dot (.)"), (",", "Comma (,)")]
+THOUSANDS_SEPARATOR_OPTIONS = [("", "None"), (",", "Comma (,)"), (".", "Dot (.)"), (" ", "Space ( )"), ("'", "Apostrophe (')")]
 DECIMAL_SEPARATOR_VALUES = {opt[0] for opt in DECIMAL_SEPARATOR_OPTIONS}
 THOUSANDS_SEPARATOR_VALUES = {opt[0] for opt in THOUSANDS_SEPARATOR_OPTIONS}
 
@@ -237,32 +179,16 @@ def _build_config_rows(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _load_config_context(
-    tenant_id: str | None,
-    contact_lookup: dict[str, str],
-    selected_contact_name: str,
-) -> dict[str, Any]:
+def _load_config_context(tenant_id: str | None, contact_lookup: dict[str, str], selected_contact_name: str) -> dict[str, Any]:
     """Load a contact config and return updates for the template context."""
     selected_contact_id = contact_lookup.get(selected_contact_name)
-    logger.info(
-        "Config load submitted",
-        tenant_id=tenant_id,
-        contact_name=selected_contact_name,
-        contact_id=selected_contact_id,
-    )
+    logger.info("Config load submitted", tenant_id=tenant_id, contact_name=selected_contact_name, contact_id=selected_contact_id)
 
-    updates: dict[str, Any] = {
-        "selected_contact_name": selected_contact_name,
-        "selected_contact_id": selected_contact_id,
-    }
+    updates: dict[str, Any] = {"selected_contact_name": selected_contact_name, "selected_contact_id": selected_contact_id}
 
     if not selected_contact_id:
         updates["error"] = "Please select a valid contact."
-        logger.info(
-            "Config load failed",
-            tenant_id=tenant_id,
-            contact_name=selected_contact_name,
-        )
+        logger.info("Config load failed", tenant_id=tenant_id, contact_name=selected_contact_name)
         return updates
 
     try:
@@ -271,12 +197,7 @@ def _load_config_context(
         updates["decimal_separator"] = _normalize_decimal_separator(str(cfg.get("decimal_separator", "")))
         updates["thousands_separator"] = _normalize_thousands_separator(str(cfg.get("thousands_separator", "")))
         updates["date_format"] = str(cfg.get("date_format") or "") if isinstance(cfg, dict) else ""
-        logger.info(
-            "Config loaded",
-            tenant_id=tenant_id,
-            contact_id=selected_contact_id,
-            keys=len(cfg) if isinstance(cfg, dict) else 0,
-        )
+        logger.info("Config loaded", tenant_id=tenant_id, contact_id=selected_contact_id, keys=len(cfg) if isinstance(cfg, dict) else 0)
         return updates
     except KeyError:
         updates["mapping_rows"] = _build_config_rows({})
@@ -284,20 +205,11 @@ def _load_config_context(
         updates["thousands_separator"] = DEFAULT_THOUSANDS_SEPARATOR
         updates["date_format"] = ""
         updates["message"] = "No existing config found. You can create one below."
-        logger.info(
-            "Config not found",
-            tenant_id=tenant_id,
-            contact_id=selected_contact_id,
-        )
+        logger.info("Config not found", tenant_id=tenant_id, contact_id=selected_contact_id)
         return updates
     except Exception as exc:
         updates["error"] = f"Failed to load config: {exc}"
-        logger.info(
-            "Config load error",
-            tenant_id=tenant_id,
-            contact_id=selected_contact_id,
-            error=exc,
-        )
+        logger.info("Config load error", tenant_id=tenant_id, contact_id=selected_contact_id, error=exc)
         return updates
 
 
@@ -305,17 +217,9 @@ def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
     """Persist config edits and return updates for the template context."""
     selected_contact_id = form.get("contact_id")
     selected_contact_name = form.get("contact_name")
-    logger.info(
-        "Config save submitted",
-        tenant_id=tenant_id,
-        contact_id=selected_contact_id,
-        contact_name=selected_contact_name,
-    )
+    logger.info("Config save submitted", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name)
 
-    updates: dict[str, Any] = {
-        "selected_contact_id": selected_contact_id,
-        "selected_contact_name": selected_contact_name,
-    }
+    updates: dict[str, Any] = {"selected_contact_id": selected_contact_id, "selected_contact_name": selected_contact_name}
 
     try:
         try:
@@ -340,13 +244,7 @@ def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
             else:
                 val = form.get(f"map[{f}]")
                 new_map[f] = (val or "").strip()
-        combined = {
-            **preserved,
-            **new_map,
-            "date_format": selected_date_format,
-            "decimal_separator": selected_decimal_separator,
-            "thousands_separator": selected_thousands_separator,
-        }
+        combined = {**preserved, **new_map, "date_format": selected_date_format, "decimal_separator": selected_decimal_separator, "thousands_separator": selected_thousands_separator}
 
         updates["decimal_separator"] = selected_decimal_separator
         updates["thousands_separator"] = selected_thousands_separator
@@ -365,23 +263,12 @@ def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
             updates["mapping_rows"] = _build_config_rows(combined)
         else:
             set_contact_config(tenant_id, selected_contact_id, combined)
-            logger.info(
-                "Contact config saved",
-                tenant_id=tenant_id,
-                contact_id=selected_contact_id,
-                contact_name=selected_contact_name,
-                config=combined,
-            )
+            logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name, config=combined)
             updates["message"] = "Config updated successfully."
             updates["mapping_rows"] = _build_config_rows(combined)
     except Exception as exc:
         updates["error"] = f"Failed to save config: {exc}"
-        logger.info(
-            "Config save failed",
-            tenant_id=tenant_id,
-            contact_id=selected_contact_id,
-            error=exc,
-        )
+        logger.info("Config save failed", tenant_id=tenant_id, contact_id=selected_contact_id, error=exc)
     return updates
 
 
@@ -456,22 +343,10 @@ def tenant_management():
 
     active_tenant = next((t for t in tenants if t.get("tenantId") == active_tenant_id), None)
     logger.info(
-        "Rendering tenant_management page",
-        active_tenant_id=active_tenant_id,
-        tenants=len(tenants),
-        has_message=bool(message),
-        has_error=bool(error),
-        authenticated=bool(session.get("access_token")),
+        "Rendering tenant_management page", active_tenant_id=active_tenant_id, tenants=len(tenants), has_message=bool(message), has_error=bool(error), authenticated=bool(session.get("access_token"))
     )
 
-    return render_template(
-        "tenant_management.html",
-        tenants=tenants,
-        active_tenant_id=active_tenant_id,
-        active_tenant=active_tenant,
-        message=message,
-        error=error,
-    )
+    return render_template("tenant_management.html", tenants=tenants, active_tenant_id=active_tenant_id, active_tenant=active_tenant, message=message, error=error)
 
 
 @app.route("/favicon.ico")
@@ -500,104 +375,45 @@ def _validate_upload_payload(files: list, names: list[str]) -> bool:
     return True
 
 
-def _ensure_contact_config(
-    tenant_id: str | None,
-    contact_id: str,
-    contact_name: str,
-    filename: str,
-    error_messages: list[str],
-) -> bool:
+def _ensure_contact_config(tenant_id: str | None, contact_id: str, contact_name: str, filename: str, error_messages: list[str]) -> bool:
     """Ensure the contact has a config; on failure, log and append a user-facing error."""
     try:
         get_contact_config(tenant_id, contact_id)
     except KeyError:
-        logger.warning(
-            "Upload blocked; contact config missing",
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            contact_name=contact_name,
-            statement_filename=filename,
-        )
+        logger.warning("Upload blocked; contact config missing", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=filename)
         error_messages.append(f"Contact '{contact_name}' does not have a statement config yet. Please configure it before uploading.")
         return False
     except Exception as exc:
-        logger.exception(
-            "Upload blocked; config lookup failed",
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            contact_name=contact_name,
-            statement_filename=filename,
-            error=exc,
-        )
+        logger.exception("Upload blocked; config lookup failed", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=filename, error=exc)
         error_messages.append(f"Could not load the config for '{contact_name}'. Please try again later.")
         return False
     return True
 
 
-def _process_statement_upload(
-    tenant_id: str | None,
-    uploaded_file: FileStorage,
-    contact_id: str,
-    contact_name: str,
-) -> str:
+def _process_statement_upload(tenant_id: str | None, uploaded_file: FileStorage, contact_id: str, contact_name: str) -> str:
     """Upload the PDF, register the statement, and kick off textraction."""
     file_bytes = getattr(uploaded_file, "content_length", None)
     statement_id = str(uuid.uuid4())
     logger.info(
-        "Preparing statement upload",
-        tenant_id=tenant_id,
-        contact_id=contact_id,
-        contact_name=contact_name,
-        statement_id=statement_id,
-        statement_filename=uploaded_file.filename,
-        bytes=file_bytes,
+        "Preparing statement upload", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_id=statement_id, statement_filename=uploaded_file.filename, bytes=file_bytes
     )
 
-    entry = {
-        "statement_id": statement_id,
-        "statement_name": uploaded_file.filename,
-        "contact_name": contact_name,
-        "contact_id": contact_id,
-    }
+    entry = {"statement_id": statement_id, "statement_name": uploaded_file.filename, "contact_name": contact_name, "contact_id": contact_id}
 
     # Upload PDF to S3 first so downstream processing can read it.
     pdf_statement_key = statement_pdf_s3_key(tenant_id, statement_id)
     upload_statement_to_s3(fs_like=uploaded_file, key=pdf_statement_key)
-    logger.info(
-        "Uploaded statement PDF",
-        tenant_id=tenant_id,
-        contact_id=contact_id,
-        statement_id=statement_id,
-        s3_key=pdf_statement_key,
-    )
+    logger.info("Uploaded statement PDF", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, s3_key=pdf_statement_key)
 
     # Persist statement metadata to DynamoDB.
     add_statement_to_table(tenant_id, entry)
-    logger.info(
-        "Statement submitted and metadata registered",
-        tenant_id=tenant_id,
-        contact_id=contact_id,
-        statement_id=statement_id,
-        table_entry=entry,
-    )
+    logger.info("Statement submitted and metadata registered", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, table_entry=entry)
 
     # Kick off background textraction so it's ready by the time the user views it.
     json_statement_key = statement_json_s3_key(tenant_id, statement_id)
-    started = start_textraction_state_machine(
-        tenant_id=tenant_id,
-        contact_id=contact_id,
-        statement_id=statement_id,
-        pdf_key=pdf_statement_key,
-        json_key=json_statement_key,
-    )
+    started = start_textraction_state_machine(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
 
-    log_kwargs = {
-        "tenant_id": tenant_id,
-        "contact_id": contact_id,
-        "statement_id": statement_id,
-        "pdf_key": pdf_statement_key,
-        "json_key": json_statement_key,
-    }
+    log_kwargs = {"tenant_id": tenant_id, "contact_id": contact_id, "statement_id": statement_id, "pdf_key": pdf_statement_key, "json_key": json_statement_key}
 
     if started:
         logger.info("Started textraction workflow", **log_kwargs)
@@ -619,22 +435,13 @@ def upload_statements():
     contacts_list, contact_lookup = _get_active_contacts_for_upload()
     success_count: int | None = None
     error_messages: list[str] = []
-    logger.info(
-        "Rendering upload statements",
-        tenant_id=tenant_id,
-        available_contacts=len(contacts_list),
-    )
+    logger.info("Rendering upload statements", tenant_id=tenant_id, available_contacts=len(contacts_list))
 
     uploads_ok = 0
     if request.method == "POST":
         files = [f for f in request.files.getlist("statements") if f and f.filename]
         names = request.form.getlist("contact_names")
-        logger.info(
-            "Upload statements submitted",
-            tenant_id=tenant_id,
-            files=len(files),
-            names=len(names),
-        )
+        logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
         if _validate_upload_payload(files, names):
             for uploaded_file, contact in zip(files, names, strict=False):
                 if not contact.strip():
@@ -647,41 +454,21 @@ def upload_statements():
                 contact_name = contact.strip()
                 contact_id: str | None = contact_lookup.get(contact_name)
                 if not contact_id:
-                    logger.warning(
-                        "Upload blocked; contact not found",
-                        tenant_id=tenant_id,
-                        contact_name=contact_name,
-                        statement_filename=uploaded_file.filename,
-                    )
+                    logger.warning("Upload blocked; contact not found", tenant_id=tenant_id, contact_name=contact_name, statement_filename=uploaded_file.filename)
                     error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")
                     continue
 
                 if not _ensure_contact_config(tenant_id, contact_id, contact_name, uploaded_file.filename, error_messages):
                     continue
 
-                _process_statement_upload(
-                    tenant_id=tenant_id,
-                    uploaded_file=uploaded_file,
-                    contact_id=contact_id,
-                    contact_name=contact_name,
-                )
+                _process_statement_upload(tenant_id=tenant_id, uploaded_file=uploaded_file, contact_id=contact_id, contact_name=contact_name)
                 uploads_ok += 1
 
         if uploads_ok:
             success_count = uploads_ok
-        logger.info(
-            "Upload statements processed",
-            tenant_id=tenant_id,
-            succeeded=uploads_ok,
-            errors=list(error_messages),
-        )
+        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=list(error_messages))
 
-    return render_template(
-        "upload_statements.html",
-        contacts=contacts_list,
-        success_count=success_count,
-        error_messages=error_messages,
-    )
+    return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages)
 
 
 @app.route("/instructions")
@@ -786,34 +573,13 @@ def statements():
 
     sort_links = {
         "contact": url_for("statements", **dict(base_args, sort="contact", dir=next_dir_for("contact"))),
-        "date_range": url_for(
-            "statements",
-            **dict(base_args, sort="date_range", dir=next_dir_for("date_range")),
-        ),
-        "uploaded": url_for(
-            "statements",
-            **dict(base_args, sort="uploaded", dir=next_dir_for("uploaded")),
-        ),
+        "date_range": url_for("statements", **dict(base_args, sort="date_range", dir=next_dir_for("date_range"))),
+        "uploaded": url_for("statements", **dict(base_args, sort="uploaded", dir=next_dir_for("uploaded"))),
     }
 
-    logger.info(
-        "Rendering statements",
-        tenant_id=tenant_id,
-        view=view,
-        sort=sort_key,
-        direction=current_dir,
-        statements=len(statement_rows),
-    )
+    logger.info("Rendering statements", tenant_id=tenant_id, view=view, sort=sort_key, direction=current_dir, statements=len(statement_rows))
 
-    return render_template(
-        "statements.html",
-        statements=statement_rows,
-        show_completed=show_completed,
-        message=message,
-        current_sort=sort_key,
-        current_dir=current_dir,
-        sort_links=sort_links,
-    )
+    return render_template("statements.html", statements=statement_rows, show_completed=show_completed, message=message, current_sort=sort_key, current_dir=current_dir, sort_links=sort_links)
 
 
 @app.route("/statement/<statement_id>/delete", methods=["POST"])
@@ -829,12 +595,7 @@ def delete_statement(statement_id: str):
         delete_statement_data(tenant_id, statement_id)
         session["statements_message"] = "Statement deleted."
     except Exception as exc:
-        logger.exception(
-            "Failed to delete statement",
-            tenant_id=tenant_id,
-            statement_id=statement_id,
-            error=exc,
-        )
+        logger.exception("Failed to delete statement", tenant_id=tenant_id, statement_id=statement_id, error=exc)
         session["tenant_error"] = "Unable to delete the statement. Please try again."
 
     return redirect(url_for("statements"))
@@ -854,14 +615,7 @@ def _parse_show_payments(raw_value: str | None) -> bool:
     return value in {"true", "1", "yes", "on"}
 
 
-def _handle_statement_post_actions(
-    *,
-    tenant_id: str,
-    statement_id: str,
-    form: Any,
-    items_view: str,
-    show_payments: bool,
-) -> Any:
+def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: Any, items_view: str, show_payments: bool) -> Any:
     """Handle POST actions for statement detail views, returning a redirect when applicable."""
     action = form.get("action")
     if action in {"mark_complete", "mark_incomplete"}:
@@ -871,29 +625,12 @@ def _handle_statement_post_actions(
             try:
                 set_all_statement_items_completed(tenant_id, statement_id, completed_flag)
             except Exception as exc:
-                logger.exception(
-                    "Failed to toggle all statement items",
-                    statement_id=statement_id,
-                    tenant_id=tenant_id,
-                    desired_state=completed_flag,
-                    error=exc,
-                )
+                logger.exception("Failed to toggle all statement items", statement_id=statement_id, tenant_id=tenant_id, desired_state=completed_flag, error=exc)
 
             session["statements_message"] = "Statement marked as complete." if completed_flag else "Statement marked as incomplete."
-            logger.info(
-                "Statement completion updated",
-                tenant_id=tenant_id,
-                statement_id=statement_id,
-                completed=completed_flag,
-            )
+            logger.info("Statement completion updated", tenant_id=tenant_id, statement_id=statement_id, completed=completed_flag)
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.exception(
-                "Failed to toggle statement completion",
-                statement_id=statement_id,
-                tenant_id=tenant_id,
-                desired_state=completed_flag,
-                error=exc,
-            )
+            logger.exception("Failed to toggle statement completion", statement_id=statement_id, tenant_id=tenant_id, desired_state=completed_flag, error=exc)
             abort(500)
         return redirect(url_for("statements"))
 
@@ -903,30 +640,12 @@ def _handle_statement_post_actions(
             desired_state = action == "complete_item"
             try:
                 set_statement_item_completed(tenant_id, statement_item_id, desired_state)
-                logger.info(
-                    "Statement item updated",
-                    tenant_id=tenant_id,
-                    statement_id=statement_id,
-                    statement_item_id=statement_item_id,
-                    completed=desired_state,
-                )
+                logger.info("Statement item updated", tenant_id=tenant_id, statement_id=statement_id, statement_item_id=statement_item_id, completed=desired_state)
             except Exception as exc:
                 logger.exception(
-                    "Failed to toggle statement item completion",
-                    statement_id=statement_id,
-                    statement_item_id=statement_item_id,
-                    tenant_id=tenant_id,
-                    desired_state=desired_state,
-                    error=exc,
+                    "Failed to toggle statement item completion", statement_id=statement_id, statement_item_id=statement_item_id, tenant_id=tenant_id, desired_state=desired_state, error=exc
                 )
-        return redirect(
-            url_for(
-                "statement",
-                statement_id=statement_id,
-                items_view=items_view,
-                show_payments="true" if show_payments else "false",
-            )
-        )
+        return redirect(url_for("statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false"))
 
     return None
 
@@ -944,22 +663,13 @@ def _build_match_by_item_id(matched_invoice_to_statement_item: dict[str, Any]) -
             continue
         doc_type = str(doc.get("type") or "").upper()
         if doc.get("credit_note_id") or doc_type.endswith("CREDIT"):
-            match_by_item_id[statement_item_id] = {
-                "type": "credit_note",
-                "source": "credit_note_match",
-            }
+            match_by_item_id[statement_item_id] = {"type": "credit_note", "source": "credit_note_match"}
         else:
-            match_by_item_id[statement_item_id] = {
-                "type": "invoice",
-                "source": "invoice_match",
-            }
+            match_by_item_id[statement_item_id] = {"type": "invoice", "source": "invoice_match"}
     return match_by_item_id
 
 
-def _build_payment_number_map(
-    invoices: list[dict[str, Any]],
-    payments: list[dict[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
+def _build_payment_number_map(invoices: list[dict[str, Any]], payments: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """Build a map of invoice number -> payment rows for payment inference."""
     invoice_number_by_id: dict[str, str] = {}
     for inv in invoices:
@@ -1038,27 +748,13 @@ def _classify_statement_items(
             it["item_type"] = new_type
             if statement_item_id:
                 classification_updates[statement_item_id] = new_type
-            logger.info(
-                "Statement item type updated",
-                statement_id=statement_id,
-                statement_item_id=statement_item_id,
-                new_type=new_type,
-                previous_type=current_type or "",
-                source=source,
-            )
+            logger.info("Statement item type updated", statement_id=statement_id, statement_item_id=statement_item_id, new_type=new_type, previous_type=current_type or "", source=source)
 
     item_types = [str((it.get("item_type") if isinstance(it, dict) else "") or "").strip().lower() for it in items]
     return item_types, classification_updates
 
 
-def _persist_classification_updates(
-    *,
-    data: dict[str, Any],
-    statement_id: str,
-    tenant_id: str,
-    json_statement_key: str,
-    classification_updates: dict[str, str],
-) -> None:
+def _persist_classification_updates(*, data: dict[str, Any], statement_id: str, tenant_id: str, json_statement_key: str, classification_updates: dict[str, str]) -> None:
     """Persist updated item types back to S3 and DynamoDB."""
     if not classification_updates:
         return
@@ -1066,32 +762,15 @@ def _persist_classification_updates(
     try:
         json_payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         upload_statement_to_s3(BytesIO(json_payload), json_statement_key)
-        logger.info(
-            "Persisted statement item types to S3",
-            statement_id=statement_id,
-            updated=len(classification_updates),
-        )
+        logger.info("Persisted statement item types to S3", statement_id=statement_id, updated=len(classification_updates))
     except Exception as exc:
-        logger.exception(
-            "Failed to persist statement JSON",
-            statement_id=statement_id,
-            error=str(exc),
-        )
+        logger.exception("Failed to persist statement JSON", statement_id=statement_id, error=str(exc))
 
     persist_item_types_to_dynamo(tenant_id, classification_updates)
-    logger.info(
-        "Persisted statement item types to DynamoDB",
-        statement_id=statement_id,
-        updated=len(classification_updates),
-    )
+    logger.info("Persisted statement item types to DynamoDB", statement_id=statement_id, updated=len(classification_updates))
 
 
-def _build_row_matches(
-    rows_by_header: list[dict[str, Any]],
-    item_number_header: str | None,
-    matched_invoice_to_statement_item: dict[str, Any],
-    row_comparisons: list[list[Any]],
-) -> list[bool]:
+def _build_row_matches(rows_by_header: list[dict[str, Any]], item_number_header: str | None, matched_invoice_to_statement_item: dict[str, Any], row_comparisons: list[list[Any]]) -> list[bool]:
     """Return the per-row match status for coloring and export."""
     if item_number_header:
         row_matches: list[bool] = []
@@ -1121,15 +800,7 @@ def _build_excel_headers(display_headers: list[str]) -> tuple[list[tuple[str, st
     return header_labels, excel_headers
 
 
-def _add_excel_legend(
-    workbook: Workbook,
-    *,
-    fill_success: PatternFill,
-    fill_danger: PatternFill,
-    fill_warning: PatternFill,
-    font_completed: Font,
-    mismatch_border: Border,
-) -> None:
+def _add_excel_legend(workbook: Workbook, *, fill_success: PatternFill, fill_danger: PatternFill, fill_warning: PatternFill, font_completed: Font, mismatch_border: Border) -> None:
     """Add a legend sheet describing statement row styles."""
     legend = workbook.create_sheet(title="Legend")
     legend.column_dimensions["A"].width = 26
@@ -1158,13 +829,7 @@ def _status_for_excel_row(item: Any, item_status_map: dict[str, bool]) -> tuple[
     return "", False
 
 
-def _build_excel_row_values(
-    header_labels: list[tuple[str, str]],
-    left_row: dict[str, Any],
-    right_row: dict[str, Any],
-    item_types: list[str],
-    idx: int,
-) -> list[Any]:
+def _build_excel_row_values(header_labels: list[tuple[str, str]], left_row: dict[str, Any], right_row: dict[str, Any], item_types: list[str], idx: int) -> list[Any]:
     """Build Excel row values from statement/xero data."""
     row_values: list[Any] = [item_types[idx] if idx < len(item_types) else ""]
     for src_header, _ in header_labels:
@@ -1185,29 +850,14 @@ def _is_anomalous_item(item: Any) -> bool:
     return any(isinstance(flag, str) and flag.strip() in {"ml-outlier", "invalid-date"} for flag in flag_list)
 
 
-def _row_fill_for_item(
-    item: Any,
-    row_match: bool,
-    *,
-    fill_warning: PatternFill,
-    fill_success: PatternFill,
-    fill_danger: PatternFill,
-) -> PatternFill:
+def _row_fill_for_item(item: Any, row_match: bool, *, fill_warning: PatternFill, fill_success: PatternFill, fill_danger: PatternFill) -> PatternFill:
     """Return the fill color for the row."""
     if _is_anomalous_item(item):
         return fill_warning
     return fill_success if row_match else fill_danger
 
 
-def _apply_row_fill(
-    worksheet,
-    *,
-    current_row: int,
-    total_columns: int,
-    fill: PatternFill,
-    font_completed: Font,
-    is_item_completed: bool,
-) -> None:
+def _apply_row_fill(worksheet, *, current_row: int, total_columns: int, fill: PatternFill, font_completed: Font, is_item_completed: bool) -> None:
     """Apply row coloring to a worksheet row."""
     for col in range(1, total_columns + 1):
         cell = worksheet.cell(row=current_row, column=col)
@@ -1216,14 +866,7 @@ def _apply_row_fill(
             cell.font = font_completed
 
 
-def _apply_divider_borders(
-    worksheet,
-    *,
-    current_row: int,
-    statement_end_col: int,
-    xero_start_col: int,
-    divider_side: Side,
-) -> None:
+def _apply_divider_borders(worksheet, *, current_row: int, statement_end_col: int, xero_start_col: int, divider_side: Side) -> None:
     """Apply divider borders between statement and Xero sections."""
     worksheet.cell(row=current_row, column=statement_end_col).border = Border(right=divider_side)
     worksheet.cell(row=current_row, column=xero_start_col).border = Border(left=divider_side)
@@ -1249,19 +892,9 @@ def _apply_mismatch_borders(
         for target_col in (2 + col_idx, 2 + col_count + col_idx):
             cell = worksheet.cell(row=current_row, column=target_col)
             if target_col == statement_end_col:
-                cell.border = Border(
-                    left=mismatch_side,
-                    right=divider_side,
-                    top=mismatch_side,
-                    bottom=mismatch_side,
-                )
+                cell.border = Border(left=mismatch_side, right=divider_side, top=mismatch_side, bottom=mismatch_side)
             elif target_col == xero_start_col:
-                cell.border = Border(
-                    left=divider_side,
-                    right=mismatch_side,
-                    top=mismatch_side,
-                    bottom=mismatch_side,
-                )
+                cell.border = Border(left=divider_side, right=mismatch_side, top=mismatch_side, bottom=mismatch_side)
             else:
                 cell.border = mismatch_border
 
@@ -1333,23 +966,10 @@ def _append_excel_rows(
         row_match = row_matches[idx] if idx < len(row_matches) else False
         fill = _row_fill_for_item(item, row_match, fill_warning=fill_warning, fill_success=fill_success, fill_danger=fill_danger)
         current_row = worksheet.max_row
-        _apply_row_fill(
-            worksheet,
-            current_row=current_row,
-            total_columns=len(excel_headers),
-            fill=fill,
-            font_completed=font_completed,
-            is_item_completed=is_item_completed,
-        )
+        _apply_row_fill(worksheet, current_row=current_row, total_columns=len(excel_headers), fill=fill, font_completed=font_completed, is_item_completed=is_item_completed)
 
         if statement_col_count:
-            _apply_divider_borders(
-                worksheet,
-                current_row=current_row,
-                statement_end_col=statement_end_col,
-                xero_start_col=xero_start_col,
-                divider_side=divider_side,
-            )
+            _apply_divider_borders(worksheet, current_row=current_row, statement_end_col=statement_end_col, xero_start_col=xero_start_col, divider_side=divider_side)
 
         if row_match and idx < len(row_comparisons):
             comparisons = row_comparisons[idx] or []
@@ -1394,25 +1014,13 @@ def _build_statement_excel_response(
     fill_warning = PatternFill(fill_type="solid", fgColor="FFEB9C")
     font_completed = Font(color="808080")
     mismatch_side = Side(style="thin", color="E6B8B7")
-    mismatch_border = Border(
-        left=mismatch_side,
-        right=mismatch_side,
-        top=mismatch_side,
-        bottom=mismatch_side,
-    )
+    mismatch_border = Border(left=mismatch_side, right=mismatch_side, top=mismatch_side, bottom=mismatch_side)
     divider_side = Side(style="medium", color="808080")
     statement_col_count = len(header_labels)
     statement_end_col = 1 + statement_col_count
     xero_start_col = statement_end_col + 1
 
-    _add_excel_legend(
-        workbook,
-        fill_success=fill_success,
-        fill_danger=fill_danger,
-        fill_warning=fill_warning,
-        font_completed=font_completed,
-        mismatch_border=mismatch_border,
-    )
+    _add_excel_legend(workbook, fill_success=fill_success, fill_danger=fill_danger, fill_warning=fill_warning, font_completed=font_completed, mismatch_border=mismatch_border)
 
     if statement_col_count:
         worksheet.cell(row=1, column=statement_end_col).border = Border(right=divider_side)
@@ -1447,10 +1055,7 @@ def _build_statement_excel_response(
     excel_payload = output.getvalue()
     output.close()
 
-    response = app.response_class(
-        excel_payload,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    response = app.response_class(excel_payload, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     earliest_date = _parse_date_value(record.get("EarliestItemDate"))
     latest_date = _parse_date_value(record.get("LatestItemDate"))
@@ -1464,13 +1069,7 @@ def _build_statement_excel_response(
     download_name = "_".join(parts) + "_export.xlsx"
 
     response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
-    logger.info(
-        "Statement Excel generated",
-        tenant_id=tenant_id,
-        statement_id=statement_id,
-        rows=row_count,
-        excel_filename=download_name,
-    )
+    logger.info("Statement Excel generated", tenant_id=tenant_id, statement_id=statement_id, rows=row_count, excel_filename=download_name)
     return response
 
 
@@ -1502,11 +1101,7 @@ def _item_flags(item: Any) -> list[str]:
     return flags
 
 
-def _xero_ids_for_row(
-    item_number_header: str | None,
-    left_row: dict[str, Any],
-    matched_invoice_to_statement_item: dict[str, Any],
-) -> tuple[str | None, str | None]:
+def _xero_ids_for_row(item_number_header: str | None, left_row: dict[str, Any], matched_invoice_to_statement_item: dict[str, Any]) -> tuple[str | None, str | None]:
     """Return matched Xero invoice/credit note IDs for a row."""
     if not item_number_header:
         return None, None
@@ -1549,11 +1144,7 @@ def _build_statement_rows(
         flags = _item_flags(item)
 
         # Build Xero links by extracting IDs from matched data
-        xero_invoice_id, xero_credit_note_id = _xero_ids_for_row(
-            item_number_header,
-            left_row,
-            matched_invoice_to_statement_item,
-        )
+        xero_invoice_id, xero_credit_note_id = _xero_ids_for_row(item_number_header, left_row, matched_invoice_to_statement_item)
 
         statement_rows.append(
             {
@@ -1589,27 +1180,14 @@ def statement(statement_id: str):
 
     items_view = _parse_items_view(request.values.get("items_view"))
     show_payments = _parse_show_payments(request.values.get("show_payments"))
-    logger.info(
-        "Statement detail requested",
-        tenant_id=tenant_id,
-        statement_id=statement_id,
-        items_view=items_view,
-        show_payments=show_payments,
-        method=request.method,
-    )
+    logger.info("Statement detail requested", tenant_id=tenant_id, statement_id=statement_id, items_view=items_view, show_payments=show_payments, method=request.method)
 
     raw_contact_name = record.get("ContactName")
     contact_name = str(raw_contact_name).strip() if raw_contact_name is not None else ""
     page_heading = contact_name or f"Statement {statement_id}"
 
     if request.method == "POST":
-        response = _handle_statement_post_actions(
-            tenant_id=tenant_id,
-            statement_id=statement_id,
-            form=request.form,
-            items_view=items_view,
-            show_payments=show_payments,
-        )
+        response = _handle_statement_post_actions(tenant_id=tenant_id, statement_id=statement_id, form=request.form, items_view=items_view, show_payments=show_payments)
         if response is not None:
             return response
 
@@ -1626,29 +1204,11 @@ def statement(statement_id: str):
         "is_completed": is_completed,
     }
     try:
-        data, _ = fetch_json_statement(
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            bucket=S3_BUCKET_NAME,
-            json_key=json_statement_key,
-        )
+        data, _ = fetch_json_statement(tenant_id=tenant_id, contact_id=contact_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
     except StatementJSONNotFoundError:
-        logger.info(
-            "Statement JSON pending",
-            tenant_id=tenant_id,
-            statement_id=statement_id,
-            json_key=json_statement_key,
-        )
+        logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
         return render_template(
-            "statement.html",
-            is_processing=True,
-            incomplete_count=0,
-            completed_count=0,
-            all_statement_rows=[],
-            statement_rows=[],
-            raw_statement_headers=[],
-            has_payment_rows=False,
-            **base_context,
+            "statement.html", is_processing=True, incomplete_count=0, completed_count=0, all_statement_rows=[], statement_rows=[], raw_statement_headers=[], has_payment_rows=False, **base_context
         )
 
     # 1) Parse display configuration and left-side rows
@@ -1661,22 +1221,10 @@ def statement(statement_id: str):
     invoices = get_invoices_by_contact(contact_id) or []
     credit_notes = get_credit_notes_by_contact(contact_id) or []
     payments = get_payments_by_contact(contact_id) or []
-    logger.info(
-        "Fetched Xero documents",
-        statement_id=statement_id,
-        contact_id=contact_id,
-        invoices=len(invoices),
-        credit_notes=len(credit_notes),
-        payments=len(payments),
-    )
+    logger.info("Fetched Xero documents", statement_id=statement_id, contact_id=contact_id, invoices=len(invoices), credit_notes=len(credit_notes), payments=len(payments))
 
     docs_for_matching = invoices + credit_notes
-    matched_invoice_to_statement_item = match_invoices_to_statement_items(
-        items=items,
-        rows_by_header=rows_by_header,
-        item_number_header=item_number_header,
-        invoices=docs_for_matching,
-    )
+    matched_invoice_to_statement_item = match_invoices_to_statement_items(items=items, rows_by_header=rows_by_header, item_number_header=item_number_header, invoices=docs_for_matching)
 
     matched_numbers: set[str] = {key for key in matched_invoice_to_statement_item if isinstance(key, str)}
     match_by_item_id = _build_match_by_item_id(matched_invoice_to_statement_item)
@@ -1694,13 +1242,7 @@ def statement(statement_id: str):
         statement_id=statement_id,
     )
 
-    _persist_classification_updates(
-        data=data,
-        statement_id=statement_id,
-        tenant_id=tenant_id,
-        json_statement_key=json_statement_key,
-        classification_updates=classification_updates,
-    )
+    _persist_classification_updates(data=data, statement_id=statement_id, tenant_id=tenant_id, json_statement_key=json_statement_key, classification_updates=classification_updates)
 
     # 3) Build right-hand rows from the matched invoices
     date_fmt = get_date_format_from_config(contact_config)
@@ -1717,20 +1259,10 @@ def statement(statement_id: str):
     )
 
     # 4) Compare LEFT (statement) vs RIGHT (Xero) for per-cell indicators
-    row_comparisons = build_row_comparisons(
-        left_rows=rows_by_header,
-        right_rows=right_rows_by_header,
-        display_headers=display_headers,
-        header_to_field=header_to_field,
-    )
+    row_comparisons = build_row_comparisons(left_rows=rows_by_header, right_rows=right_rows_by_header, display_headers=display_headers, header_to_field=header_to_field)
     # Row highlight: if this row is linked to a Xero document (exact or substring),
     # consider the row a "match" for coloring purposes even if some cells differ.
-    row_matches = _build_row_matches(
-        rows_by_header,
-        item_number_header,
-        matched_invoice_to_statement_item,
-        row_comparisons,
-    )
+    row_matches = _build_row_matches(rows_by_header, item_number_header, matched_invoice_to_statement_item, row_comparisons)
 
     item_status_map = get_statement_item_status_map(tenant_id, statement_id)
 
@@ -1840,26 +1372,13 @@ def disconnect_tenant():
 
     connection_id = tenant.get("connectionId")
     access_token = session.get("access_token")
-    logger.info(
-        "Tenant disconnect submitted",
-        tenant_id=tenant_id,
-        has_connection=bool(connection_id),
-    )
+    logger.info("Tenant disconnect submitted", tenant_id=tenant_id, has_connection=bool(connection_id))
 
     if connection_id and access_token:
         try:
-            resp = requests.delete(
-                f"https://api.xero.com/connections/{connection_id}",
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=20,
-            )
+            resp = requests.delete(f"https://api.xero.com/connections/{connection_id}", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
             if resp.status_code not in (200, 204):
-                logger.error(
-                    "Failed to disconnect tenant",
-                    tenant_id=tenant_id,
-                    status_code=resp.status_code,
-                    body=resp.text,
-                )
+                logger.error("Failed to disconnect tenant", tenant_id=tenant_id, status_code=resp.status_code, body=resp.text)
                 session["tenant_error"] = "Unable to disconnect tenant from Xero."
                 return redirect(management_url)
         except Exception as exc:
@@ -1961,24 +1480,14 @@ def callback():  # pylint: disable=too-many-return-statements
     error = request.args.get("error")
     if error is not None:
         error_description = request.args.get("error_description") or error
-        logger.error(
-            "OAuth error",
-            error_code=400,
-            error_description=error_description,
-            error=error,
-        )
+        logger.error("OAuth error", error_code=400, error_description=error_description, error=error)
         return f"OAuth error: {error_description}", 400
 
     try:
         tokens = oauth.xero.authorize_access_token()
     except OAuthError as exc:
         error_description = exc.description or exc.error
-        logger.error(
-            "OAuth error",
-            error_code=400,
-            error_description=error_description,
-            error=exc.error,
-        )
+        logger.error("OAuth error", error_code=400, error_description=error_description, error=exc.error)
         return f"OAuth error: {error_description}", 400
 
     if not isinstance(tokens, dict):
@@ -2007,11 +1516,7 @@ def callback():  # pylint: disable=too-many-return-statements
     access_token = tokens.get("access_token")
     session["access_token"] = access_token
 
-    conn_res = requests.get(
-        "https://api.xero.com/connections",
-        headers={"Authorization": f"Bearer {access_token}"},
-        timeout=20,
-    )
+    conn_res = requests.get("https://api.xero.com/connections", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
 
     conn_res.raise_for_status()
     connections = conn_res.json()
@@ -2020,14 +1525,7 @@ def callback():  # pylint: disable=too-many-return-statements
         return "No Xero connections found for this user.", 400
 
     tenants = [
-        {
-            "tenantId": conn.get("tenantId"),
-            "tenantName": conn.get("tenantName"),
-            "tenantType": conn.get("tenantType"),
-            "connectionId": conn.get("id"),
-        }
-        for conn in connections
-        if conn.get("tenantId")
+        {"tenantId": conn.get("tenantId"), "tenantName": conn.get("tenantName"), "tenantType": conn.get("tenantType"), "connectionId": conn.get("id")} for conn in connections if conn.get("tenantId")
     ]
 
     current = session.get("xero_tenant_id")

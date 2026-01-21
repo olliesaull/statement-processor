@@ -69,10 +69,7 @@ def _header_mapping_from_template(items_template: dict[str, Any]) -> dict[str, s
     return header_to_field_norm
 
 
-def _filter_display_headers(
-    raw_headers: list[str],
-    header_to_field_norm: dict[str, str],
-) -> tuple[list[str], dict[str, str]]:
+def _filter_display_headers(raw_headers: list[str], header_to_field_norm: dict[str, str]) -> tuple[list[str], dict[str, str]]:
     """Filter raw headers to mapped headers and return header->field mapping."""
     header_to_field: dict[str, str] = {}
     display_headers: list[str] = []
@@ -90,10 +87,7 @@ def _order_display_headers(display_headers: list[str], header_to_field: dict[str
     preferred_field_order = ["date", "due_date", "number", "total"]
     ordered_headers: list[str] = []
     for canonical_field in preferred_field_order:
-        header_match = next(
-            (hdr for hdr in display_headers if header_to_field.get(hdr) == canonical_field),
-            None,
-        )
+        header_match = next((hdr for hdr in display_headers if header_to_field.get(hdr) == canonical_field), None)
         if header_match:
             ordered_headers.append(header_match)
     for header in display_headers:
@@ -102,13 +96,7 @@ def _order_display_headers(display_headers: list[str], header_to_field: dict[str
     return ordered_headers
 
 
-def _format_statement_value(
-    value: Any,
-    canonical_field: str | None,
-    date_fmt: str | None,
-    dec_sep: str,
-    thou_sep: str,
-) -> Any:
+def _format_statement_value(value: Any, canonical_field: str | None, date_fmt: str | None, dec_sep: str, thou_sep: str) -> Any:
     """Normalize a statement cell value based on the canonical field."""
     if canonical_field in {"date", "due_date"}:
         dt = coerce_datetime_with_template(value, date_fmt)
@@ -119,14 +107,7 @@ def _format_statement_value(
     return value
 
 
-def _build_rows_by_header(
-    items: list[dict],
-    display_headers: list[str],
-    header_to_field: dict[str, str],
-    date_fmt: str | None,
-    dec_sep: str,
-    thou_sep: str,
-) -> list[dict[str, str]]:
+def _build_rows_by_header(items: list[dict], display_headers: list[str], header_to_field: dict[str, str], date_fmt: str | None, dec_sep: str, thou_sep: str) -> list[dict[str, str]]:
     """Build normalized row dicts for the display headers."""
     rows_by_header: list[dict[str, str]] = []
     for item in items:
@@ -180,9 +161,7 @@ def get_date_format_from_config(contact_config: dict[str, Any]) -> str | None:
     return str(fmt) if fmt else None
 
 
-def get_number_separators_from_config(
-    contact_config: dict[str, Any],
-) -> tuple[str, str]:
+def get_number_separators_from_config(contact_config: dict[str, Any]) -> tuple[str, str]:
     """Return (decimal_separator, thousands_separator) with sensible defaults."""
     if not isinstance(contact_config, dict):
         return _DEFAULT_DECIMAL_SEPARATOR, _DEFAULT_THOUSANDS_SEPARATOR
@@ -198,10 +177,7 @@ def get_number_separators_from_config(
     if thou not in _ALLOWED_THOUSANDS_SEPARATORS:
         thou = _DEFAULT_THOUSANDS_SEPARATOR
 
-    return (
-        dec or _DEFAULT_DECIMAL_SEPARATOR,
-        thou if thou is not None else _DEFAULT_THOUSANDS_SEPARATOR,
-    )
+    return (dec or _DEFAULT_DECIMAL_SEPARATOR, thou if thou is not None else _DEFAULT_THOUSANDS_SEPARATOR)
 
 
 def prepare_display_mappings(items: list[dict], contact_config: dict[str, Any]) -> tuple[list[str], list[dict[str, str]], dict[str, str], str | None]:
@@ -230,12 +206,7 @@ def prepare_display_mappings(items: list[dict], contact_config: dict[str, Any]) 
     return display_headers, rows_by_header, header_to_field, item_number_header
 
 
-def match_invoices_to_statement_items(
-    items: list[dict],
-    rows_by_header: list[dict[str, str]],
-    item_number_header: str | None,
-    invoices: list[dict],
-) -> dict[str, dict]:
+def match_invoices_to_statement_items(items: list[dict], rows_by_header: list[dict[str, str]], item_number_header: str | None, invoices: list[dict]) -> dict[str, dict]:
     """
     Build mapping from statement invoice number -> { invoice, statement_item, match_type, match_score, matched_invoice_number }.
 
@@ -293,10 +264,7 @@ def _statement_items_by_number(items: list[dict], item_number_header: str) -> di
     return stmt_by_number
 
 
-def _record_exact_matches(
-    stmt_by_number: dict[str, dict],
-    invoices: list[dict],
-) -> tuple[dict[str, dict], set, set]:
+def _record_exact_matches(stmt_by_number: dict[str, dict], invoices: list[dict]) -> tuple[dict[str, dict], set, set]:
     """Record exact matches and return updated match state."""
     matched: dict[str, dict] = {}
     used_invoice_ids: set = set()
@@ -310,20 +278,8 @@ def _record_exact_matches(
             continue
         stmt_item = stmt_by_number.get(key)
         if stmt_item is not None and key not in matched:
-            matched[key] = {
-                "invoice": inv,
-                "statement_item": stmt_item,
-                "match_type": "exact",
-                "match_score": 1.0,
-                "matched_invoice_number": key,
-            }
-            logger.info(
-                "Exact match",
-                statement_number=key,
-                invoice_number=key,
-                statement_item=stmt_item,
-                xero_item=inv,
-            )
+            matched[key] = {"invoice": inv, "statement_item": stmt_item, "match_type": "exact", "match_score": 1.0, "matched_invoice_number": key}
+            logger.info("Exact match", statement_number=key, invoice_number=key, statement_item=stmt_item, xero_item=inv)
             inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
             if inv_id:
                 used_invoice_ids.add(inv_id)
@@ -331,11 +287,7 @@ def _record_exact_matches(
     return matched, used_invoice_ids, used_invoice_numbers
 
 
-def _candidate_invoices(
-    invoices: list[dict],
-    used_invoice_ids: set,
-    used_invoice_numbers: set,
-) -> list[tuple[str, dict, str]]:
+def _candidate_invoices(invoices: list[dict], used_invoice_ids: set, used_invoice_numbers: set) -> list[tuple[str, dict, str]]:
     """Collect candidate invoices for substring matching."""
     candidates: list[tuple[str, dict, str]] = []
     for inv in invoices or []:
@@ -353,11 +305,7 @@ def _candidate_invoices(
     return candidates
 
 
-def _missing_statement_numbers(
-    rows_by_header: list[dict[str, str]],
-    item_number_header: str,
-    matched: dict[str, dict],
-) -> list[str]:
+def _missing_statement_numbers(rows_by_header: list[dict[str, str]], item_number_header: str, matched: dict[str, dict]) -> list[str]:
     """Return missing statement numbers needing substring matching."""
     numbers_in_rows = [(r.get(item_number_header) or "").strip() for r in rows_by_header if r.get(item_number_header)]
     return [number for number in numbers_in_rows if number and number not in matched]
@@ -370,12 +318,7 @@ def _is_payment_reference(value: str) -> bool:
     return any(keyword in lowered for keyword in payment_keywords)
 
 
-def _candidate_hits(
-    target_norm: str,
-    candidates: list[tuple[str, dict, str]],
-    used_invoice_ids: set,
-    used_invoice_numbers: set,
-) -> list[tuple[str, dict, int]]:
+def _candidate_hits(target_norm: str, candidates: list[tuple[str, dict, str]], used_invoice_ids: set, used_invoice_numbers: set) -> list[tuple[str, dict, int]]:
     """Collect candidate hits for a target invoice number."""
     hits: list[tuple[str, dict, int]] = []
     for cand_no, inv, cand_norm in candidates:
@@ -389,13 +332,7 @@ def _candidate_hits(
     return hits
 
 
-def _record_substring_match(
-    matched: dict[str, dict],
-    statement_number: str,
-    statement_item: dict,
-    invoice_number: str,
-    invoice_obj: dict,
-) -> None:
+def _record_substring_match(matched: dict[str, dict], statement_number: str, statement_item: dict, invoice_number: str, invoice_obj: dict) -> None:
     """Record a substring match and emit logging."""
     matched[statement_number] = {
         "invoice": invoice_obj,
@@ -405,22 +342,10 @@ def _record_substring_match(
         "matched_invoice_number": invoice_number,
     }
     kind = "Exact" if invoice_number == statement_number else "Substring"
-    logger.info(
-        "Statement match",
-        match_type=kind,
-        statement_number=statement_number,
-        invoice_number=invoice_number,
-        statement_item=statement_item,
-        xero_item=invoice_obj,
-    )
+    logger.info("Statement match", match_type=kind, statement_number=statement_number, invoice_number=invoice_number, statement_item=statement_item, xero_item=invoice_obj)
 
 
-def _mark_invoice_used(
-    invoice_obj: dict,
-    invoice_number: str,
-    used_invoice_ids: set,
-    used_invoice_numbers: set,
-) -> None:
+def _mark_invoice_used(invoice_obj: dict, invoice_number: str, used_invoice_ids: set, used_invoice_numbers: set) -> None:
     """Mark an invoice as used to avoid reuse in later matching."""
     inv_id = invoice_obj.get("invoice_id") if isinstance(invoice_obj, dict) else None
     if inv_id:
@@ -463,11 +388,7 @@ def build_right_rows(
                 # Only populate the headers that have a value on the statement side
                 left_val = r.get(h)
                 if left_val is not None and str(left_val).strip():
-                    left_dec = _to_decimal(
-                        left_val,
-                        decimal_separator=decimal_separator,
-                        thousands_separator=thousands_separator,
-                    )
+                    left_dec = _to_decimal(left_val, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
                     if left_dec is not None and left_dec == Decimal(0):
                         row_right[h] = format_money(0)
                     else:
@@ -493,12 +414,7 @@ def build_right_rows(
     return right_rows
 
 
-def build_row_comparisons(
-    left_rows: list[dict[str, str]],
-    right_rows: list[dict[str, str]],
-    display_headers: list[str],
-    header_to_field: dict[str, str] | None = None,
-) -> list[list[CellComparison]]:
+def build_row_comparisons(left_rows: list[dict[str, str]], right_rows: list[dict[str, str]], display_headers: list[str], header_to_field: dict[str, str] | None = None) -> list[list[CellComparison]]:
     """
     Build per-cell comparison objects for each row.
     """
@@ -523,11 +439,7 @@ def build_row_comparisons(
             canonical = (header_to_field or {}).get(header)
             row_cells.append(
                 CellComparison(
-                    header=header,
-                    statement_value="" if left_val is None else str(left_val),
-                    xero_value="" if right_val is None else str(right_val),
-                    matches=matches,
-                    canonical_field=canonical,
+                    header=header, statement_value="" if left_val is None else str(left_val), xero_value="" if right_val is None else str(right_val), matches=matches, canonical_field=canonical
                 )
             )
         comparisons.append(row_cells)
