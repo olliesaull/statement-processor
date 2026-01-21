@@ -5,7 +5,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from flask import redirect, request, session, url_for
+from flask import Response, redirect, request, session, url_for
 from werkzeug.exceptions import HTTPException
 from xero_python.accounting import AccountingApi
 from xero_python.api_client import ApiClient  # type: ignore
@@ -35,7 +35,14 @@ _XERO_TOKEN_FIELDS = {"access_token", "refresh_token", "expires_in", "expires_at
 
 
 def _sanitize_xero_token(token: dict | None) -> dict | None:
-    """Return only fields accepted by the Xero SDK token updater."""
+    """Filter a token payload to fields accepted by the Xero SDK.
+
+    Args:
+        token: Raw token payload from Authlib or the session.
+
+    Returns:
+        Sanitized token dict, or None when the input is not a dict.
+    """
     if not isinstance(token, dict):
         return None
     # Authlib includes OIDC userinfo in the token dict; the Xero SDK rejects unknown keys.
@@ -43,17 +50,40 @@ def _sanitize_xero_token(token: dict | None) -> dict | None:
 
 
 def get_xero_oauth2_token() -> dict | None:
-    """Return the token dict the SDK expects, or None if not set."""
+    """Fetch the Xero OAuth token from the session.
+
+    Args:
+        None.
+
+    Returns:
+        Sanitized token dict, or None if not set.
+    """
     return _sanitize_xero_token(session.get("xero_oauth2_token"))
 
 
 def save_xero_oauth2_token(token: dict) -> None:
-    """Persist the whole token dict in the session (or your DB)."""
+    """Store the Xero OAuth token in the session.
+    This mutates the Flask session for the current request.
+
+    Args:
+        token: Token payload from Authlib/Xero.
+
+    Returns:
+        None.
+    """
     session["xero_oauth2_token"] = token
 
 
 def get_xero_api_client(oauth_token: dict | None = None) -> AccountingApi:
-    """Create a thread-safe AccountingApi client, optionally seeded with a specific token."""
+    """Build an AccountingApi client configured for Xero OAuth.
+    This may update the session or provided token dict when the SDK refreshes tokens.
+
+    Args:
+        oauth_token: Optional token dict to seed the client instead of the session.
+
+    Returns:
+        Configured AccountingApi client.
+    """
     if oauth_token is None:
         token_getter = get_xero_oauth2_token
         token_saver = save_xero_oauth2_token
@@ -76,26 +106,67 @@ def get_xero_api_client(oauth_token: dict | None = None) -> AccountingApi:
 
 
 def scope_str() -> str:
-    """Return Xero OAuth scopes as a space-separated string."""
+    """Build the Xero OAuth scope string.
+
+    Args:
+        None.
+
+    Returns:
+        Space-separated scope string for OAuth requests.
+    """
     return " ".join(SCOPES)
 
 
 class RedirectToLogin(HTTPException):
-    """HTTP exception that produces a redirect to the login route."""
+    """
+    Represent a redirect-to-login HTTP exception for auth failures.
+
+    This exception belongs to the auth routing layer and is raised to short-circuit
+    handlers with a 302 redirect.
+
+    Attributes:
+        code: HTTP status code for the redirect.
+    """
 
     code = 302
 
     def __init__(self) -> None:
-        """Initialize the redirect exception with a default description."""
+        """Initialize the redirect exception with a default description.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         super().__init__(description="Redirecting to login")
 
-    def get_response(self, environ=None, scope=None):
-        """Return a redirect response to the login route."""
+    def get_response(self, environ: dict[str, Any] | None = None, scope: dict[str, Any] | None = None) -> Response:
+        """Return a redirect response to the login route.
+
+        Args:
+            environ: Optional WSGI environ mapping.
+            scope: Optional ASGI scope mapping.
+
+        Returns:
+            Redirect response to the login route.
+        """
         return redirect(url_for("login"))
 
 
 def raise_for_unauthorized(error: Exception) -> None:
-    """Redirect the user to login if the Xero API returned 401/403."""
+    """Redirect to login when the Xero API reports unauthorized access.
+
+    Args:
+        error: Exception from the Xero SDK or wrapped HTTP layers.
+
+    Returns:
+        None.
+
+    Raises:
+        RedirectToLogin: When the error carries a 401 or 403 status code.
+    """
+    # Errors bubble up from different SDK layers, so check common status fields.
     potential_statuses = []
     for attr in ("status", "status_code", "code"):
         potential_statuses.append(getattr(error, attr, None))
@@ -117,10 +188,18 @@ def raise_for_unauthorized(error: Exception) -> None:
 
 
 def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
-    """Ensure a valid (non-expired) Xero token and active tenant before route access."""
+    """Require a valid (non-expired) Xero token and active tenant for route access.
+    This redirects to login when the session token is missing or expired.
+
+    Args:
+        f: Route handler to wrap.
+
+    Returns:
+        Wrapped route handler with token validation.
+    """
 
     @wraps(f)
-    def decorated_function(*args: Any, **kwargs: Any):
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
         tenant_id = session.get("xero_tenant_id")
         token = get_xero_oauth2_token()
         if not tenant_id or not token:
@@ -133,6 +212,7 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
             expires_at = 0.0
 
         if expires_at and time.time() > expires_at:
+            # Avoid hitting Xero with expired tokens and surfacing hard 401s.
             logger.info("Xero token expired; redirecting", route=request.path, tenant_id=tenant_id)
             return redirect(url_for("login"))
 
@@ -144,14 +224,25 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
 def active_tenant_required(
     message: str = "Please select a tenant before continuing.", redirect_endpoint: str = "tenant_management", flash_key: str = "tenant_error"
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Ensure the user has an active tenant selected; otherwise redirect with a message."""
+    """Require an active tenant selection before the route handler runs.
+    This stores a message in the session before redirecting to the tenant picker.
+
+    Args:
+        message: Message to display when no tenant is active.
+        redirect_endpoint: Endpoint name to redirect to when missing a tenant.
+        flash_key: Session key used to store the message.
+
+    Returns:
+        Decorator that enforces tenant selection.
+    """
 
     def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(f)
-        def wrapped(*args: Any, **kwargs: Any):
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
             tenant_id = session.get("xero_tenant_id")
             if tenant_id:
                 return f(*args, **kwargs)
+            # Use session storage so the message survives the redirect boundary.
             session[flash_key] = message
             return redirect(url_for(redirect_endpoint))
 
@@ -161,13 +252,19 @@ def active_tenant_required(
 
 
 def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
-    """
-    Redirect users away from routes while their active tenant is still loading.
-    Uses the in-process cache first and falls back to DynamoDB for safety.
+    """Redirect away from routes while the active tenant is still loading.
+    This stores a message in the session when blocking a request.
+    This checks the in-process cache first and falls back to DynamoDB for safety.
+
+    Args:
+        f: Route handler to wrap.
+
+    Returns:
+        Wrapped route handler that blocks during tenant loads.
     """
 
     @wraps(f)
-    def decorated_function(*args: Any, **kwargs: Any):
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
         tenant_id = session.get("xero_tenant_id")
         if tenant_id:
             status = get_cached_tenant_status(tenant_id)
@@ -181,11 +278,19 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
     return decorated_function
 
 
-def route_handler_logging(function):
-    """Decorator that logs entry into route handlers."""
+def route_handler_logging(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Log entry into route handlers.
+    This writes an audit-style entry to the structured logger.
+
+    Args:
+        function: Route handler to wrap.
+
+    Returns:
+        Wrapped route handler with entry logging.
+    """
 
     @wraps(function)
-    def decorator(*args, **kwargs):
+    def decorator(*args: Any, **kwargs: Any) -> Any:
         tenant_id = session.get("xero_tenant_id")
         logger.info("Entering route", route=request.path, event_type="USER_TRAIL", path=request.path, tenant_id=tenant_id)
 
