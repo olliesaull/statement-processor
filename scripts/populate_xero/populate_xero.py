@@ -60,10 +60,8 @@ from config import (  # type: ignore
     CLIENT_SECRET as CONFIG_XERO_CLIENT_SECRET,
 )
 from core.get_contact_config import get_contact_config  # type: ignore
-from utils import (  # type: ignore
-    guess_statement_item_type,
-    get_items_template_from_config,
-)
+from core.item_classification import guess_statement_item_type  # type: ignore
+from utils.statement_view import get_items_template_from_config  # type: ignore
 from xero_python.accounting import (  # type: ignore
     AccountingApi,
     CreditNote,

@@ -18,12 +18,8 @@ from xero_python.accounting import AccountingApi
 from xero_python.exceptions import AccountingBadRequestException
 
 from config import S3_BUCKET_NAME, logger, s3_client
-from utils import (
-    fmt_date,
-    fmt_invoice_data,
-    get_xero_api_client,
-    raise_for_unauthorized,
-)
+from utils.auth import get_xero_api_client, raise_for_unauthorized
+from utils.formatting import fmt_date, fmt_invoice_data
 
 PAGE_SIZE: int = 100  # Xero max
 STAGE: str | None = os.getenv("STAGE")

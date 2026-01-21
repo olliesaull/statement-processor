@@ -22,7 +22,7 @@ from xero_python.accounting import AccountingApi
 import cache_provider
 from config import S3_BUCKET_NAME, logger, s3_client, tenant_data_table
 from tenant_data_repository import TenantDataRepository, TenantStatus
-from utils import get_xero_api_client
+from utils.auth import get_xero_api_client
 from xero_repository import (
     XeroType,
     get_contacts_from_xero,

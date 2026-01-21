@@ -7,7 +7,7 @@ from typing import Any
 from config import logger
 from core.date_utils import coerce_datetime_with_template, format_iso_with
 from core.models import CellComparison
-from utils_formatting import _to_decimal, format_money
+from utils.formatting import _to_decimal, format_money
 
 _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
 

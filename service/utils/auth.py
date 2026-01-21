@@ -14,7 +14,7 @@ from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 
 from config import CLIENT_ID, CLIENT_SECRET, logger
 from tenant_data_repository import TenantStatus
-from utils_tenant_status import get_cached_tenant_status
+from utils.tenant_status import get_cached_tenant_status
 
 SCOPES = [
     "offline_access",

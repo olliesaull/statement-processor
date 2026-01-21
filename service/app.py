@@ -44,37 +44,43 @@ from core.item_classification import guess_statement_item_type
 from core.models import StatementItem
 from sync import check_load_required, sync_data
 from tenant_data_repository import TenantDataRepository, TenantStatus
-from utils import (
-    StatementJSONNotFoundError,
+from utils.auth import (
     active_tenant_required,
-    add_statement_to_table,
     block_when_loading,
-    build_right_rows,
-    build_row_comparisons,
-    delete_statement_data,
-    fetch_json_statement,
-    get_completed_statements,
-    get_date_format_from_config,
-    get_incomplete_statements,
-    get_number_separators_from_config,
-    get_statement_item_status_map,
-    get_statement_record,
-    is_allowed_pdf,
-    mark_statement_completed,
-    match_invoices_to_statement_items,
-    persist_item_types_to_dynamo,
-    prepare_display_mappings,
     route_handler_logging,
     save_xero_oauth2_token,
     scope_str,
+    xero_token_required,
+)
+from utils.dynamo import (
+    add_statement_to_table,
+    delete_statement_data,
+    get_completed_statements,
+    get_incomplete_statements,
+    get_statement_item_status_map,
+    get_statement_record,
+    mark_statement_completed,
+    persist_item_types_to_dynamo,
     set_all_statement_items_completed,
     set_statement_item_completed,
-    start_textraction_state_machine,
+)
+from utils.statement_view import (
+    build_right_rows,
+    build_row_comparisons,
+    get_date_format_from_config,
+    get_number_separators_from_config,
+    match_invoices_to_statement_items,
+    prepare_display_mappings,
+)
+from utils.storage import (
+    StatementJSONNotFoundError,
+    fetch_json_statement,
+    is_allowed_pdf,
     statement_json_s3_key,
     statement_pdf_s3_key,
     upload_statement_to_s3,
-    xero_token_required,
 )
+from utils.workflows import start_textraction_state_machine
 from xero_repository import (
     get_contacts,
     get_credit_notes_by_contact,

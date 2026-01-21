@@ -12,6 +12,7 @@ import boto3
 from aws_lambda_powertools.logging import Logger
 from dotenv import load_dotenv
 from mypy_boto3_ssm import SSMClient
+from mypy_boto3_stepfunctions import SFNClient
 
 load_dotenv()
 
@@ -28,7 +29,7 @@ TENANT_DATA_TABLE_NAME: str | None = os.getenv("TENANT_DATA_TABLE_NAME")
 session = boto3.session.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION) if STAGE == "dev" else boto3.session.Session()  # Use the default session (e.g., in AppRunner)
 
 s3_client = session.client("s3")
-stepfunctions_client = session.client("stepfunctions")
+stepfunctions_client: SFNClient = session.client("stepfunctions")
 
 ddb = session.resource("dynamodb")
 tenant_statements_table = ddb.Table(TENANT_STATEMENTS_TABLE_NAME)
