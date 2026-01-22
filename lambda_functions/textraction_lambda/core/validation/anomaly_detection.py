@@ -122,13 +122,7 @@ def apply_outlier_flags(statement: dict[str, Any], *, remove: bool = False, one_
     """
     items = statement.get("statement_items", []) or []
     if not items:
-        return statement, {
-            "total": 0,
-            "flagged": 0,
-            "flagged_items": [],
-            "rules": {},
-            "field_stats": {},
-        }
+        return statement, {"total": 0, "flagged": 0, "flagged_items": [], "rules": {}, "field_stats": {}}
 
     logger.debug("Outlier flagging start", total_items=len(items), remove=remove)
 
@@ -152,40 +146,19 @@ def apply_outlier_flags(statement: dict[str, Any], *, remove: bool = False, one_
             keyword = _keyword_hit(number_val)
             if keyword:
                 issues.append("keyword-number")
-                details.append(
-                    {
-                        "field": "number",
-                        "issue": "keyword",
-                        "keyword": keyword,
-                        "value": str(number_val),
-                    }
-                )
+                details.append({"field": "number", "issue": "keyword", "keyword": keyword, "value": str(number_val)})
 
         if _has_text(reference_val):
             keyword = _keyword_hit(reference_val)
             if keyword:
                 issues.append("keyword-reference")
-                details.append(
-                    {
-                        "field": "reference",
-                        "issue": "keyword",
-                        "keyword": keyword,
-                        "value": str(reference_val),
-                    }
-                )
+                details.append({"field": "reference", "issue": "keyword", "keyword": keyword, "value": str(reference_val)})
 
         if issues:
             flagged_indices.append(idx)
             for issue in issues:
                 rule_counter[issue] += 1
-            flagged_items.append(
-                {
-                    "index": (idx + 1) if one_based_index else idx,
-                    "reasons": [FLAG_LABEL],
-                    "issues": issues,
-                    "details": details,
-                }
-            )
+            flagged_items.append({"index": (idx + 1) if one_based_index else idx, "reasons": [FLAG_LABEL], "issues": issues, "details": details})
 
     flagged_index_set = set(flagged_indices)
     if remove:
@@ -198,12 +171,6 @@ def apply_outlier_flags(statement: dict[str, Any], *, remove: bool = False, one_
             if FLAG_LABEL not in flags:
                 flags.append(FLAG_LABEL)
 
-    summary = {
-        "total": len(items),
-        "flagged": len(flagged_items),
-        "flagged_items": flagged_items,
-        "rules": dict(rule_counter),
-        "field_stats": {},
-    }
+    summary = {"total": len(items), "flagged": len(flagged_items), "flagged_items": flagged_items, "rules": dict(rule_counter), "field_stats": {}}
     logger.debug("Outlier flagging complete", flagged=summary["flagged"], rules=summary["rules"])
     return statement, summary

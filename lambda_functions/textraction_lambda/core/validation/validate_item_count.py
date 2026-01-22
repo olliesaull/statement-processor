@@ -45,10 +45,7 @@ def _normalise(s: str) -> str:
 
 
 def make_family_regex_from_examples(  # pylint: disable=too-many-locals,too-many-branches
-    refs: list[str],
-    digit_prefix_len: int = 3,
-    min_samples_for_prefixing: int = 3,
-    coverage_threshold: float = 0.6,
+    refs: list[str], digit_prefix_len: int = 3, min_samples_for_prefixing: int = 3, coverage_threshold: float = 0.6
 ) -> re.Pattern:
     """
     Learn a regex that matches the "family" of reference tokens seen in JSON.
@@ -227,21 +224,13 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: list[dic
         logger.warning("PDF appears to be image-only (scanned). Skipping reference validation.")
         return {"checked": 0, "pdf_candidates": 0}
 
-    logger.debug(
-        "Reference validation start",
-        total_items=len(statement_items),
-        ref_field=ref_field,
-    )
+    logger.debug("Reference validation start", total_items=len(statement_items), ref_field=ref_field)
 
     # Collect non-empty references from the extracted JSON.
     raw_refs = [(i, (it.get(ref_field) or "").strip()) for i, it in enumerate(statement_items)]
     raw_refs = [(i, r) for i, r in raw_refs if r]
     json_norm_set = {_normalise(r) for _, r in raw_refs}
-    logger.debug(
-        "Collected JSON references",
-        total_refs=len(raw_refs),
-        unique_refs=len(json_norm_set),
-    )
+    logger.debug("Collected JSON references", total_refs=len(raw_refs), unique_refs=len(json_norm_set))
 
     # JSON -> PDF: check each extracted reference appears somewhere in the PDF text.
     norm_pdf_text = extract_normalized_pdf_text(pdf_input)
@@ -259,26 +248,11 @@ def validate_references_roundtrip(pdf_input: PdfInput, statement_items: list[dic
     pdf_only_norm = sorted(pdf_candidates_norm - json_norm_set)
 
     total_checked = len(found) + len(not_found)
-    logger.info(
-        "JSON -> PDF summary",
-        total_checked=total_checked,
-        found=len(found),
-        not_found=len(not_found),
-    )
-    logger.info(
-        "PDF -> JSON summary",
-        pdf_candidates=len(pdf_candidates_norm),
-        pdf_only=len(pdf_only_norm),
-    )
+    logger.info("JSON -> PDF summary", total_checked=total_checked, found=len(found), not_found=len(not_found))
+    logger.info("PDF -> JSON summary", pdf_candidates=len(pdf_candidates_norm), pdf_only=len(pdf_only_norm))
 
     if not_found or pdf_only_norm:
-        summary = {
-            "json_refs_checked": total_checked,
-            "json_refs_found": len(found),
-            "json_refs_missing": len(not_found),
-            "pdf_candidates": len(pdf_candidates_norm),
-            "pdf_only_refs": pdf_only_norm,
-        }
+        summary = {"json_refs_checked": total_checked, "json_refs_found": len(found), "json_refs_missing": len(not_found), "pdf_candidates": len(pdf_candidates_norm), "pdf_only_refs": pdf_only_norm}
         raise ItemCountDisagreementError(len(found), len(json_norm_set), summary=summary)
 
     return {"checked": total_checked, "pdf_candidates": len(pdf_candidates_norm)}

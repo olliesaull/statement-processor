@@ -86,13 +86,7 @@ def _sanitize_for_dynamodb(value: Any) -> Any:  # pylint: disable=too-many-retur
 
 
 def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
-    tenant_id: str,
-    contact_id: str | None,
-    statement_id: str | None,
-    items: list[dict[str, Any]],
-    *,
-    earliest_item_date: str | None = None,
-    latest_item_date: str | None = None,
+    tenant_id: str, contact_id: str | None, statement_id: str | None, items: list[dict[str, Any]], *, earliest_item_date: str | None = None, latest_item_date: str | None = None
 ) -> None:
     """
     Persist extracted statement line items into the tenant statements DynamoDB table.
@@ -142,13 +136,7 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
         header_item = header_resp.get("Item") if isinstance(header_resp, dict) else None
         header_completed = str(header_item.get("Completed", "false")).strip().lower() == "true" if header_item else False
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning(
-            "Failed to fetch statement header completion flag",
-            tenant_id=tenant_id,
-            statement_id=statement_id,
-            error=str(exc),
-            exc_info=True,
-        )
+        logger.warning("Failed to fetch statement header completion flag", tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
         header_completed = False
 
     if keys_to_delete:
@@ -204,22 +192,11 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
 
         if update_parts:
             tenant_statements_table.update_item(
-                Key={"TenantID": tenant_id, "StatementID": statement_id},
-                UpdateExpression="SET " + ", ".join(update_parts),
-                ExpressionAttributeNames=attr_names,
-                ExpressionAttributeValues=attr_values,
+                Key={"TenantID": tenant_id, "StatementID": statement_id}, UpdateExpression="SET " + ", ".join(update_parts), ExpressionAttributeNames=attr_names, ExpressionAttributeValues=attr_values
             )
 
 
-def run_textraction(
-    job_id: str,
-    bucket: str,
-    pdf_key: str,
-    json_key: str,
-    tenant_id: str,
-    contact_id: str,
-    statement_id: str,
-) -> dict[str, Any]:  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenant_id: str, contact_id: str, statement_id: str) -> dict[str, Any]:  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     """
     End-to-end processing for a single statement Textract job.
 
@@ -242,12 +219,7 @@ def run_textraction(
     # Convert grids into a structured statement using contact-specific mapping/config (see `core/transform.py`).
     statement = table_to_json(tables_wp, tenant_id, contact_id, statement_id=statement_id)
     item_count = len(statement.get("statement_items", []) or [])
-    logger.info(
-        "Built statement JSON",
-        job_id=job_id,
-        statement_id=statement_id,
-        items=item_count,
-    )
+    logger.info("Built statement JSON", job_id=job_id, statement_id=statement_id, items=item_count)
 
     try:
         # Persist items to DynamoDB (delete + rewrite); failures here should not prevent JSON output.
@@ -260,13 +232,7 @@ def run_textraction(
             latest_item_date=statement.get("latest_item_date"),
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.exception(
-            "Failed to persist statement items",
-            statement_id=statement_id,
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            error=str(exc),
-        )
+        logger.exception("Failed to persist statement items", statement_id=statement_id, tenant_id=tenant_id, contact_id=contact_id, error=str(exc))
 
     try:
         # Best-effort validation: compare extracted reference strings with text found in the PDF (via pdfplumber).
@@ -275,14 +241,7 @@ def run_textraction(
         statement_items = statement.get("statement_items", []) or []
         validate_references_roundtrip(pdf_bytes, statement_items)
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning(
-            "Reference validation skipped",
-            key=key,
-            tenant_id=tenant_id,
-            statement_id=statement_id,
-            error=str(exc),
-            exc_info=True,
-        )
+        logger.warning("Reference validation skipped", key=key, tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
 
     # Flag outliers without removing them, so downstream consumers can inspect anomalies
     statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True)
@@ -299,19 +258,9 @@ def run_textraction(
     if tenant_statements_table is not None:
         try:
             # Persist the Textract JobId alongside the statement header for traceability
-            tenant_statements_table.update_item(
-                Key={"TenantID": tenant_id, "StatementID": statement_id},
-                UpdateExpression="SET JobId = :jobId",
-                ExpressionAttributeValues={":jobId": job_id},
-            )
+            tenant_statements_table.update_item(Key={"TenantID": tenant_id, "StatementID": statement_id}, UpdateExpression="SET JobId = :jobId", ExpressionAttributeValues={":jobId": job_id})
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning(
-                "Failed to store job id on statement",
-                statement_id=statement_id,
-                tenant_id=tenant_id,
-                error=str(exc),
-                exc_info=True,
-            )
+            logger.warning("Failed to store job id on statement", statement_id=statement_id, tenant_id=tenant_id, error=str(exc), exc_info=True)
 
     # Convenience for callers: derive a friendly filename from the PDF key.
     filename = f"{Path(key).stem}.json"

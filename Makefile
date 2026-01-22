@@ -3,7 +3,7 @@
 # Keeps lint/type-check commands centralized for service and lambda_functions.
 #
 
-.PHONY: help rebuild-venvs update-venvs format-all lint-all type-check-all clean
+.PHONY: help rebuild-venvs update-venvs format lint type-check clean
 
 # Top-level directories to target.
 SERVICE_DIR := service
@@ -22,16 +22,19 @@ help:
 	@echo "=========================================="
 	@echo ""
 	@echo "📦 Dependency Management:"
-	@echo "  rebuild-venvs           Rebuild all venvs from scratch"
-	@echo "  update-venvs            Update dependencies in each service/lambda venv"
+	@printf "  %-16s %s\n" "rebuild-venvs" "Rebuild all venvs from scratch"
+	@printf "  %-16s %s\n" "update-venvs" "Update dependencies in each service/lambda venv"
 	@echo ""
 	@echo "🔍 Code Quality:"
-	@echo "  format-all              Format code and sort imports with Ruff"
-	@echo "  lint-all                Run pylint on all Lambdas and service (sequential, clearer output)"
-	@echo "  type-check-all          Run mypy on all Lambdas and service (sequential, clearer output)"
+	@printf "  %-16s %s\n" "format" "Format code and sort imports with Ruff"
+	@printf "  %-16s %s\n" "lint" "Run pylint on all Lambdas and service (sequential, clearer output)"
+	@printf "  %-16s %s\n" "type-check" "Run mypy on all Lambdas and service (sequential, clearer output)"
 	@echo ""
 	@echo "🧹 Cleanup:"
-	@echo "  clean                   Remove Python caches and build artifacts"
+	@printf "  %-16s %s\n" "clean" "Remove Python caches and build artifacts"
+	@printf "  %-16s %s\n" "dev" "Run format, lint, type-check"
+	@echo ""
+	@echo "Quick: make dev"
 
 # Update or create venvs and install requirements (mirrors numerint/environments).
 rebuild-venvs:
@@ -45,7 +48,7 @@ update-venvs:
 	@echo "✅ All venvs updated"
 
 # Format all code with Ruff (includes import sorting).
-format-all:
+format:
 	@echo "🎨 Formatting code and sorting imports with Ruff..."
 	@for dir in $(SERVICE_DIR) $(LAMBDA_DIRS); do \
 		if [ -d "$$dir" ]; then \
@@ -56,7 +59,7 @@ format-all:
 	@echo "✅ Ruff formatting complete"
 
 # Sequential linting for service + each lambda directory.
-lint-all:
+lint:
 	@echo "🔍 Running pylint on service and lambdas (sequential)..."
 	@for dir in $(SERVICE_DIR) $(LAMBDA_DIRS); do \
 		if [ -d "$$dir" ]; then \
@@ -68,7 +71,7 @@ lint-all:
 	done
 
 # Sequential mypy checks for service + each lambda directory.
-type-check-all:
+type-check:
 	@echo "🔍 Running mypy on service and lambdas (sequential)..."
 	@for dir in $(SERVICE_DIR) $(LAMBDA_DIRS); do \
 		if [ -d "$$dir" ]; then \
@@ -89,3 +92,7 @@ clean:
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.zip" -delete
 	@echo "✅ Cleanup complete"
+
+# Development workflow
+dev: format lint type-check
+	@echo "✅ Development checks complete!"

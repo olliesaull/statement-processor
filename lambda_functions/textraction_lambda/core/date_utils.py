@@ -21,18 +21,7 @@ from typing import Any
 from config import logger
 
 # Order matters: match longer tokens before shorter ones so "MMMM" wins over "MM".
-TOKEN_ORDER: Sequence[str] = (
-    "YYYY",
-    "MMMM",
-    "MMM",
-    "MM",
-    "DD",
-    "YY",
-    "Do",
-    "dddd",
-    "M",
-    "D",
-)
+TOKEN_ORDER: Sequence[str] = ("YYYY", "MMMM", "MMM", "MM", "DD", "YY", "Do", "dddd", "M", "D")
 
 # Token regex fragments used to build a full template regex with named groups.
 TOKEN_REGEX = {
@@ -70,15 +59,7 @@ def parse_with_format(value: Any, template: str | None) -> datetime | None:  # p
 
     # Compile the template into a regex and metadata used during extraction.
     compiled = _prepare_template(template)
-    (
-        regex,
-        group_order,
-        _,
-        has_textual_month,
-        numeric_month,
-        numeric_day,
-        uses_ordinal,
-    ) = compiled
+    (regex, group_order, _, has_textual_month, numeric_month, numeric_day, uses_ordinal) = compiled
     match = regex.match(s)
     if not match:
         logger.debug("Date value did not match template", value=s, template=template)
@@ -110,12 +91,7 @@ def parse_with_format(value: Any, template: str | None) -> datetime | None:  # p
                 # Weekday tokens are ignored; they don't affect the date components.
                 continue
     except ValueError as exc:
-        logger.warning(
-            "Failed to parse date using template",
-            value=s,
-            template=template,
-            error=str(exc),
-        )
+        logger.warning("Failed to parse date using template", value=s, template=template, error=str(exc))
         raise
 
     if {"year", "month", "day"} - components.keys():
@@ -309,13 +285,7 @@ def _tokenize_format(template: str):
     return tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal
 
 
-def _compile(
-    tokens: Sequence,
-    has_textual_month: bool,
-    numeric_month: bool,
-    numeric_day: bool,
-    uses_ordinal: bool,
-):
+def _compile(tokens: Sequence, has_textual_month: bool, numeric_month: bool, numeric_day: bool, uses_ordinal: bool):
     """Build a regex from tokens and preserve metadata needed during parsing."""
 
     def name_gen():
@@ -337,15 +307,7 @@ def _compile(
             regex_parts.append(re.escape(str(value)))
 
     regex = re.compile("".join(regex_parts) + r"$")
-    return (
-        regex,
-        group_order,
-        tokens,
-        has_textual_month,
-        numeric_month,
-        numeric_day,
-        uses_ordinal,
-    )
+    return (regex, group_order, tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal)
 
 
 def common_formats(samples: Iterable[str], top_k: int = 5) -> list[str]:

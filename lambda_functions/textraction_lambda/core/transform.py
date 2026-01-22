@@ -92,11 +92,7 @@ def best_header_row(grid: list[list[str]], candidate_headers: list[str], lookahe
     if not cand:
         for idx, row in enumerate(grid):
             if any(c.strip() for c in row):
-                logger.debug(
-                    "Header row selected (no candidates)",
-                    selected_index=idx,
-                    lookahead_rows=len(grid),
-                )
+                logger.debug("Header row selected (no candidates)", selected_index=idx, lookahead_rows=len(grid))
                 return idx, row
         logger.debug("Header row defaulted to first row (no candidates)", selected_index=0)
         return 0, grid[0] if grid else []
@@ -111,13 +107,7 @@ def best_header_row(grid: list[list[str]], candidate_headers: list[str], lookahe
                 score += 1
         if score > best_score:
             best_score, best_idx = score, i
-    logger.debug(
-        "Header row selected",
-        selected_index=best_idx,
-        best_score=best_score,
-        lookahead_rows=lookahead_rows,
-        candidate_count=len(cand),
-    )
+    logger.debug("Header row selected", selected_index=best_idx, best_score=best_score, lookahead_rows=lookahead_rows, candidate_count=len(cand))
     return best_idx, grid[best_idx]
 
 
@@ -182,11 +172,7 @@ def _load_contact_mapping(tenant_id: str, contact_id: str) -> tuple[dict[str, An
     if not date_format:
         raise ValueError("date_format must be configured for this contact")
 
-    allowed_fields = set(StatementItem.model_fields.keys()) - {
-        "raw",
-        "statement_item_id",
-        "item_type",
-    }
+    allowed_fields = set(StatementItem.model_fields.keys()) - {"raw", "statement_item_id", "item_type"}
     for field, value in items_template.items():
         if field == "raw" and isinstance(value, dict):
             raw_map = value
@@ -204,10 +190,7 @@ def _load_contact_mapping(tenant_id: str, contact_id: str) -> tuple[dict[str, An
 
 
 def _prepare_header_context(
-    grid: list[list[str]],
-    candidates: list[str],
-    primary_header_row: list[str] | None,
-    primary_col_index: dict[str, int] | None,
+    grid: list[list[str]], candidates: list[str], primary_header_row: list[str] | None, primary_col_index: dict[str, int] | None
 ) -> tuple[list[str], dict[str, int], list[list[str]], bool, list[str], dict[str, int]]:
     """
     Determine header row/columns and data rows for a table grid.
@@ -236,14 +219,7 @@ def _prepare_header_context(
         else:
             data_rows = grid[start_idx:]
 
-    return (
-        header_row,
-        col_index,
-        data_rows,
-        header_detected,
-        primary_header_row,
-        primary_col_index or {},
-    )
+    return (header_row, col_index, data_rows, header_detected, primary_header_row, primary_col_index or {})
 
 
 def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: list[str]) -> None:
@@ -360,19 +336,12 @@ def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-
 
     raw_extracted = extracted_raw or {}
     if full_raw:
-        raw_extracted = {
-            **{k: {"header": k, "value": v} for k, v in full_raw.items()},
-            **raw_extracted,
-        }
+        raw_extracted = {**{k: {"header": k, "value": v} for k, v in full_raw.items()}, **raw_extracted}
 
     return stmt_item, flags, extracted_simple, raw_extracted
 
 
-def select_relevant_tables_per_page(
-    tables_with_pages: list["TableOnPage"],
-    candidates: list[str],
-    small_table_penalty: float = 2.5,
-) -> list["TableOnPage"]:  # pylint: disable=too-many-locals
+def select_relevant_tables_per_page(tables_with_pages: list["TableOnPage"], candidates: list[str], small_table_penalty: float = 2.5) -> list["TableOnPage"]:  # pylint: disable=too-many-locals
     """
     Choose the best table per page when multiple candidates exist.
 
@@ -405,38 +374,17 @@ def select_relevant_tables_per_page(
             size_bonus = rows * cols
             penalty = small_table_penalty if len(data_rows) <= 1 else 0.0
             score = header_hits * 10 + date_hits * 2 + size_bonus * 0.001 - penalty
-            logger.debug(
-                "Table score",
-                page=page,
-                table_index=grid_idx,
-                rows=rows,
-                cols=cols,
-                header_hits=header_hits,
-                date_hits=date_hits,
-                penalty=penalty,
-                score=score,
-            )
+            logger.debug("Table score", page=page, table_index=grid_idx, rows=rows, cols=cols, header_hits=header_hits, date_hits=date_hits, penalty=penalty, score=score)
             if score > best_score:
                 best_score, best_grid = score, grid
         if best_grid is None:
             best_grid = max(grids, key=lambda g: (len(g), len(g[0]) if g else 0))
         selected.append({"page": page, "grid": best_grid})
-        logger.debug(
-            "Selected table for page",
-            page=page,
-            rows=len(best_grid),
-            cols=len(best_grid[0]) if best_grid and best_grid[0] else 0,
-            best_score=best_score,
-        )
+        logger.debug("Selected table for page", page=page, rows=len(best_grid), cols=len(best_grid[0]) if best_grid and best_grid[0] else 0, best_score=best_score)
     return selected
 
 
-def table_to_json(
-    tables_with_pages: list["TableOnPage"],
-    tenant_id: str,
-    contact_id: str,
-    statement_id: str | None = None,
-) -> dict[str, Any]:  # pylint: disable=too-many-locals,too-many-statements
+def table_to_json(tables_with_pages: list["TableOnPage"], tenant_id: str, contact_id: str, statement_id: str | None = None) -> dict[str, Any]:  # pylint: disable=too-many-locals,too-many-statements
     """
     Convert Textract table grids into structured statement JSON.
 
@@ -474,34 +422,16 @@ def table_to_json(
     for _page_number, entry in enumerate(selected, start=1):
         grid = entry["grid"]
         grid = _dedupe_grid_columns(grid)
-        logger.debug(
-            "Processing table grid",
-            page=entry["page"],
-            rows=len(grid),
-            cols=len(grid[0]) if grid and grid[0] else 0,
-        )
+        logger.debug("Processing table grid", page=entry["page"], rows=len(grid), cols=len(grid[0]) if grid and grid[0] else 0)
 
         header_row: list[str]
         col_index: dict[str, int]
         data_rows: list[list[str]]
         header_detected = False
 
-        (
-            header_row,
-            col_index,
-            data_rows,
-            header_detected,
-            primary_header_row,
-            primary_col_index,
-        ) = _prepare_header_context(grid, candidates, primary_header_row, primary_col_index)
+        (header_row, col_index, data_rows, header_detected, primary_header_row, primary_col_index) = _prepare_header_context(grid, candidates, primary_header_row, primary_col_index)
 
-        logger.debug(
-            "Header detection result",
-            page=entry["page"],
-            header_detected=header_detected,
-            header_len=len(header_row),
-            data_rows=len(data_rows),
-        )
+        logger.debug("Header detection result", page=entry["page"], header_detected=header_detected, header_len=len(header_row), data_rows=len(data_rows))
 
         if header_detected:
             _persist_raw_headers(tenant_id, contact_id, header_row)
@@ -535,16 +465,7 @@ def table_to_json(
             items.append(stmt_item)
             per_item_flags.append(flags)
 
-            item_flags.append(
-                [
-                    {
-                        "page": entry["page"],
-                        "row": i_row,
-                        "extracted": {"simple": extracted_simple, "raw": raw_extracted},
-                        "flags": flags,
-                    }
-                ]
-            )
+            item_flags.append([{"page": entry["page"], "row": i_row, "extracted": {"simple": extracted_simple, "raw": raw_extracted}, "flags": flags}])
 
     combined_flags: list[dict[str, Any]] = []
     for flist in item_flags:
@@ -552,11 +473,7 @@ def table_to_json(
 
     # Derive earliest/latest dates across all items.
     earliest_date, latest_date = _derive_date_range(items)
-    statement = SupplierStatement(
-        statement_items=items,
-        earliest_item_date=earliest_date,
-        latest_item_date=latest_date,
-    )
+    statement = SupplierStatement(statement_items=items, earliest_item_date=earliest_date, latest_item_date=latest_date)
 
     output = statement.model_dump()
 
@@ -576,9 +493,7 @@ def table_to_json(
     return output
 
 
-def _derive_date_range(
-    items: list[StatementItem],
-) -> tuple[str | None, str | None]:
+def _derive_date_range(items: list[StatementItem]) -> tuple[str | None, str | None]:
     """Compute min/max dates across all statement items."""
     dates = []
     for item in items:

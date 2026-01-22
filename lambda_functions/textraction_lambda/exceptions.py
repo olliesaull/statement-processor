@@ -6,13 +6,7 @@ from typing import Any
 class ItemCountDisagreementError(Exception):
     """Raised when PDF/Textract item counts diverge."""
 
-    def __init__(
-        self,
-        pdfplumber_count: int,
-        textract_count: int,
-        summary: dict[str, Any] | None = None,
-        message: str | None = None,
-    ) -> None:
+    def __init__(self, pdfplumber_count: int, textract_count: int, summary: dict[str, Any] | None = None, message: str | None = None) -> None:
         msg = message or (f"PDF/Textract item count mismatch: pdfplumber={pdfplumber_count}, textract={textract_count}")
         super().__init__(msg)
         self.summary = summary
