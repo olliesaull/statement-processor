@@ -1,4 +1,5 @@
 bandit
 mypy
 pylint
+pytest-playwright
 ruff

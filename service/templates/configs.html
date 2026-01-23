@@ -98,13 +98,13 @@
   {% endif %}
 
   <!-- Contact selector -->
-  <form method="POST" action="{{ url_for('configs') }}" class="mb-4">
+  <form method="POST" action="{{ url_for('configs') }}" class="mb-4 config-load-form" id="config-load-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset class="row gy-2 gx-3 align-items-center">
       <input type="hidden" name="action" value="load">
       <div class="col-auto">
         <label class="visually-hidden" for="contactInput">Contact</label>
-        <input type="text" id="contactInput" name="contact_name" class="form-control"
+        <input type="text" id="contactInput" name="contact_name" class="form-control config-contact-input"
                placeholder="Select contact" list="contacts-list" autocomplete="off"
                value="{{ selected_contact_name or '' }}" style="min-width: 320px;">
         <datalist id="contacts-list">
@@ -120,7 +120,7 @@
   </form>
 
   {% if selected_contact_id %}
-  <form method="POST" action="{{ url_for('configs') }}">
+  <form method="POST" action="{{ url_for('configs') }}" class="config-save-form" id="config-save-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset>
     <input type="hidden" name="action" value="save_map">
@@ -230,7 +230,7 @@
       </ul>
     </div>
 
-    <button type="submit" class="btn btn-success mb-5">Save</button>
+    <button type="submit" class="btn btn-success mb-5 config-save-button" id="config-save-button">Save</button>
     </fieldset>
   </form>
   {% endif %}

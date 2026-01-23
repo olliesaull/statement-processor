@@ -7,8 +7,6 @@ and fetches required SSM parameters at import time.
 
 import logging
 import os
-import tempfile
-from pathlib import Path
 
 import boto3
 from aws_lambda_powertools.logging import Logger
@@ -23,8 +21,8 @@ AWS_REGION: str | None = os.getenv("AWS_REGION")
 S3_BUCKET_NAME: str | None = os.getenv("S3_BUCKET_NAME")
 STAGE: str | None = os.getenv("STAGE")
 TEXTRACTION_STATE_MACHINE_ARN: str | None = os.getenv("TEXTRACTION_STATE_MACHINE_ARN")
-# Optional override for the local sync/cache directory used by Xero sync helpers.
-LOCAL_DATA_DIR: str = str(Path.cwd() / "tmp" / "data") if STAGE == "dev" else str(Path(tempfile.gettempdir()) / "statement_processor" / "data")
+# Ignoring Bandit suggestion as tempfile.gettempdir returns /tmp anyways (B108:hardcoded_tmp_directory)
+LOCAL_DATA_DIR: str = "./tmp/data" if STAGE == "dev" else "/tmp/data"  # nosec B108
 
 TENANT_CONTACTS_CONFIG_TABLE_NAME: str | None = os.getenv("TENANT_CONTACTS_CONFIG_TABLE_NAME")
 TENANT_STATEMENTS_TABLE_NAME: str | None = os.getenv("TENANT_STATEMENTS_TABLE_NAME")

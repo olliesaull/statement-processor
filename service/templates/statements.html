@@ -26,7 +26,7 @@
           </a>
         </div>
       </div>
-      <table class="table table-striped table-bordered align-middle">
+      <table class="table table-striped table-bordered align-middle statements-table" id="statements-table">
         <thead class="table-light">
           <tr>
             <th scope="col">Contact Name</th>
@@ -37,7 +37,7 @@
         </thead>
         <tbody>
           {% for stmt in statements %}
-            <tr>
+            <tr data-statement-id="{{ stmt['StatementID'] }}" data-contact-name="{{ stmt.get('ContactName') or '' }}">
               <td>{{ stmt.get("ContactName") or "—" }}</td>
               <td>{{ stmt.get("ItemDateRangeDisplay") or "—" }}</td>
               <td>{{ stmt.get("OriginalStatementFilename") or "—" }}</td>

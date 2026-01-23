@@ -35,6 +35,8 @@ white-space: normal;
 .col-ref      { min-width: 14ch; }     /* fixes ugly Reference wrapping */
 .col-due      { min-width: 9ch; }
 .col-activity { min-width: 16ch; }
+.col-type     { min-width: 6ch; white-space: nowrap; }
+.col-credit   { min-width: 7ch; white-space: nowrap; }
 .col-amount   { min-width: 11ch; text-align: right; }
 .col-pay      { min-width: 9ch;  text-align: right; }
 .col-balance  { min-width: 11ch; text-align: right; }

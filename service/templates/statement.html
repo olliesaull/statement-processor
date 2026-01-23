@@ -73,9 +73,10 @@
       </div>
 
       <div class="table-responsive statement-table-wrapper">
-        <table class="table table-striped table-bordered align-middle table-fixed-height table-compare w-100">
+        <table class="table table-striped table-bordered align-middle table-fixed-height table-compare w-100 statement-table" id="statement-table">
           <thead class="table-light">
             <tr>
+              <th class="text-center col-type" rowspan="2">Type</th>
               <th class="split-right text-center" colspan="{{ statement_col_count }}">Statement</th>
               <th class="text-center" colspan="{{ statement_col_count }}">Xero</th>
               <th class="text-center" rowspan="2">Xero Link</th>
@@ -83,14 +84,16 @@
             </tr>
             <tr>
               {% for h in raw_statement_headers %}
-                <th class="{% if loop.last %}split-right{% endif %}">{{ h|capitalize }}</th>
+                {% set header_class = "col-credit" if h|lower == "credit" else "" %}
+                <th class="{% if loop.last %}split-right{% endif %}{% if header_class %} {{ header_class }}{% endif %}">{{ h|capitalize }}</th>
               {% endfor %}
               {% for h in raw_statement_headers %}
-                <th>{{ h|capitalize }}</th>
+                {% set header_class = "col-credit" if h|lower == "credit" else "" %}
+                <th class="{% if header_class %}{{ header_class }}{% endif %}">{{ h|capitalize }}</th>
               {% endfor %}
             </tr>
           </thead>
-          <tbody>
+          <tbody id="statement-table-body">
             {% if statement_rows %}
               {% for row in statement_rows %}
                 {% set flag_list = row.flags or [] %}
@@ -106,6 +109,7 @@
                   {% set row_class = row_class + ' opacity-50' %}
                 {% endif %}
                 <tr class="{{ row_class }}">
+                  <td class="text-center col-type">{{ row.item_type_label }}</td>
                   {% set cells = row.cell_comparisons or [] %}
                   {% for cell in cells %}
                     <td class="{% if loop.last %}split-right{% endif %}{% if anomalous and not cell.matches %} anomaly-cell{% endif %}">
@@ -169,7 +173,7 @@
               {% endfor %}
             {% else %}
               <tr>
-                <td colspan="{{ statement_col_count * 2 + 2 }}" class="text-center text-muted">
+                <td colspan="{{ statement_col_count * 2 + 3 }}" class="text-center text-muted">
                   {% if items_view == 'completed' %}
                     No completed statement items found.
                   {% elif items_view == 'incomplete' %}

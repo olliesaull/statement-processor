@@ -12,7 +12,7 @@ from typing import Any
 import requests
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
-from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
 from flask_caching import Cache
 from flask_session import Session
 from flask_wtf.csrf import CSRFProtect
@@ -100,6 +100,9 @@ DECIMAL_SEPARATOR_OPTIONS = [(".", "Dot (.)"), (",", "Comma (,)")]
 THOUSANDS_SEPARATOR_OPTIONS = [("", "None"), (",", "Comma (,)"), (".", "Dot (.)"), (" ", "Space ( )"), ("'", "Apostrophe (')")]
 DECIMAL_SEPARATOR_VALUES = {opt[0] for opt in DECIMAL_SEPARATOR_OPTIONS}
 THOUSANDS_SEPARATOR_VALUES = {opt[0] for opt in THOUSANDS_SEPARATOR_OPTIONS}
+TEST_LOGIN_SECRET_ENV = "TEST_LOGIN_SECRET"
+TEST_LOGIN_HEADER = "X-Test-Auth"
+_ITEM_TYPE_LABELS: dict[str, str] = {"credit_note": "CRN", "invoice": "INV", "payment": "PMT"}
 
 
 def _trigger_initial_sync_if_required(tenant_id: str | None) -> None:
@@ -796,7 +799,7 @@ def _build_excel_headers(display_headers: list[str]) -> tuple[list[tuple[str, st
         statement_headers.append(f"Statement {label}")
         xero_headers.append(f"Xero {label}")
 
-    excel_headers = ["Item Type", *statement_headers, *xero_headers, "Status"]
+    excel_headers = ["Type", *statement_headers, *xero_headers, "Xero Link", "Status"]
     return header_labels, excel_headers
 
 
@@ -831,7 +834,8 @@ def _status_for_excel_row(item: Any, item_status_map: dict[str, bool]) -> tuple[
 
 def _build_excel_row_values(header_labels: list[tuple[str, str]], left_row: dict[str, Any], right_row: dict[str, Any], item_types: list[str], idx: int) -> list[Any]:
     """Build Excel row values from statement/xero data."""
-    row_values: list[Any] = [item_types[idx] if idx < len(item_types) else ""]
+    item_type = item_types[idx] if idx < len(item_types) else ""
+    row_values: list[Any] = [_format_item_type_label(item_type)]
     for src_header, _ in header_labels:
         left_value = left_row.get(src_header, "") if isinstance(left_row, dict) else ""
         row_values.append("" if left_value is None else left_value)
@@ -938,6 +942,8 @@ def _append_excel_rows(
     row_matches: list[bool],
     item_types: list[str],
     items: list[Any],
+    item_number_header: str | None,
+    matched_invoice_to_statement_item: dict[str, Any],
     item_status_map: dict[str, bool],
     statement_col_count: int,
     statement_end_col: int,
@@ -950,8 +956,15 @@ def _append_excel_rows(
     mismatch_side: Side,
     divider_side: Side,
 ) -> int:
-    """Append rows to the Excel worksheet and return row count."""
+    """Append rows to the Excel worksheet and return row count.
+
+    This includes a hyperlink cell for the Xero Link column when available.
+    """
     row_count = max(len(rows_by_header), len(right_rows_by_header))
+    try:
+        link_col = excel_headers.index("Xero Link") + 1
+    except ValueError:
+        link_col = None
     for idx in range(row_count):
         left_row = rows_by_header[idx] if idx < len(rows_by_header) else {}
         right_row = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
@@ -959,13 +972,24 @@ def _append_excel_rows(
 
         status_label, is_item_completed = _status_for_excel_row(item, item_status_map)
         row_values = _build_excel_row_values(header_labels, left_row, right_row, item_types, idx)
+        xero_invoice_id, xero_credit_note_id = _xero_ids_for_row(item_number_header, left_row, matched_invoice_to_statement_item)
+        if xero_credit_note_id:
+            xero_link = f"https://go.xero.com/AccountsPayable/ViewCreditNote.aspx?creditNoteID={xero_credit_note_id}"
+        elif xero_invoice_id:
+            xero_link = f"https://go.xero.com/AccountsPayable/View.aspx?InvoiceID={xero_invoice_id}"
+        else:
+            xero_link = ""
         # Providing status in the sheet lets users filter finished work out quickly.
+        row_values.append("Link" if xero_link else "")
         row_values.append(status_label)
         worksheet.append(row_values)
+        current_row = worksheet.max_row
+        if xero_link and link_col:
+            link_cell = worksheet.cell(row=current_row, column=link_col)
+            link_cell.hyperlink = xero_link
 
         row_match = row_matches[idx] if idx < len(row_matches) else False
         fill = _row_fill_for_item(item, row_match, fill_warning=fill_warning, fill_success=fill_success, fill_danger=fill_danger)
-        current_row = worksheet.max_row
         _apply_row_fill(worksheet, current_row=current_row, total_columns=len(excel_headers), fill=fill, font_completed=font_completed, is_item_completed=is_item_completed)
 
         if statement_col_count:
@@ -996,12 +1020,33 @@ def _build_statement_excel_response(
     row_matches: list[bool],
     item_types: list[str],
     items: list[Any],
+    item_number_header: str | None,
+    matched_invoice_to_statement_item: dict[str, Any],
     item_status_map: dict[str, bool],
     record: dict[str, Any],
     statement_id: str,
     tenant_id: str,
 ) -> Any:
-    """Build an XLSX export response for the current statement view."""
+    """Build an XLSX export response for the current statement view.
+
+    Args:
+        display_headers: Statement display headers.
+        rows_by_header: Statement rows keyed by header.
+        right_rows_by_header: Xero rows keyed by header.
+        row_comparisons: Per-cell comparison results.
+        row_matches: Per-row match flags.
+        item_types: Item type labels per row.
+        items: Statement items payload.
+        item_number_header: Header used to map Xero links.
+        matched_invoice_to_statement_item: Matched Xero invoice map.
+        item_status_map: Statement item completion flags.
+        record: Statement metadata record.
+        statement_id: Statement identifier.
+        tenant_id: Active tenant identifier.
+
+    Returns:
+        Flask response containing the XLSX export.
+    """
     header_labels, excel_headers = _build_excel_headers(display_headers)
 
     workbook = Workbook()
@@ -1036,6 +1081,8 @@ def _build_statement_excel_response(
         row_matches=row_matches,
         item_types=item_types,
         items=items,
+        item_number_header=item_number_header,
+        matched_invoice_to_statement_item=matched_invoice_to_statement_item,
         item_status_map=item_status_map,
         statement_col_count=statement_col_count,
         statement_end_col=statement_end_col,
@@ -1101,6 +1148,23 @@ def _item_flags(item: Any) -> list[str]:
     return flags
 
 
+def _format_item_type_label(item_type: str | None) -> str:
+    """Format a statement item type for display.
+
+    Args:
+        item_type: Raw statement item type value.
+
+    Returns:
+        Display label for the item type.
+    """
+    normalized = str(item_type or "").strip().lower()
+    if not normalized:
+        return ""
+    if normalized in _ITEM_TYPE_LABELS:
+        return _ITEM_TYPE_LABELS[normalized]
+    return normalized.replace("_", " ").upper()
+
+
 def _xero_ids_for_row(item_number_header: str | None, left_row: dict[str, Any], matched_invoice_to_statement_item: dict[str, Any]) -> tuple[str | None, str | None]:
     """Return matched Xero invoice/credit note IDs for a row."""
     if not item_number_header:
@@ -1134,7 +1198,23 @@ def _build_statement_rows(
     item_number_header: str | None,
     matched_invoice_to_statement_item: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Build the rows displayed in the statement detail UI."""
+    """Build the rows displayed in the statement detail UI.
+
+    Args:
+        rows_by_header: Statement rows keyed by header names.
+        right_rows_by_header: Xero rows keyed by header names.
+        display_headers: Ordered list of display headers.
+        row_comparisons: Per-cell comparison results.
+        row_matches: Per-row match flags.
+        items: Statement item payloads.
+        item_types: Item type labels per row.
+        item_status_map: Statement item completion flags.
+        item_number_header: Header used to map Xero links.
+        matched_invoice_to_statement_item: Matched Xero invoice map.
+
+    Returns:
+        List of row dicts for the statement detail table.
+    """
     statement_rows: list[dict[str, Any]] = []
     for idx, left_row in enumerate(rows_by_header):
         item = items[idx] if idx < len(items) else {}
@@ -1146,6 +1226,7 @@ def _build_statement_rows(
         # Build Xero links by extracting IDs from matched data
         xero_invoice_id, xero_credit_note_id = _xero_ids_for_row(item_number_header, left_row, matched_invoice_to_statement_item)
 
+        item_type = (item.get("item_type") if isinstance(item, dict) else None) or (item_types[idx] if idx < len(item_types) else "invoice")
         statement_rows.append(
             {
                 "statement_item_id": statement_item_id,
@@ -1155,7 +1236,8 @@ def _build_statement_rows(
                 "matches": row_matches[idx] if idx < len(row_matches) else False,
                 "is_completed": is_item_completed,
                 "flags": flags,
-                "item_type": ((item.get("item_type") if isinstance(item, dict) else None) or (item_types[idx] if idx < len(item_types) else "invoice")),
+                "item_type": item_type,
+                "item_type_label": _format_item_type_label(item_type),
                 "xero_invoice_id": xero_invoice_id,
                 "xero_credit_note_id": xero_credit_note_id,
             }
@@ -1275,6 +1357,8 @@ def statement(statement_id: str):
             row_matches=row_matches,
             item_types=item_types,
             items=items,
+            item_number_header=item_number_header,
+            matched_invoice_to_statement_item=matched_invoice_to_statement_item,
             item_status_map=item_status_map,
             record=record,
             statement_id=statement_id,
@@ -1453,6 +1537,52 @@ def configs():
     )
 
     return render_template("configs.html", **context)
+
+
+@app.route("/test-login", methods=["POST"])
+@csrf.exempt
+@route_handler_logging
+def test_login() -> Response:
+    """Seed a session with a test Xero login.
+
+    Args:
+        None.
+
+    Returns:
+        JSON response confirming the seeded tenant.
+    """
+    test_secret = (os.getenv(TEST_LOGIN_SECRET_ENV)).strip()
+    if STAGE == "prod" or not test_secret:
+        abort(404)
+
+    header_secret = (request.headers.get(TEST_LOGIN_HEADER)).strip()
+    if header_secret != test_secret:
+        abort(403)
+
+    payload = request.get_json(silent=True) or {}
+    tenant_id = (payload.get("tenant_id") or request.values.get("tenant_id")).strip()
+    tenant_name = (payload.get("tenant_name") or request.values.get("tenant_name")).strip()
+    if not tenant_id:
+        response = jsonify({"error": "tenant_id required"})
+        response.status_code = 400
+        return response
+
+    expires_at = datetime.now().timestamp() + 3600
+    session["xero_oauth2_token"] = {
+        "access_token": "test-access-token",
+        "refresh_token": "test-refresh-token",
+        "expires_in": 3600,
+        "expires_at": expires_at,
+        "token_type": "Bearer",
+        "scope": "test",
+        "id_token": "test-id-token",
+    }
+    session["access_token"] = session["xero_oauth2_token"]["access_token"]
+    session["xero_tenant_id"] = tenant_id
+    session["xero_tenant_name"] = tenant_name
+    session["xero_tenants"] = [{"tenantId": tenant_id, "tenantName": tenant_name, "tenantType": "ORGANISATION"}]
+
+    return jsonify({"tenant_id": tenant_id, "tenant_name": tenant_name})
 
 
 @app.route("/login")
