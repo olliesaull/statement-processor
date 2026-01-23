@@ -455,7 +455,7 @@ def upload_statements():
                 contact_id: str | None = contact_lookup.get(contact_name)
                 if not contact_id:
                     logger.warning("Upload blocked; contact not found", tenant_id=tenant_id, contact_name=contact_name, statement_filename=uploaded_file.filename)
-                    error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")
+                    error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")  # nosec B608 - user-facing message only, no SQL execution
                     continue
 
                 if not _ensure_contact_config(tenant_id, contact_id, contact_name, uploaded_file.filename, error_messages):
@@ -1565,4 +1565,4 @@ def chrome_devtools_ping(path):
 
 
 if __name__ == "__main__":
-    app.run(port=8080, debug=True)
+    app.run(port=8080)

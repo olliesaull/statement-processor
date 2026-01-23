@@ -20,14 +20,10 @@ from botocore.exceptions import ClientError
 from xero_python.accounting import AccountingApi
 
 import cache_provider
-from config import S3_BUCKET_NAME, logger, s3_client, tenant_data_table
+from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, logger, s3_client, tenant_data_table
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import get_xero_api_client
 from xero_repository import XeroType, get_contacts_from_xero, get_credit_notes, get_invoices, get_payments
-
-STAGE = os.getenv("STAGE")
-# Local cache used to merge incremental syncs with previously downloaded data.
-LOCAL_DATA_DIR = "./tmp/data" if STAGE == "dev" else "/tmp/data"
 
 
 def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., Any], resource: XeroType, start_message: str, done_message: str, modified_since: datetime | None = None) -> bool:

@@ -17,14 +17,11 @@ from flask import session
 from xero_python.accounting import AccountingApi
 from xero_python.exceptions import AccountingBadRequestException
 
-from config import S3_BUCKET_NAME, logger, s3_client
+from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, logger, s3_client
 from utils.auth import get_xero_api_client, raise_for_unauthorized
 from utils.formatting import fmt_date, fmt_invoice_data
 
 PAGE_SIZE: int = 100  # Xero max
-STAGE: str | None = os.getenv("STAGE")
-# Local cache shared with the sync job for dataset reads.
-LOCAL_DATA_DIR: str = "./tmp/data" if STAGE == "dev" else "/tmp/data"
 
 
 class XeroType(StrEnum):
