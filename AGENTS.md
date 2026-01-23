@@ -346,7 +346,92 @@ The decorator:
 - Validates token expiry
 - Redirects to login if any check fails
 
+### Input Validation Rules
 
+**All user input is untrusted.** Validate at system boundaries:
+
+```python
+# WRONG - trusting user input
+user_id = request.args.get("id")
+query = f"SELECT * FROM users WHERE id = {user_id}"  # SQL injection!
+
+# CORRECT - parameterized queries
+user_id = request.args.get("id")
+query = "SELECT * FROM users WHERE id = %s"
+cursor.execute(query, (user_id,))
+```
+
+```python
+# WRONG - trusting user input for file paths
+filename = request.args.get("file")
+with open(f"/uploads/{filename}") as f:  # Path traversal!
+
+# CORRECT - validate and sanitize
+from pathlib import Path
+filename = request.args.get("file")
+safe_path = Path("/uploads") / Path(filename).name  # strips ../
+if not safe_path.is_relative_to(Path("/uploads")):
+    abort(400)
+```
+
+### Security Scanning with Bandit
+
+Bandit runs automatically as part of `make dev`. It detects common security issues:
+
+- Hardcoded passwords and secrets
+- Use of `eval()`, `exec()`, `pickle`
+- SQL injection patterns
+- Insecure cryptographic functions (MD5, SHA1 for security)
+- Shell injection via `subprocess` with `shell=True`
+- Insecure temporary file creation
+- Binding to all interfaces (`0.0.0.0`)
+
+Run manually with:
+```bash
+make security
+```
+
+Bandit failures **must be fixed** before committing. Do not suppress warnings without documented justification.
+
+### Security Checklist for Code Changes
+
+- [ ] `make security` passes (Bandit scan)
+- [ ] No SQL injection (use parameterized queries or ORM)
+- [ ] No XSS (escape output, use Jinja2 autoescape)
+- [ ] No command injection (avoid `os.system()`, `subprocess` with shell=True)
+- [ ] No path traversal (validate file paths)
+- [ ] No hardcoded secrets (use environment variables)
+- [ ] No SSRF (validate URLs before fetching)
+- [ ] Authenticated routes use `@xero_token_required`
+- [ ] Query parameters added to allowlist if needed
+
+## Dependencies
+
+### Requirements Files
+
+- Edit `requirements.txt` for production dependencies
+- Edit `requirements-dev.txt` for development-only tools
+- After modifying, run `make update-venv` to update the virtual environment
+
+## Common Workflows
+
+### Adding a New Feature
+
+1. Create/modify Python files
+2. Run `make dev` to format and lint
+
+### Fixing a Bug
+
+1. Understand the issue in existing code
+2. Make minimal, targeted changes
+3. Run `make dev` after each modification
+
+<!-- ### Refactoring
+
+1. Ensure tests pass before starting: `make test`
+2. Make incremental changes
+3. Run `make dev` after each change
+4. Keep tests passing throughout -->
 
 ## Documentation style (mandatory)
 

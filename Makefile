@@ -1,14 +1,9 @@
 #
-# Root Makefile for statement-processor.
-# Keeps lint/type-check commands centralized for service and lambda_functions.
+# Makefile for statement-processor.
+# Runs tooling in the current directory so symlinked copies behave locally.
 #
 
-.PHONY: help rebuild-venvs update-venvs format lint type-check clean
-
-# Top-level directories to target.
-SERVICE_DIR := service
-LAMBDA_ROOT := lambda_functions
-LAMBDA_DIRS := $(wildcard $(LAMBDA_ROOT)/*)
+.PHONY: help rebuild-venvs update-venvs format lint type-check security clean
 
 # Common exclusions for Python tooling.
 PY_EXCLUDES := -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/__pycache__/*'
@@ -22,27 +17,30 @@ help:
 	@echo "=========================================="
 	@echo ""
 	@echo "📦 Dependency Management:"
-	@printf "  %-16s %s\n" "rebuild-venvs" "Rebuild all venvs from scratch"
-	@printf "  %-16s %s\n" "update-venvs" "Update dependencies in each service/lambda venv"
+	@printf "  %-16s %s\n" "rebuild-venv" "Rebuild venv from scratch"
+	@printf "  %-16s %s\n" "update-venv" "Update dependencies in venv"
 	@echo ""
 	@echo "🔍 Code Quality:"
 	@printf "  %-16s %s\n" "format" "Format code and sort imports with Ruff"
-	@printf "  %-16s %s\n" "lint" "Run pylint on all Lambdas and service (sequential, clearer output)"
-	@printf "  %-16s %s\n" "type-check" "Run mypy on all Lambdas and service (sequential, clearer output)"
+	@printf "  %-16s %s\n" "lint" "Run pylint in the current directory"
+	@printf "  %-16s %s\n" "type-check" "Run mypy in the current directory"
+	@echo ""
+	@echo "🔒 Security:"
+	@printf "  %-16s %s\n" "security" "Run Bandit security scanner"
 	@echo ""
 	@echo "🧹 Cleanup:"
 	@printf "  %-16s %s\n" "clean" "Remove Python caches and build artifacts"
-	@printf "  %-16s %s\n" "dev" "Run format, lint, type-check"
+	@printf "  %-16s %s\n" "dev" "Run format, lint, type-check, security"
 	@echo ""
 	@echo "Quick: make dev"
 
-# Update or create venvs and install requirements (mirrors numerint/environments).
-rebuild-venvs:
-	@echo "🔄 Rebuilding all venvs..."
+# Update or create venv and install requirements (mirrors numerint/environments).
+rebuild-venv:
+	@echo "🔄 Rebuilding venv..."
 	@./update_dependencies.sh --rebuild
-	@echo "✅ All venvs rebuilt"
+	@echo "✅ Venv rebuilt"
 
-update-venvs:
+update-venv:
 	@echo "⬆️  Updating venv dependencies..."
 	@./update_dependencies.sh
 	@echo "✅ All venvs updated"
@@ -50,37 +48,23 @@ update-venvs:
 # Format all code with Ruff (includes import sorting).
 format:
 	@echo "🎨 Formatting code and sorting imports with Ruff..."
-	@for dir in $(SERVICE_DIR) $(LAMBDA_DIRS); do \
-		if [ -d "$$dir" ]; then \
-			echo "Formatting: $$dir"; \
-			bash -c "cd $$dir && source venv/bin/activate && ruff check --select I --fix . && ruff format . 2>/dev/null || true"; \
-		fi; \
-	done
+	@bash -c "source venv/bin/activate && ruff check --select I --fix . && ruff format . 2>/dev/null || true"
 	@echo "✅ Ruff formatting complete"
 
-# Sequential linting for service + each lambda directory.
+# Linting for the current directory.
 lint:
-	@echo "🔍 Running pylint on service and lambdas (sequential)..."
-	@for dir in $(SERVICE_DIR) $(LAMBDA_DIRS); do \
-		if [ -d "$$dir" ]; then \
-			echo "----------------------------------------------"; \
-			echo "Linting: $$dir"; \
-			echo "----------------------------------------------"; \
-			bash -c "cd $$dir && source venv/bin/activate && $(PY_FIND) | xargs pylint --disable=$(PYLINT_DISABLE) 2>/dev/null || true"; \
-		fi; \
-	done
+	@echo "🔍 Running pylint in the current directory..."
+	@bash -c "source venv/bin/activate && $(PY_FIND) | xargs pylint --disable=$(PYLINT_DISABLE) 2>/dev/null || true"
 
-# Sequential mypy checks for service + each lambda directory.
+# Mypy checks for the current directory.
 type-check:
-	@echo "🔍 Running mypy on service and lambdas (sequential)..."
-	@for dir in $(SERVICE_DIR) $(LAMBDA_DIRS); do \
-		if [ -d "$$dir" ]; then \
-			echo "----------------------------------------------"; \
-			echo "Type checking: $$dir"; \
-			echo "----------------------------------------------"; \
-			bash -c "cd $$dir && source venv/bin/activate && $(PY_FIND) | xargs mypy --ignore-missing-imports --check-untyped-defs 2>/dev/null || true"; \
-		fi; \
-	done
+	@echo "🔍 Running mypy in the current directory..."
+	@bash -c "source venv/bin/activate && $(PY_FIND) | xargs mypy --ignore-missing-imports --check-untyped-defs 2>/dev/null || true"
+
+# Security scanning with Bandit.
+security:
+	@echo "🔒 Running security scan with Bandit..."
+	@bash -c "source venv/bin/activate && $(PY_FIND) | xargs bandit -ll -q 2>/dev/null || true"
 
 # Clean common Python caches and generated files.
 clean:
@@ -94,5 +78,5 @@ clean:
 	@echo "✅ Cleanup complete"
 
 # Development workflow
-dev: format lint type-check
+dev: format lint type-check security
 	@echo "✅ Development checks complete!"
