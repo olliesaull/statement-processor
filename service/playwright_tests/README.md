@@ -26,7 +26,8 @@ Optional environment variables
 
 Run
 ---
-`python3.13 -m pytest -vv -s --tb=long playwright_tests/tests/e2e/test_statement_flow.py --headed`
+All tests - `python3.13 -m pytest -vv -s --tb=long playwright_tests/tests/e2e/test_statement_flow.py --headed`
+Specficic tests - `python3.13 -m pytest -vv -s --tb=long playwright_tests/tests/e2e/test_statement_flow.py::test_tenant_switching_updates_contacts --headed`
 
 
 Notes

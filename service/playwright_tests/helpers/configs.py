@@ -18,6 +18,21 @@ def open_configs_page(page: Page, base_url: str) -> None:
     page.goto(f"{base_url}/configs", wait_until="domcontentloaded")
 
 
+def count_config_contacts(page: Page, base_url: str) -> int:
+    """Return the number of contact options in the configs datalist.
+
+    Args:
+        page: Playwright page fixture.
+        base_url: Base URL for the app under test.
+
+    Returns:
+        Count of contact options.
+    """
+    open_configs_page(page, base_url)
+    page.wait_for_selector("#contacts-list", state="attached")
+    return page.locator("#contacts-list option").count()
+
+
 def load_contact_config(page: Page, contact_name: str) -> None:
     """Load the config for a specific contact.
 

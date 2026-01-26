@@ -30,8 +30,8 @@ def browser_context_args(browser_context_args: dict) -> dict:  # pylint: disable
     return browser_context_args
 
 
-@pytest.fixture(scope="session")
-def uploaded_statement_cache() -> set[tuple[str, str, str, str]]:
+@pytest.fixture(scope="session", name="uploaded_statement_cache")
+def _uploaded_statement_cache() -> set[tuple[str, str, str, str]]:  # added _ to avoid disable=redefined-outer-name
     """Cache uploaded statements across the pytest session.
 
     Returns:

@@ -2,9 +2,11 @@
 
 from pathlib import Path
 
+import pytest
 from openpyxl import load_workbook
 from openpyxl.cell.cell import Cell
 
+from playwright_tests.helpers.runs import StatementFlowRun
 from playwright_tests.helpers.tables import TableData
 
 
@@ -57,3 +59,20 @@ def read_excel_table(path: Path) -> TableData:
     headers = rows[0]
     data_rows = rows[1:]
     return TableData(headers=headers, rows=data_rows)
+
+
+def require_expected_excel(test_run: StatementFlowRun) -> Path:
+    """Return the expected Excel path or skip the test.
+
+    Args:
+        test_run: Current statement test run.
+
+    Returns:
+        Path to the expected Excel baseline.
+    """
+    expected_path = test_run.expected_excel_path()
+    if expected_path is None:
+        pytest.skip("expected_excel_filename is not set for this run.")
+    if not expected_path.exists():
+        pytest.skip(f"Expected Excel baseline not found: {expected_path}.")
+    return expected_path
