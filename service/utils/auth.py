@@ -141,7 +141,7 @@ class RedirectToLogin(HTTPException):
         """
         super().__init__(description="Redirecting to login")
 
-    def get_response(self, environ: dict[str, Any] | None = None, scope: dict[str, Any] | None = None) -> Response:
+    def get_response(self, _environ: dict[str, Any] | None = None, _scope: dict[str, Any] | None = None) -> Response:
         """Return a redirect response to the login route.
 
         Args:

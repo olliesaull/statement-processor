@@ -3,7 +3,7 @@
 # Runs tooling in the current directory so symlinked copies behave locally.
 #
 
-.PHONY: help rebuild-venvs update-venvs format lint type-check security clean
+.PHONY: help rebuild-venvs update-venvs format lint type-check security vulture clean
 
 # Common exclusions for Python tooling.
 PY_EXCLUDES := -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/__pycache__/*'
@@ -11,6 +11,7 @@ PY_EXCLUDES := -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/__pyca
 # Pylint/mypy settings mirrored from numerint/environments.
 PYLINT_DISABLE := E0401,R0902,C0302,W0511,R0914,R0903,C0103,R0917,R0913
 PY_FIND := find . -type f -name '*.py' ! -name 'test*' $(PY_EXCLUDES)
+VULTURE_CONFIDENCE ?= 90
 
 help:
 	@echo "statement-processor - Development Commands"
@@ -24,6 +25,7 @@ help:
 	@printf "  %-16s %s\n" "format" "Format code and sort imports with Ruff"
 	@printf "  %-16s %s\n" "lint" "Run pylint in the current directory"
 	@printf "  %-16s %s\n" "type-check" "Run mypy in the current directory"
+	@printf "  %-16s %s\n" "vulture" "Report unused code (min confidence $(VULTURE_CONFIDENCE)%; override with VULTURE_CONFIDENCE=NN)"
 	@echo ""
 	@echo "🔒 Security:"
 	@printf "  %-16s %s\n" "security" "Run Bandit security scanner"
@@ -60,6 +62,10 @@ lint:
 type-check:
 	@echo "🔍 Running mypy in the current directory..."
 	@bash -c "source venv/bin/activate && $(PY_FIND) | xargs mypy --ignore-missing-imports --check-untyped-defs 2>/dev/null || true"
+
+vulture:
+	@echo "🦅 Reporting unused code with Vulture (min confidence $(VULTURE_CONFIDENCE)%)..."
+	@bash -c "source venv/bin/activate && vulture . --min-confidence $(VULTURE_CONFIDENCE) --exclude venv,.venv,__pycache__,.mypy_cache,.ruff_cache,.pytest_cache,playwright_tests,tests,tmp 2>/dev/null || true"
 
 # Security scanning with Bandit.
 security:
