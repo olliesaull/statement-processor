@@ -125,30 +125,6 @@ def delete_statement_if_exists(page: Page, test_run: StatementFlowRun) -> None:
         page.wait_for_selector("[data-automation='statements-table']")
 
 
-def set_payments_visibility(page: Page, *, show_payments: bool) -> None:
-    """Toggle the payments visibility on the statement page.
-
-    Args:
-        page: Playwright page on the statement detail view.
-        show_payments: True to show payments, False to hide them.
-
-    Returns:
-        None.
-    """
-    toggle = page.locator("[data-automation='statement-payments-toggle']")
-    if toggle.count() == 0:
-        return
-    label = (toggle.inner_text() or "").strip().lower()
-    if show_payments and "show payments" in label:
-        toggle.click()
-        page.wait_for_load_state("networkidle")
-        wait_for_statement_table(page)
-    if not show_payments and "hide payments" in label:
-        toggle.click()
-        page.wait_for_load_state("networkidle")
-        wait_for_statement_table(page)
-
-
 def mark_first_incomplete_item(page: Page) -> None:
     """Mark the first incomplete row as complete.
 

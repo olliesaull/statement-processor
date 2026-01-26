@@ -34,6 +34,7 @@ Notes
 - The tests upload a file by path (no OS file picker), so they work from WSL without opening files on the host.
 - The statements view uses cached datasets; ensure the contact exists in cached contacts for the chosen tenant.
 - Tests delete any existing statement for the contact to reset state between runs.
+- Statement uploads are cached per pytest session; repeat tests for the same run reuse the first upload to avoid extra Textract costs.
 - The login flow is real Xero OAuth; run in headed mode and complete any MFA prompts when asked.
 - Each entry in `test_runs.json` maps to the `StatementFlowRun` fields (for example: `tenant_id`, `contact_name`, `statement_filename`, `expected_excel_filename`).
 - Required run fields: `tenant_id`, `tenant_name`, `contact_name`, `number_column`, `date_column`, `total_column` (array), `date_format`, `statement_filename`.

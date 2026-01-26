@@ -18,6 +18,7 @@ from flask_session import Session
 from flask_wtf.csrf import CSRFProtect
 from openpyxl import Workbook
 from openpyxl.styles import Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
@@ -473,7 +474,6 @@ def upload_statements():
 
 
 @app.route("/instructions")
-@xero_token_required
 @route_handler_logging
 def instructions():
     """Render the user instructions page."""
@@ -1026,6 +1026,7 @@ def _build_statement_excel_response(
     tenant_id: str,
 ) -> Any:
     """Build an XLSX export response for the current statement view.
+    This applies basic header formatting plus a frozen header row with dropdown filters.
 
     Args:
         display_headers: Statement display headers.
@@ -1093,6 +1094,22 @@ def _build_statement_excel_response(
         mismatch_side=mismatch_side,
         divider_side=divider_side,
     )
+
+    header_font = Font(bold=True)
+    for col_idx in range(1, len(excel_headers) + 1):
+        worksheet.cell(row=1, column=col_idx).font = header_font
+
+    worksheet.freeze_panes = "A2"
+    last_row = max(row_count + 1, 1)
+    last_column = get_column_letter(len(excel_headers))
+    worksheet.auto_filter.ref = f"A1:{last_column}{last_row}"
+
+    width_overrides = {"Type": 8, "Status": 12, "Xero Link": 12}
+    for col_idx, header in enumerate(excel_headers, start=1):
+        width = width_overrides.get(header)
+        if width is None:
+            width = min(max(len(header) + 2, 14), 30)
+        worksheet.column_dimensions[get_column_letter(col_idx)].width = width
 
     output = BytesIO()
     workbook.save(output)

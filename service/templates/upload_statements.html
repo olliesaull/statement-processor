@@ -5,12 +5,12 @@
 <div class="d-flex flex-column align-items-center" style="margin-top: 10vh;">
   <h1>Upload Statements</h1>
   {% if success_count %}
-    <div class="alert alert-success w-100" style="max-width: 720px;">
+    <div class="alert alert-success w-100" role="alert" style="max-width: 720px;">
       Uploaded {{ success_count }} statement{% if success_count != 1 %}s{% endif %} successfully.
     </div>
   {% endif %}
   {% if error_messages %}
-    <div class="alert alert-danger w-100" style="max-width: 720px;">
+    <div class="alert alert-danger w-100" role="alert" style="max-width: 720px;">
       <ul class="mb-0">
         {% for message in error_messages %}
           <li>{{ message }}</li>
