@@ -27,6 +27,7 @@
               <a
                 class="btn btn-sm {% if show_payments %}btn-primary{% else %}btn-outline-primary{% endif %}"
                 href="{{ url_for('statement', statement_id=statement_id, items_view=items_view, show_payments='false' if show_payments else 'true') }}"
+                data-automation="statement-payments-toggle"
               >
                 {% if show_payments %}Hide payments{% else %}Show payments{% endif %}
               </a>
@@ -38,6 +39,7 @@
         <a
           class="btn btn-outline-primary"
           href="{{ url_for('statement', statement_id=statement_id, download='xlsx', items_view=items_view, show_payments='true' if show_payments else 'false') }}"
+          data-automation="statement-download-excel"
         >Download Excel</a>
       {% endif %}
     </div>
@@ -73,7 +75,7 @@
       </div>
 
       <div class="table-responsive statement-table-wrapper">
-        <table class="table table-striped table-bordered align-middle table-fixed-height table-compare w-100 statement-table" id="statement-table">
+        <table class="table table-striped table-bordered align-middle table-fixed-height table-compare w-100 statement-table" id="statement-table" data-automation="statement-table">
           <thead class="table-light">
             <tr>
               <th class="text-center col-type" rowspan="2">Type</th>
@@ -153,7 +155,7 @@
                           <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
                           <input type="hidden" name="items_view" value="{{ items_view }}">
                           <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
-                          <button type="submit" class="btn btn-sm btn-outline-warning text-nowrap px-2 py-0">Mark incomplete</button>
+                          <button type="submit" class="btn btn-sm btn-outline-warning text-nowrap px-2 py-0" data-automation="statement-row-incomplete">Mark incomplete</button>
                         </form>
                       {% else %}
                         <form method="post" class="d-inline">
@@ -162,7 +164,7 @@
                           <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
                           <input type="hidden" name="items_view" value="{{ items_view }}">
                           <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
-                          <button type="submit" class="btn btn-sm btn-outline-success text-nowrap px-2 py-0">Mark complete</button>
+                          <button type="submit" class="btn btn-sm btn-outline-success text-nowrap px-2 py-0" data-automation="statement-row-complete">Mark complete</button>
                         </form>
                       {% endif %}
                     {% else %}
@@ -209,7 +211,7 @@
           {% endif %}
           <form method="post"action="{{ url_for('delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-outline-danger text-nowrap px-3 py-1">Delete statement</button>
+            <button type="submit" class="btn btn-outline-danger text-nowrap px-3 py-1" data-automation="statement-delete-button">Delete statement</button>
           </form>
         </div>
       </div>

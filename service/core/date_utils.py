@@ -7,8 +7,6 @@ This module supports:
 - Safe coercion when input data is already normalized or partially formatted.
 """
 
-from __future__ import annotations
-
 import calendar
 import re
 from collections import Counter

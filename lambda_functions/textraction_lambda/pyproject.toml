@@ -39,7 +39,6 @@ ignore = [
     "E501",   # Line too long (handled by formatter)
     "B008",   # Do not perform function calls in argument defaults
     "B024",   # Abstract base class without abstract methods (intentional design)
-    "UP006",  # Allow legacy typing.List/Dict/Tuple style annotations
 ]
 
 fixable = ["ALL"]

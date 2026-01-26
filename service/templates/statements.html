@@ -26,7 +26,7 @@
           </a>
         </div>
       </div>
-      <table class="table table-striped table-bordered align-middle statements-table" id="statements-table">
+      <table class="table table-striped table-bordered align-middle statements-table" id="statements-table" data-automation="statements-table">
         <thead class="table-light">
           <tr>
             <th scope="col">Contact Name</th>
@@ -37,14 +37,14 @@
         </thead>
         <tbody>
           {% for stmt in statements %}
-            <tr data-statement-id="{{ stmt['StatementID'] }}" data-contact-name="{{ stmt.get('ContactName') or '' }}">
+            <tr data-statement-id="{{ stmt['StatementID'] }}" data-contact-name="{{ stmt.get('ContactName') or '' }}" data-automation="statement-row">
               <td>{{ stmt.get("ContactName") or "—" }}</td>
               <td>{{ stmt.get("ItemDateRangeDisplay") or "—" }}</td>
               <td>{{ stmt.get("OriginalStatementFilename") or "—" }}</td>
               <td class="text-center">
                 <div class="d-flex justify-content-center gap-2">
                   <a href="{{ url_for('statement', statement_id=stmt['StatementID']) }}"
-                     class="btn btn-sm btn-primary">
+                     class="btn btn-sm btn-primary" data-automation="statement-reconcile-link">
                     Reconcile
                   </a>
                   <form method="post" action="{{ url_for('delete_statement', statement_id=stmt['StatementID']) }}" class="d-inline" onsubmit="return confirm('Delete this statement? This cannot be undone.');">

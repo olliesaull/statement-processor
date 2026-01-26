@@ -50,6 +50,7 @@ make dev
 ```
 
 This executes formatting, and linting. Do not commit or consider work complete until `make dev` passes without errors.
+Run make dev inside either /service or /lambda_functions/textraction_lambda depending on which directory you are working in.
 
 ## Code Style
 

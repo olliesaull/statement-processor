@@ -1,7 +1,5 @@
 """Statement page helpers for Playwright tests."""
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 
@@ -52,9 +50,9 @@ def open_statement_from_list(page: Page, contact_name: str) -> None:
         None.
     """
     for _ in range(20):
-        row = page.locator("tr[data-contact-name]").filter(has_text=contact_name)
+        row = page.locator("tr[data-automation='statement-row']").filter(has_text=contact_name)
         if row.count() > 0:
-            row.get_by_role("link", name="Reconcile").first.click()
+            row.locator("[data-automation='statement-reconcile-link']").first.click()
             return
         page.wait_for_timeout(2_000)
         page.reload()
@@ -72,7 +70,7 @@ def wait_for_statement_table(page: Page) -> None:
     """
     for _ in range(STATEMENT_MAX_REFRESHES):
         try:
-            page.wait_for_selector("#statement-table", timeout=3_000)
+            page.wait_for_selector("[data-automation='statement-table']", timeout=3_000)
             return
         except PlaywrightTimeoutError:
             if page.locator("text=We're still preparing this statement.").count() > 0:
@@ -94,10 +92,9 @@ def upload_statement(page: Page, test_run: StatementFlowRun) -> None:
         None.
     """
     page.goto(f"{test_run.base_url}/upload-statements", wait_until="domcontentloaded")
-    # TODO: Add stable selectors for statement uploads.
-    page.set_input_files("input.statement-file-input", str(test_run.statement_path()))
-    page.fill("input.contact-input", test_run.contact_name)
-    page.get_by_role("button", name="Upload").click()
+    page.set_input_files("[data-automation='statement-upload-file']", str(test_run.statement_path()))
+    page.locator("[data-automation='statement-upload-contact']").fill(test_run.contact_name)
+    page.locator("[data-automation='statement-upload-submit']").click()
     expect(page.get_by_role("alert")).to_contain_text("Uploaded")
 
 
@@ -111,19 +108,21 @@ def delete_statement_if_exists(page: Page, test_run: StatementFlowRun) -> None:
     Returns:
         None.
     """
+    # Deletions can take a moment to reflect back in the statements list (redirect + eventual consistency),
+    # so we retry a few times to make the reset step more reliable.
     for _ in range(3):
         open_statements_page(page, test_run.base_url)
-        row = page.locator("tr[data-contact-name]").filter(has_text=test_run.contact_name)
+        row = page.locator("tr[data-automation='statement-row']").filter(has_text=test_run.contact_name)
         if row.count() == 0:
             return
 
-        row.get_by_role("link", name="Reconcile").first.click()
+        row.locator("[data-automation='statement-reconcile-link']").first.click()
         wait_for_statement_table(page)
 
         page.once("dialog", lambda dialog: dialog.accept())
-        page.get_by_role("button", name="Delete statement").click()
-        # TODO: Confirm the post-delete URL and success messaging.
+        page.locator("[data-automation='statement-delete-button']").click()
         page.wait_for_url("**/statements")
+        page.wait_for_selector("[data-automation='statements-table']")
 
 
 def set_payments_visibility(page: Page, *, show_payments: bool) -> None:
@@ -136,15 +135,16 @@ def set_payments_visibility(page: Page, *, show_payments: bool) -> None:
     Returns:
         None.
     """
-    # TODO: Add stable selectors for the payments toggle.
-    show_link = page.get_by_role("link", name="Show payments")
-    hide_link = page.get_by_role("link", name="Hide payments")
-    if show_payments and show_link.count() > 0:
-        show_link.click()
+    toggle = page.locator("[data-automation='statement-payments-toggle']")
+    if toggle.count() == 0:
+        return
+    label = (toggle.inner_text() or "").strip().lower()
+    if show_payments and "show payments" in label:
+        toggle.click()
         page.wait_for_load_state("networkidle")
         wait_for_statement_table(page)
-    if not show_payments and hide_link.count() > 0:
-        hide_link.click()
+    if not show_payments and "hide payments" in label:
+        toggle.click()
         page.wait_for_load_state("networkidle")
         wait_for_statement_table(page)
 
@@ -158,8 +158,7 @@ def mark_first_incomplete_item(page: Page) -> None:
     Returns:
         None.
     """
-    # TODO: Add stable selectors for status actions.
-    button = page.get_by_role("button", name="Mark complete").first
+    button = page.locator("[data-automation='statement-row-complete']").first
     if button.count() == 0:
         pytest.skip("No incomplete statement rows available to mark complete.")
     button.click()
@@ -179,7 +178,7 @@ def download_excel(page: Page, download_dir: Path) -> Path:
     """
     download_dir.mkdir(parents=True, exist_ok=True)
     with page.expect_download() as download_info:
-        page.get_by_role("link", name="Download Excel").click()
+        page.locator("[data-automation='statement-download-excel']").click()
     download = download_info.value
     target_path = download_dir / download.suggested_filename
     download.save_as(target_path)

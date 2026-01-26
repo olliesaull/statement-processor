@@ -11,3 +11,4 @@
 *.PDF
 .env
 *.json
+*.xlsx

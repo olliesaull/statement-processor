@@ -1,7 +1,5 @@
 """Excel parsing helpers for Playwright tests."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -36,21 +34,19 @@ def _cell_to_text(cell: Cell) -> str:
     return str(cell.value)
 
 
-def read_excel_table(path: Path, *, sheet_name: str | None = None) -> TableData:
+def read_excel_table(path: Path) -> TableData:
     """Read a worksheet into a TableData structure.
 
     Args:
         path: Path to the Excel file.
-        sheet_name: Optional sheet name to read (defaults to active sheet).
 
     Returns:
         TableData containing headers and rows.
     """
     workbook = load_workbook(path, data_only=True)
-    worksheet = workbook[sheet_name] if sheet_name else workbook.active
 
     rows: list[list[str]] = []
-    for row in worksheet.iter_rows():
+    for row in workbook.active.iter_rows():
         values = [_collapse_whitespace(_cell_to_text(cell)) for cell in row]
         if any(values):
             rows.append(values)

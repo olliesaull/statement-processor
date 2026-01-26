@@ -98,13 +98,13 @@
   {% endif %}
 
   <!-- Contact selector -->
-  <form method="POST" action="{{ url_for('configs') }}" class="mb-4 config-load-form" id="config-load-form">
+  <form method="POST" action="{{ url_for('configs') }}" class="mb-4 config-load-form" id="config-load-form" data-automation="config-load-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset class="row gy-2 gx-3 align-items-center">
       <input type="hidden" name="action" value="load">
       <div class="col-auto">
         <label class="visually-hidden" for="contactInput">Contact</label>
-        <input type="text" id="contactInput" name="contact_name" class="form-control config-contact-input"
+        <input type="text" id="contactInput" name="contact_name" class="form-control config-contact-input" data-automation="config-contact-input"
                placeholder="Select contact" list="contacts-list" autocomplete="off"
                value="{{ selected_contact_name or '' }}" style="min-width: 320px;">
         <datalist id="contacts-list">
@@ -114,13 +114,13 @@
         </datalist>
       </div>
       <div class="col-auto">
-        <button type="submit" class="btn btn-primary">Load Config</button>
+        <button type="submit" class="btn btn-primary" data-automation="config-load-button">Load Config</button>
       </div>
     </fieldset>
   </form>
 
   {% if selected_contact_id %}
-  <form method="POST" action="{{ url_for('configs') }}" class="config-save-form" id="config-save-form">
+  <form method="POST" action="{{ url_for('configs') }}" class="config-save-form" id="config-save-form" data-automation="config-save-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset>
     <input type="hidden" name="action" value="save_map">
@@ -157,17 +157,17 @@
               <input type="hidden" name="fields[]" value="{{ field_key }}">
               {% set values = row['values'] or [] %}
               {% if row.is_multi %}
-              <div id="container-{{ field_key }}">
+              <div id="container-{{ field_key }}" data-automation="config-map-{{ field_key }}-container">
                 {% for v in values %}
                 <div class="input-group mb-2">
-                  <input type="text" class="form-control" name="map[{{ field_key }}][]" value="{{ v }}" placeholder="Enter column heading" {% if field_key == 'total' %}required{% endif %}>
+                  <input type="text" class="form-control" name="map[{{ field_key }}][]" value="{{ v }}" placeholder="Enter column heading" data-automation="config-map-{{ field_key }}" {% if field_key == 'total' %}required{% endif %}>
                   <button type="button" class="btn btn-outline-danger" onclick="removeInput(this, '{{ field_key }}')">Remove</button>
                 </div>
                 {% endfor %}
               </div>
-              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addInput('{{ field_key }}')">Add another column</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addInput('{{ field_key }}')" data-automation="config-map-{{ field_key }}-add">Add another column</button>
               {% else %}
-              <input type="text" class="form-control" name="map[{{ field_key }}]" value="{{ values[0] if values else '' }}" placeholder="Enter column heading" {% if field_key == 'number' %}required{% endif %}>
+              <input type="text" class="form-control" name="map[{{ field_key }}]" value="{{ values[0] if values else '' }}" placeholder="Enter column heading" data-automation="config-map-{{ field_key }}" {% if field_key == 'number' %}required{% endif %}>
               {% endif %}
             </td>
           </tr>
@@ -184,7 +184,7 @@
       <div class="row g-3">
         <div class="col-md-6 col-lg-4">
           <label for="dateFormat" class="form-label">Date format</label>
-          <input type="text" id="dateFormat" name="date_format" class="form-control" value="{{ date_format }}" placeholder="e.g. DD/MM/YYYY">
+          <input type="text" id="dateFormat" name="date_format" class="form-control" value="{{ date_format }}" placeholder="e.g. DD/MM/YYYY" data-automation="config-date-format">
           <div class="form-text">{{ field_descriptions.get('date_format') }}</div>
         </div>
         <div class="col-md-6 col-lg-4">
@@ -230,7 +230,7 @@
       </ul>
     </div>
 
-    <button type="submit" class="btn btn-success mb-5 config-save-button" id="config-save-button">Save</button>
+    <button type="submit" class="btn btn-success mb-5 config-save-button" id="config-save-button" data-automation="config-save-button">Save</button>
     </fieldset>
   </form>
   {% endif %}
@@ -245,7 +245,7 @@ function addInput(field) {
   wrapper.className = 'input-group mb-2';
   const requiredAttr = field === "total" ? " required" : "";
   wrapper.innerHTML = `
-    <input type="text" class="form-control" name="map[${field}][]" placeholder="Enter column heading"${requiredAttr}>
+    <input type="text" class="form-control" name="map[${field}][]" placeholder="Enter column heading" data-automation="config-map-${field}"${requiredAttr}>
     <button type="button" class="btn btn-outline-danger" onclick="removeInput(this, '${field}')">Remove</button>
   `;
   container.appendChild(wrapper);

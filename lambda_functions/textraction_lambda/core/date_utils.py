@@ -9,8 +9,6 @@ This module:
 - Summarizes common patterns across samples
 """
 
-from __future__ import annotations
-
 import calendar
 import re
 from collections import Counter

@@ -1,13 +1,10 @@
 """End-to-end statement flow tests."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page, expect
 
-from playwright_tests.helpers.auth import require_test_login_secret, seed_test_login
 from playwright_tests.helpers.configs import configure_contact
 from playwright_tests.helpers.excel import read_excel_table
 from playwright_tests.helpers.runs import StatementFlowRun, load_test_runs
@@ -23,6 +20,7 @@ from playwright_tests.helpers.statements import (
     wait_for_statement_table,
 )
 from playwright_tests.helpers.tables import assert_table_equal, column_index, extract_statement_table, normalize_table_data
+from playwright_tests.helpers.xero_login import ensure_xero_login
 
 TEST_RUNS = load_test_runs()
 
@@ -54,9 +52,8 @@ def _prepare_statement(page: Page, test_run: StatementFlowRun) -> None:
     Returns:
         None.
     """
-    login_secret = require_test_login_secret()
     require_statement_file(test_run)
-    seed_test_login(page.context, test_run, login_secret)
+    ensure_xero_login(page, base_url=test_run.base_url, tenant_id=test_run.tenant_id, tenant_name=test_run.tenant_name)
 
     delete_statement_if_exists(page, test_run)
     configure_contact(page, test_run)

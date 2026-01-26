@@ -9,8 +9,6 @@ The classifier uses:
 It is intentionally best-effort and falls back to a default type when evidence is weak.
 """
 
-from __future__ import annotations
-
 import difflib
 import re
 from collections.abc import Iterable, Sequence

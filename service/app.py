@@ -12,7 +12,7 @@ from typing import Any
 import requests
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
-from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from flask_caching import Cache
 from flask_session import Session
 from flask_wtf.csrf import CSRFProtect
@@ -100,8 +100,6 @@ DECIMAL_SEPARATOR_OPTIONS = [(".", "Dot (.)"), (",", "Comma (,)")]
 THOUSANDS_SEPARATOR_OPTIONS = [("", "None"), (",", "Comma (,)"), (".", "Dot (.)"), (" ", "Space ( )"), ("'", "Apostrophe (')")]
 DECIMAL_SEPARATOR_VALUES = {opt[0] for opt in DECIMAL_SEPARATOR_OPTIONS}
 THOUSANDS_SEPARATOR_VALUES = {opt[0] for opt in THOUSANDS_SEPARATOR_OPTIONS}
-TEST_LOGIN_SECRET_ENV = "TEST_LOGIN_SECRET"
-TEST_LOGIN_HEADER = "X-Test-Auth"
 _ITEM_TYPE_LABELS: dict[str, str] = {"credit_note": "CRN", "invoice": "INV", "payment": "PMT"}
 
 
@@ -1537,52 +1535,6 @@ def configs():
     )
 
     return render_template("configs.html", **context)
-
-
-@app.route("/test-login", methods=["POST"])
-@csrf.exempt
-@route_handler_logging
-def test_login() -> Response:
-    """Seed a session with a test Xero login.
-
-    Args:
-        None.
-
-    Returns:
-        JSON response confirming the seeded tenant.
-    """
-    test_secret = (os.getenv(TEST_LOGIN_SECRET_ENV)).strip()
-    if STAGE == "prod" or not test_secret:
-        abort(404)
-
-    header_secret = (request.headers.get(TEST_LOGIN_HEADER)).strip()
-    if header_secret != test_secret:
-        abort(403)
-
-    payload = request.get_json(silent=True) or {}
-    tenant_id = (payload.get("tenant_id") or request.values.get("tenant_id")).strip()
-    tenant_name = (payload.get("tenant_name") or request.values.get("tenant_name")).strip()
-    if not tenant_id:
-        response = jsonify({"error": "tenant_id required"})
-        response.status_code = 400
-        return response
-
-    expires_at = datetime.now().timestamp() + 3600
-    session["xero_oauth2_token"] = {
-        "access_token": "test-access-token",
-        "refresh_token": "test-refresh-token",
-        "expires_in": 3600,
-        "expires_at": expires_at,
-        "token_type": "Bearer",
-        "scope": "test",
-        "id_token": "test-id-token",
-    }
-    session["access_token"] = session["xero_oauth2_token"]["access_token"]
-    session["xero_tenant_id"] = tenant_id
-    session["xero_tenant_name"] = tenant_name
-    session["xero_tenants"] = [{"tenantId": tenant_id, "tenantName": tenant_name, "tenantType": "ORGANISATION"}]
-
-    return jsonify({"tenant_id": tenant_id, "tenant_name": tenant_name})
 
 
 @app.route("/login")

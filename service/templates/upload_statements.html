@@ -33,11 +33,11 @@
         <tbody id="rows">
           <tr>
             <td>
-              <input type="file" name="statements" class="form-control statement-file-input" accept="application/pdf,.pdf" required>
+              <input type="file" name="statements" class="form-control statement-file-input" accept="application/pdf,.pdf" data-automation="statement-upload-file" required>
             </td>
             <td>
               <input type="text" name="contact_names" class="form-control contact-input" placeholder="Select contact"
-                list="contacts-list" autocomplete="off" required>
+                list="contacts-list" autocomplete="off" data-automation="statement-upload-contact" required>
             </td>
             <td class="text-end">
               <button type="button" class="btn btn-outline-danger btn-sm remove-row"
@@ -55,8 +55,8 @@
       </datalist>
 
       <div class="d-flex gap-2">
-        <button id="add-row" type="button" class="btn btn-outline-secondary">Add statement</button>
-        <button type="submit" class="btn btn-primary">Upload</button>
+        <button id="add-row" type="button" class="btn btn-outline-secondary" data-automation="statement-upload-add">Add statement</button>
+        <button type="submit" class="btn btn-primary" data-automation="statement-upload-submit">Upload</button>
       </div>
     </fieldset>
   </form>
@@ -75,6 +75,7 @@
                  name="statements"
                  class="form-control statement-file-input"
                  accept="application/pdf,.pdf"
+                 data-automation="statement-upload-file"
                  required>
         </td>
         <td>
@@ -84,6 +85,7 @@
                  placeholder="Select contact"
                  list="contacts-list"
                  autocomplete="off"
+                 data-automation="statement-upload-contact"
                  required>
         </td>
         <td class="text-end">

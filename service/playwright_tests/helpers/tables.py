@@ -1,7 +1,5 @@
 """Table extraction and comparison helpers."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from playwright.sync_api import Page

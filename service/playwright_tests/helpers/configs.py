@@ -1,7 +1,5 @@
 """Configuration page helpers for Playwright tests."""
 
-from __future__ import annotations
-
 from playwright.sync_api import Page, expect
 
 from playwright_tests.helpers.runs import StatementFlowRun
@@ -30,10 +28,9 @@ def load_contact_config(page: Page, contact_name: str) -> None:
     Returns:
         None.
     """
-    # TODO: Replace selector IDs with stable data-automation attributes.
-    page.fill("#contactInput", contact_name)
-    page.get_by_role("button", name="Load Config").click()
-    page.wait_for_selector("#config-save-form")
+    page.locator("[data-automation='config-contact-input']").fill(contact_name)
+    page.locator("[data-automation='config-load-button']").click()
+    page.wait_for_selector("[data-automation='config-save-form']")
 
 
 def _fill_total_columns(page: Page, total_columns: list[str]) -> None:
@@ -46,13 +43,12 @@ def _fill_total_columns(page: Page, total_columns: list[str]) -> None:
     Returns:
         None.
     """
-    total_row = page.locator("tr:has(input[name='map[total][]'])")
-    add_button = total_row.get_by_role("button", name="Add another column")
-    container = page.locator("#container-total")
-    inputs = container.locator("input[name='map[total][]']")
+    add_button = page.locator("[data-automation='config-map-total-add']")
+    container = page.locator("[data-automation='config-map-total-container']")
+    inputs = container.locator("[data-automation='config-map-total']")
     for _ in range(max(len(total_columns) - inputs.count(), 0)):
         add_button.click()
-    inputs = container.locator("input[name='map[total][]']")
+    inputs = container.locator("[data-automation='config-map-total']")
     for idx, value in enumerate(total_columns):
         inputs.nth(idx).fill(value)
 
@@ -67,10 +63,10 @@ def update_contact_mapping(page: Page, test_run: StatementFlowRun) -> None:
     Returns:
         None.
     """
-    page.fill('input[name="map[number]"]', test_run.number_column)
-    page.fill('input[name="map[date]"]', test_run.date_column)
+    page.locator("[data-automation='config-map-number']").fill(test_run.number_column)
+    page.locator("[data-automation='config-map-date']").fill(test_run.date_column)
     _fill_total_columns(page, test_run.total_column)
-    page.fill("#dateFormat", test_run.date_format)
+    page.locator("[data-automation='config-date-format']").fill(test_run.date_format)
 
 
 def save_contact_config(page: Page) -> None:
@@ -82,7 +78,7 @@ def save_contact_config(page: Page) -> None:
     Returns:
         None.
     """
-    page.locator("#config-save-button").click()
+    page.locator("[data-automation='config-save-button']").click()
     expect(page.get_by_role("alert")).to_contain_text("Config updated successfully.")
 
 

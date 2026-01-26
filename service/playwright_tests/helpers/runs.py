@@ -1,7 +1,5 @@
 """Models and loaders for Playwright statement test runs."""
 
-from __future__ import annotations
-
 import json
 import os
 from pathlib import Path
@@ -34,7 +32,6 @@ class StatementFlowRun(BaseModel):
         date_format: Date format string for statement parsing.
         statement_filename: PDF filename stored in the statements directory.
         expected_excel_filename: Baseline Excel filename under fixtures/expected.
-        expected_excel_sheet: Optional worksheet name in the baseline Excel file.
         expected_table_text: Optional substrings to assert in the statement table.
     """
 
@@ -48,7 +45,6 @@ class StatementFlowRun(BaseModel):
     date_format: str = "DD/MM/YYYY"
     statement_filename: str
     expected_excel_filename: str | None = None
-    expected_excel_sheet: str | None = None
     expected_table_text: list[str] = Field(default_factory=list)
 
     @field_validator("statement_filename")
