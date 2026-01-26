@@ -13,7 +13,7 @@ Structure
 Setup
 -----
 1) Update `playwright_tests/fixtures/test_runs.json` with one or more runs.
-2) Put statement PDFs in `/statements` (or set `PLAYWRIGHT_STATEMENTS_DIR`).
+2) Put statement PDFs in `./statements`.
 3) Drop baseline Excel exports in `playwright_tests/fixtures/expected/` and reference them via `expected_excel_filename`.
 4) Set `XERO_EMAIL` and be ready to type it when prompted.
 5) Start the Flask app locally.

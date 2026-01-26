@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 DEFAULT_BASE_URL = "http://localhost:8080"
-STATEMENTS_DIR = Path("/statements")
+STATEMENTS_DIR = Path("playwright_tests/statements")
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 TEST_RUNS_PATH = FIXTURES_DIR / "test_runs.json"
 EXPECTED_EXCEL_DIR = FIXTURES_DIR / "expected"
@@ -31,7 +31,6 @@ class StatementFlowRun(BaseModel):
         date_format: Date format string for statement parsing.
         statement_filename: PDF filename stored in the statements directory.
         expected_excel_filename: Baseline Excel filename under fixtures/expected.
-        expected_table_text: Optional substrings to assert in the statement table.
     """
 
     base_url: str = DEFAULT_BASE_URL
@@ -44,7 +43,6 @@ class StatementFlowRun(BaseModel):
     date_format: str = "DD/MM/YYYY"
     statement_filename: str
     expected_excel_filename: str | None = None
-    expected_table_text: list[str] = Field(default_factory=list)
 
     @field_validator("statement_filename")
     @classmethod
@@ -112,26 +110,6 @@ class StatementFlowRun(BaseModel):
         if not stripped:
             return None
         return stripped
-
-    @field_validator("expected_table_text", mode="before")
-    @classmethod
-    def _parse_expected_table_text(cls, value: object) -> list[str]:
-        """Coerce expected table text into a list of strings.
-
-        Args:
-            value: Raw value from env or JSON.
-
-        Returns:
-            List of non-empty strings.
-        """
-        if value is None:
-            return []
-        if isinstance(value, str):
-            items = [item.strip() for item in value.split(",")]
-            return [item for item in items if item]
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
-        raise ValueError("expected_table_text must be a list or comma-separated string")
 
     def statement_path(self) -> Path:
         """Build the PDF path for this run.

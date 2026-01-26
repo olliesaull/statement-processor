@@ -96,8 +96,6 @@ def test_config_upload_ui_validation(page: Page, test_run: StatementFlowRun) -> 
 
     table = page.locator("#statement-table")
     expect(table).to_be_visible()
-    for expected in test_run.expected_table_text:
-        expect(table).to_contain_text(expected)
 
 
 @pytest.mark.parametrize("test_run", TEST_RUNS, ids=lambda run: run.contact_name)

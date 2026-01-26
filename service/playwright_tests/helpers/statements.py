@@ -21,8 +21,9 @@ def require_statement_file(test_run: StatementFlowRun) -> None:
     Returns:
         None.
     """
-    if not test_run.statement_path().exists():
-        pytest.skip(f"{test_run.statement_filename} not found in {test_run.statement_path().parent}.")
+    statement_path = test_run.statement_path()
+    if not statement_path.exists():
+        pytest.skip(f"Missing statement PDF: {statement_path}")
 
 
 def open_statements_page(page: Page, base_url: str) -> None:

@@ -3,6 +3,7 @@
 import os
 from dataclasses import dataclass
 from getpass import getpass
+from pathlib import Path
 
 import pytest
 from playwright.sync_api import Locator, Page
@@ -10,9 +11,9 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from playwright_tests.helpers.logging import log_step
 
-DEFAULT_LOGIN_TIMEOUT_SECONDS = 180
-LOGIN_TIMEOUT_ENV = "PLAYWRIGHT_XERO_LOGIN_TIMEOUT_SECONDS"
-XERO_EMAIL_ENV = "XERO_EMAIL"
+LOGIN_TIMEOUT_SECONDS = 180
+XERO_EMAIL_ENV = "PLAYWRIGHT_XERO_EMAIL"
+STORAGE_STATE_PATH = Path(__file__).resolve().parents[2] / "instance" / "xero_storage_state.json"
 
 
 @dataclass(frozen=True)
@@ -31,19 +32,18 @@ class XeroCredentials:
     password: str
 
 
-def _login_timeout_ms() -> int:
-    """Return the login timeout in milliseconds.
+def _persist_storage_state(page: Page) -> None:
+    """Persist the browser storage state to disk.
+
+    Args:
+        page: Playwright page with the authenticated browser context.
 
     Returns:
-        Timeout in milliseconds for login waits.
+        None.
     """
-    raw_value = os.getenv(LOGIN_TIMEOUT_ENV, "").strip()
-    if not raw_value:
-        return DEFAULT_LOGIN_TIMEOUT_SECONDS * 1000
-    try:
-        return int(float(raw_value) * 1000)
-    except ValueError as exc:
-        raise ValueError(f"{LOGIN_TIMEOUT_ENV} must be a number of seconds") from exc
+    STORAGE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    page.context.storage_state(path=str(STORAGE_STATE_PATH))
+    log_step("xero-login", f"Saved browser auth state to {STORAGE_STATE_PATH}.")
 
 
 def load_xero_credentials() -> XeroCredentials:
@@ -99,7 +99,7 @@ def _submit_login_form(page: Page, credentials: XeroCredentials) -> bool:
         continue_button = _first_visible(page, ["button:has-text('Next')", "button:has-text('Continue')", "#xl-form-continue"])
         if continue_button:
             continue_button.click()
-            page.wait_for_selector("input[type='password']", timeout=_login_timeout_ms())
+            page.wait_for_selector("input[type='password']", timeout=LOGIN_TIMEOUT_SECONDS)
             password_locator = _first_visible(page, ["#xl-form-password", "input[name='password']", "input[type='password']"])
 
     if not password_locator:
@@ -129,7 +129,7 @@ def _approve_connection(page: Page, *, base_url: str) -> None:
     log_step("xero-login", "Checking for Xero connection approval prompt.")
     approve_button = page.locator("#approveButton")
     try:
-        approve_button.wait_for(state="visible", timeout=_login_timeout_ms())
+        approve_button.wait_for(state="visible", timeout=LOGIN_TIMEOUT_SECONDS)
         approve_button.click()
         return
     except PlaywrightTimeoutError:
@@ -140,7 +140,7 @@ def _approve_connection(page: Page, *, base_url: str) -> None:
         allow_button.click()
         return
 
-    page.wait_for_url(f"{base_url.rstrip('/')}/**", timeout=_login_timeout_ms())
+    page.wait_for_url(f"{base_url.rstrip('/')}/**", timeout=LOGIN_TIMEOUT_SECONDS)
 
 
 def _ensure_active_tenant(page: Page, *, base_url: str, tenant_id: str, tenant_name: str | None) -> None:
@@ -174,7 +174,7 @@ def _ensure_active_tenant(page: Page, *, base_url: str, tenant_id: str, tenant_n
 
     switch_button.first.click()
     page.wait_for_load_state("networkidle")
-    row.locator("text=Current Tenant").wait_for(timeout=_login_timeout_ms())
+    row.locator("text=Current Tenant").wait_for(timeout=LOGIN_TIMEOUT_SECONDS)
 
 
 def ensure_xero_login(page: Page, *, base_url: str, tenant_id: str, tenant_name: str | None = None) -> None:
@@ -192,7 +192,7 @@ def ensure_xero_login(page: Page, *, base_url: str, tenant_id: str, tenant_name:
     log_step("xero-login", "Starting Xero OAuth login flow.")
     page.goto(f"{base_url.rstrip('/')}/login", wait_until="domcontentloaded")
     try:
-        page.wait_for_url("**xero.com/**", timeout=_login_timeout_ms())
+        page.wait_for_url("**xero.com/**", timeout=LOGIN_TIMEOUT_SECONDS)
     except PlaywrightTimeoutError:
         if page.url.startswith(base_url.rstrip("/")):
             log_step("xero-login", "Already authenticated; skipping login form.")
@@ -207,5 +207,6 @@ def ensure_xero_login(page: Page, *, base_url: str, tenant_id: str, tenant_name:
 
     _approve_connection(page, base_url=base_url)
     log_step("xero-login", "Waiting for redirect back to the app.")
-    page.wait_for_url(f"{base_url.rstrip('/')}/**", timeout=_login_timeout_ms())
+    page.wait_for_url(f"{base_url.rstrip('/')}/**", timeout=LOGIN_TIMEOUT_SECONDS)
     _ensure_active_tenant(page, base_url=base_url, tenant_id=tenant_id, tenant_name=tenant_name)
+    _persist_storage_state(page)
