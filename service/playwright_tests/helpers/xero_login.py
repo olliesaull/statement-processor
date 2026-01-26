@@ -8,9 +8,11 @@ import pytest
 from playwright.sync_api import Locator, Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
+from playwright_tests.helpers.logging import log_step
+
 DEFAULT_LOGIN_TIMEOUT_SECONDS = 180
 LOGIN_TIMEOUT_ENV = "PLAYWRIGHT_XERO_LOGIN_TIMEOUT_SECONDS"
-XERO_EMAIL_ENV = "PLAYWRIGHT_XERO_EMAIL"
+XERO_EMAIL_ENV = "XERO_EMAIL"
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,7 @@ def _submit_login_form(page: Page, credentials: XeroCredentials) -> bool:
     Returns:
         True when a login form was submitted.
     """
+    log_step("xero-login", "Submitting Xero login form.")
     email_locator = _first_visible(page, ["#xl-form-email", "input[name='email']", "input[type='email']"])
     if not email_locator:
         return False
@@ -123,10 +126,10 @@ def _approve_connection(page: Page, *, base_url: str) -> None:
     Returns:
         None.
     """
-    timeout_ms = _login_timeout_ms()
+    log_step("xero-login", "Checking for Xero connection approval prompt.")
     approve_button = page.locator("#approveButton")
     try:
-        approve_button.wait_for(state="visible", timeout=timeout_ms)
+        approve_button.wait_for(state="visible", timeout=_login_timeout_ms())
         approve_button.click()
         return
     except PlaywrightTimeoutError:
@@ -137,7 +140,7 @@ def _approve_connection(page: Page, *, base_url: str) -> None:
         allow_button.click()
         return
 
-    page.wait_for_url(f"{base_url.rstrip('/')}/**", timeout=timeout_ms)
+    page.wait_for_url(f"{base_url.rstrip('/')}/**", timeout=_login_timeout_ms())
 
 
 def _ensure_active_tenant(page: Page, *, base_url: str, tenant_id: str, tenant_name: str | None) -> None:
@@ -152,6 +155,7 @@ def _ensure_active_tenant(page: Page, *, base_url: str, tenant_id: str, tenant_n
     Returns:
         None.
     """
+    log_step("xero-login", f"Ensuring tenant is active: {tenant_name or tenant_id}.")
     page.goto(f"{base_url.rstrip('/')}/tenant_management", wait_until="domcontentloaded")
 
     row = page.locator(f"#row-{tenant_id}")
@@ -161,6 +165,7 @@ def _ensure_active_tenant(page: Page, *, base_url: str, tenant_id: str, tenant_n
         raise AssertionError(f"Tenant {tenant_id} was not found on the tenant management page.")
 
     if row.locator("text=Current Tenant").count() > 0:
+        log_step("xero-login", "Tenant already active.")
         return
 
     switch_button = row.get_by_role("button", name="Switch to Tenant")
@@ -184,19 +189,23 @@ def ensure_xero_login(page: Page, *, base_url: str, tenant_id: str, tenant_name:
     Returns:
         None.
     """
+    log_step("xero-login", "Starting Xero OAuth login flow.")
     page.goto(f"{base_url.rstrip('/')}/login", wait_until="domcontentloaded")
     try:
         page.wait_for_url("**xero.com/**", timeout=_login_timeout_ms())
     except PlaywrightTimeoutError:
         if page.url.startswith(base_url.rstrip("/")):
+            log_step("xero-login", "Already authenticated; skipping login form.")
             _ensure_active_tenant(page, base_url=base_url, tenant_id=tenant_id, tenant_name=tenant_name)
             return
         raise
 
     if _first_visible(page, ["#xl-form-email", "input[name='email']", "input[type='email']"]):
+        log_step("xero-login", "Xero login form detected; collecting credentials.")
         credentials = load_xero_credentials()
         _submit_login_form(page, credentials)
 
     _approve_connection(page, base_url=base_url)
+    log_step("xero-login", "Waiting for redirect back to the app.")
     page.wait_for_url(f"{base_url.rstrip('/')}/**", timeout=_login_timeout_ms())
     _ensure_active_tenant(page, base_url=base_url, tenant_id=tenant_id, tenant_name=tenant_name)

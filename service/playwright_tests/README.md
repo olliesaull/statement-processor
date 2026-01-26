@@ -15,22 +15,19 @@ Setup
 1) Update `playwright_tests/fixtures/test_runs.json` with one or more runs.
 2) Put statement PDFs in `/statements` (or set `PLAYWRIGHT_STATEMENTS_DIR`).
 3) Drop baseline Excel exports in `playwright_tests/fixtures/expected/` and reference them via `expected_excel_filename`.
-4) Set `PLAYWRIGHT_XERO_EMAIL` and be ready to type it when prompted.
-5) Start the Flask app locally (default base URL is `http://localhost:8080`).
+4) Set `XERO_EMAIL` and be ready to type it when prompted.
+5) Start the Flask app locally.
 6) Install Playwright browsers:
    - `python3.13 -m playwright install`
 
 Optional environment variables
 ------------------------------
-- `PLAYWRIGHT_BASE_URL` (default `http://localhost:8080`)
-- `PLAYWRIGHT_STATEMENTS_DIR` (default `/statements`)
-- `PLAYWRIGHT_XERO_EMAIL`, `PLAYWRIGHT_XERO_PASSWORD`
-- `PLAYWRIGHT_XERO_LOGIN_TIMEOUT_SECONDS` (default 180)
-- `PLAYWRIGHT_STATEMENT_WAIT_SECONDS`, `PLAYWRIGHT_STATEMENT_MAX_REFRESHES`
+- `XERO_EMAIL`
 
 Run
 ---
-`python3.13 -m pytest playwright_tests/tests/e2e/test_statement_flow.py --headed`
+`python3.13 -m pytest -vv -s --tb=long playwright_tests/tests/e2e/test_statement_flow.py --headed`
+
 
 Notes
 -----

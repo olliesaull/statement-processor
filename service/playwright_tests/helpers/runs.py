@@ -1,7 +1,6 @@
 """Models and loaders for Playwright statement test runs."""
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +8,7 @@ import pytest
 from pydantic import BaseModel, Field, field_validator
 
 DEFAULT_BASE_URL = "http://localhost:8080"
-STATEMENTS_DIR = Path(os.getenv("PLAYWRIGHT_STATEMENTS_DIR", "/statements"))
+STATEMENTS_DIR = Path("/statements")
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 TEST_RUNS_PATH = FIXTURES_DIR / "test_runs.json"
 EXPECTED_EXCEL_DIR = FIXTURES_DIR / "expected"

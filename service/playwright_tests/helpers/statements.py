@@ -1,6 +1,5 @@
 """Statement page helpers for Playwright tests."""
 
-import os
 from pathlib import Path
 
 import pytest
@@ -9,8 +8,8 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from playwright_tests.helpers.runs import StatementFlowRun
 
-STATEMENT_WAIT_SECONDS = float(os.getenv("PLAYWRIGHT_STATEMENT_WAIT_SECONDS", "5"))
-STATEMENT_MAX_REFRESHES = int(os.getenv("PLAYWRIGHT_STATEMENT_MAX_REFRESHES", "30"))
+STATEMENT_WAIT_SECONDS = float(5)
+STATEMENT_MAX_REFRESHES = 30
 
 
 def require_statement_file(test_run: StatementFlowRun) -> None:
