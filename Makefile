@@ -3,7 +3,7 @@
 # Runs tooling in the current directory so symlinked copies behave locally.
 #
 
-.PHONY: help rebuild-venvs update-venvs format lint type-check security vulture clean
+.PHONY: help rebuild-venvs update-venvs format lint type-check security vulture test clean
 
 # Common exclusions for Python tooling.
 PY_EXCLUDES := -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/__pycache__/*'
@@ -30,9 +30,12 @@ help:
 	@echo "🔒 Security:"
 	@printf "  %-16s %s\n" "security" "Run Bandit security scanner"
 	@echo ""
+	@echo "🧪 Testing:"
+	@printf "  %-16s %s\n" "test" "Run unit tests in ./tests (excludes Playwright)"
+	@echo ""
 	@echo "🧹 Cleanup:"
 	@printf "  %-16s %s\n" "clean" "Remove Python caches and build artifacts"
-	@printf "  %-16s %s\n" "dev" "Run format, lint, type-check, security"
+	@printf "  %-16s %s\n" "dev" "Run format, lint, type-check, test, security"
 	@echo ""
 	@echo "Quick: make dev"
 
@@ -72,6 +75,11 @@ security:
 	@echo "🔒 Running security scan with Bandit..."
 	@bash -c "source venv/bin/activate && $(PY_FIND) | xargs bandit -ll -q 2>/dev/null || true"
 
+# Unit tests (non-Playwright only).
+test:
+	@echo "🧪 Running unit tests..."
+	@bash -c "source venv/bin/activate && python3.13 -m pytest tests 2>/dev/null || true"
+
 # Clean common Python caches and generated files.
 clean:
 	@echo "🧹 Cleaning generated files..."
@@ -84,5 +92,5 @@ clean:
 	@echo "✅ Cleanup complete"
 
 # Development workflow
-dev: format lint type-check security
+dev: format lint type-check test security
 	@echo "✅ Development checks complete!"

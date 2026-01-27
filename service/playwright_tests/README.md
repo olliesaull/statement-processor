@@ -1,17 +1,19 @@
-Playwright end-to-end tests
-===========================
+# Playwright end-to-end tests
 
 These tests exercise the full workflow: login via Xero OAuth, configure a contact mapping, upload a statement PDF, validate the statement table, and validate Excel exports.
 
-Structure
----------
+## Structure
 - `playwright_tests/helpers/`: reusable actions (login, config, table parsing, Excel parsing).
 - `playwright_tests/tests/e2e/test_statement_flow.py`: end-to-end flows.
 - `playwright_tests/fixtures/test_runs.json`: per-run config.
 - `playwright_tests/fixtures/expected/`: baseline Excel exports.
 
-Setup
------
+## Tests
+- `test_config_upload_ui_validation`: Validates the statement table UI against the expected Excel baseline for each configured run.
+- `test_ui_actions_excel_export_validation`: Exercises UI actions (complete an item, show payments) and asserts the Excel export reflects the changes.
+- `test_tenant_switching_updates_contacts`: Switches tenants and verifies the active badge and contact list update accordingly.
+
+## Setup
 1) Update `playwright_tests/fixtures/test_runs.json` with one or more runs.
 2) Put statement PDFs in `./statements`.
 3) Drop baseline Excel exports in `playwright_tests/fixtures/expected/` and reference them via `expected_excel_filename`.
@@ -20,18 +22,16 @@ Setup
 6) Install Playwright browsers:
    - `python3.13 -m playwright install`
 
-Optional environment variables
-------------------------------
+## Optional environment variables
 - `XERO_EMAIL`
 
-Run
----
-All tests - `python3.13 -m pytest -vv -s --tb=long playwright_tests/tests/e2e/test_statement_flow.py --headed`
-Specficic tests - `python3.13 -m pytest -vv -s --tb=long playwright_tests/tests/e2e/test_statement_flow.py::test_tenant_switching_updates_contacts --headed`
+## Running tests
+
+- All tests: `python3.13 -m pytest -vv -s --tb=long playwright_tests/tests/e2e/test_statement_flow.py --headed`
+- Specific test: `python3.13 -m pytest -vv -s --tb=long playwright_tests/tests/e2e/test_statement_flow.py::test_tenant_switching_updates_contacts --headed`
 
 
-Notes
------
+## Notes
 - The tests upload a file by path (no OS file picker), so they work from WSL without opening files on the host.
 - The statements view uses cached datasets; ensure the contact exists in cached contacts for the chosen tenant.
 - Tests delete any existing statement for the contact to reset state between runs.
