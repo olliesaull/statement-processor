@@ -28,14 +28,40 @@ This directory contains unit tests that are not UI/end-to-end Playwright tests. 
   - Payment wins when "payment" and "credit note" are both present.
   - Compound text like "CreditNote123" should still match credit-note synonyms.
 
+### Formatting utilities
+
+- Date formatting (contact config)
+  - Configured templates are returned and used for display formatting.
+  - ISO inputs are reformatted to the configured template.
+  - Unparseable inputs are preserved.
+  - Ordinal days (e.g. `1st Jan 2024`) are supported when configured.
+  - Full month names (e.g. `March 5 2024`) are supported when configured.
+  - Two-digit year templates preserve the `YY` output format.
+  - Missing date formats fall back to ISO output.
+
+- Number formatting (contact config)
+  - EU separators (e.g. `1.234,50`) are parsed and formatted correctly.
+  - Space thousands separators (e.g. `1 234.5`) are parsed and formatted correctly.
+  - Invalid config separators fall back to defaults.
+  - Mismatched statement separators remain unchanged (documented current behavior).
+  - Empty and None values render as blank strings.
+  - Non-numeric placeholders (e.g. `N/A`) are preserved.
+
 ## Structure
 
 ```
 tests/
+  conftest.py
   __init__.py
   test_item_classification.py
+  test_statement_view_formatting.py
   README.md
 ```
+
+## Test setup
+
+- `tests/conftest.py` stubs the `config` module logger so importing helpers does not hit AWS SSM.
+  This keeps unit tests fast and offline-friendly while still allowing structured log kwargs.
 
 ## Running tests
 

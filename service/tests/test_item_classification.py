@@ -3,17 +3,7 @@ Unit tests for statement item classification heuristics.
 Grouped by heuristic category to keep future additions organized.
 """
 
-import logging
-import sys
-import types
-
-# The classifier imports the global config module for logging, which triggers
-# AWS SSM lookups on import (does not work for agents). Stub it so unit tests stay fast and offline.
-fake_config = types.ModuleType("config")
-fake_config.logger = logging.getLogger("statement-processor.tests")
-sys.modules["config"] = fake_config
-
-from core.item_classification import guess_statement_item_type  # noqa: E402
+from core.item_classification import guess_statement_item_type
 
 
 # region Amount-based hints

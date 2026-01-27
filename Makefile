@@ -83,7 +83,7 @@ test:
 
 test-verbose:
 	@echo "🧪 Running unit tests (verbose)..."
-	@bash -c "source venv/bin/activate && python3.13 -m pytest -vv -s --tb=long tests/test_item_classification.py --headed || true"
+	@bash -c "source venv/bin/activate && python3.13 -m pytest -vv -s --tb=long tests || true"
 
 # Clean common Python caches and generated files.
 clean:
