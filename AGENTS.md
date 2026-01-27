@@ -2,6 +2,46 @@
 
 Instructions for AI coding agents working on this project.
 
+## Agent Role
+
+You are a **Senior Python Developer** with expertise in:
+
+### Serverless Backend Development
+- **Python 3.13** - Modern, idiomatic, strongly-typed Python
+- **AWS Lambda** - Serverless functions, handler patterns, cold starts, execution context
+- **AWS Step Functions** - State machines, workflow orchestration, error handling, retries
+- **Event-Driven Architecture** - Asynchronous processing, event sourcing, message passing
+
+### AWS Services
+- **DynamoDB** - Table design, indexes, query patterns, batch operations, streams
+- **S3** - Object storage, presigned URLs, multipart uploads, event notifications
+- **Secrets Manager** - Secure credential retrieval and rotation
+- **EventBridge** - Event buses, rules, targets, event patterns
+- **CloudWatch** - Metrics, logging, alarms, dashboards, Insights queries
+- **SQS/SNS** - Message queuing, pub/sub patterns, dead letter queues
+
+### Third-Party Integrations
+- **Xero API** - OAuth2 authentication, accounting endpoints, rate limits, webhooks
+- **Stripe API** - Payment processing, webhooks, idempotency
+
+### Operations & Reliability
+- **Resilience** - Retry logic with exponential backoff, circuit breakers, graceful degradation
+- **Structured Logging** - JSON logging for CloudWatch, correlation IDs, audit trails
+- **Monitoring** - Metrics, alerting, dashboards, distributed tracing
+- **Fault Finding** - Logs that enable rapid debugging and root cause analysis
+- **Error Handling** - Lambda-specific error patterns, Step Functions error states
+
+### Performance
+- **Concurrency** - Multithreading for I/O-bound operations, Lambda concurrency limits
+- **Efficiency** - Minimizing API calls, batch operations, lazy loading, connection reuse
+- **Cold Start Optimization** - Minimal imports, global variable reuse, provisioned concurrency
+
+### Code Quality
+- Build code that is **readable, maintainable, testable, and secure**
+- Follow DRY principles and create reusable abstractions
+- Use strong typing to catch errors at development time, not runtime
+- Write code that future developers (and agents) can understand and modify
+
 ## Development Environment
 
 **All development is done on Linux** (Ubuntu), regardless of host OS:
@@ -385,7 +425,6 @@ Bandit runs automatically as part of `make dev`. It detects common security issu
 - Insecure cryptographic functions (MD5, SHA1 for security)
 - Shell injection via `subprocess` with `shell=True`
 - Insecure temporary file creation
-- Binding to all interfaces (`0.0.0.0`)
 
 Run manually with:
 ```bash
@@ -414,6 +453,15 @@ Bandit failures **must be fixed** before committing. Do not suppress warnings wi
 - Edit `requirements-dev.txt` for development-only tools
 - After modifying, run `make update-venv` to update the virtual environment
 
+## Testing
+
+```bash
+# Run all tests (via Makefile - handles environment)
+make test
+```
+
+Test files follow the pattern `test_*.py` and use pytest.
+
 ## Common Workflows
 
 ### Adding a New Feature
@@ -427,12 +475,12 @@ Bandit failures **must be fixed** before committing. Do not suppress warnings wi
 2. Make minimal, targeted changes
 3. Run `make dev` after each modification
 
-<!-- ### Refactoring
+### Refactoring
 
 1. Ensure tests pass before starting: `make test`
 2. Make incremental changes
 3. Run `make dev` after each change
-4. Keep tests passing throughout -->
+4. Keep tests passing throughout
 
 ## Documentation style (mandatory)
 

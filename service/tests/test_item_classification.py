@@ -3,11 +3,20 @@ Unit tests for statement item classification heuristics.
 Grouped by heuristic category to keep future additions organized.
 """
 
-from core.item_classification import guess_statement_item_type
+import logging
+import sys
+import types
 
-# Grouped by heuristic category to keep future additions organized.
+# The classifier imports the global config module for logging, which triggers
+# AWS SSM lookups on import (does not work for agents). Stub it so unit tests stay fast and offline.
+fake_config = types.ModuleType("config")
+fake_config.logger = logging.getLogger("statement-processor.tests")
+sys.modules["config"] = fake_config
+
+from core.item_classification import guess_statement_item_type  # noqa: E402
 
 
+# region Amount-based hints
 def test_amount_hint_debit_only_returns_invoice() -> None:
     """Return invoice when only debit totals are present.
 
@@ -92,6 +101,44 @@ def test_amount_hint_credit_only_prefers_payment_when_text_matches() -> None:
     assert result == "payment"
 
 
+def test_amount_hint_credit_only_ignores_invoice_text() -> None:
+    """Ignore invoice text when the amount hint restricts candidates to credit types.
+
+    The classifier narrows candidate types based on credit-only amounts, so even
+    if a row mentions "invoice" the result must stay within credit-related types.
+    This protects us from mismatched wording in payment narratives.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    result = guess_statement_item_type(raw_row={"Description": "Invoice 123"}, total_entries={"Credit": "25"}, contact_config=None)
+    assert result == "payment"
+
+
+def test_amount_hint_both_debit_and_credit_defaults_to_invoice_when_text_missing() -> None:
+    """Default to invoice when both debit and credit are present but text is empty.
+
+    Some statements include both debit and credit columns with sparse row text.
+    With no textual evidence, the classifier should land on the stable default
+    (invoice) to keep UI labeling consistent.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    result = guess_statement_item_type(raw_row={}, total_entries={"Debit": "100", "Credit": "20"}, contact_config=None)
+    assert result == "invoice"
+
+
+# endregion
+
+
+# region Label/format variations
 def test_label_variation_list_totals_credit_label_defaults_to_payment() -> None:
     """Handle list-style totals with credit labels.
 
@@ -107,6 +154,38 @@ def test_label_variation_list_totals_credit_label_defaults_to_payment() -> None:
     total_entries = [{"label": "CR", "value": "50"}]
     result = guess_statement_item_type(raw_row={}, total_entries=total_entries, contact_config=None)
     assert result == "payment"
+
+
+def test_label_variation_parenthetical_credit_value_counts_as_amount() -> None:
+    """Treat parenthetical values as valid credit amounts.
+
+    Statements often show negative credits in parentheses. We need to interpret
+    them as non-zero amounts so credit-only hints still drive classification.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    result = guess_statement_item_type(raw_row={}, total_entries={"Credit": "(10.00)"}, contact_config=None)
+    assert result == "payment"
+
+
+def test_label_variation_debit_value_with_commas_counts_as_amount() -> None:
+    """Parse comma-separated debit values as non-zero amounts.
+
+    OCR extracts totals with separators (e.g., "1,234.50"). We verify that the
+    numeric parser treats these as valid amounts so invoice hints still apply.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    result = guess_statement_item_type(raw_row={}, total_entries={"Debit": "1,234.50"}, contact_config=None)
+    assert result == "invoice"
 
 
 def test_label_variation_raw_row_debit_key_is_respected() -> None:
@@ -144,6 +223,44 @@ def test_label_variation_contact_config_maps_custom_debit_label() -> None:
     assert result == "invoice"
 
 
+# endregion
+
+
+# region Confidence thresholds
+def test_confidence_threshold_payment_wins_when_credit_note_also_present() -> None:
+    """Prefer payment when payment and credit-note signals are equally strong.
+
+    If both "payment" and "credit note" appear in the same row, the heuristic
+    resolves ties by processing payment first. This ensures deterministic output
+    when OCR captures multiple document cues in one description.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    result = guess_statement_item_type(raw_row={"Description": "Payment credit note"}, total_entries={"Credit": "10"}, contact_config=None)
+    assert result == "payment"
+
+
+def test_confidence_threshold_joined_text_matches_credit_note_compound() -> None:
+    """Match compound credit-note text even when tokenization splits words.
+
+    Some rows render as "CreditNote123" with no whitespace. The joined-text
+    matching path should detect "creditnote" as a substring and prefer the
+    credit-note classification over the payment default.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    result = guess_statement_item_type(raw_row={"Description": "CreditNote123"}, total_entries={"Credit": "10"}, contact_config=None)
+    assert result == "credit_note"
+
+
 def test_confidence_threshold_short_credit_token_passes() -> None:
     """Accept short credit-note tokens that clear confidence thresholds.
 
@@ -176,3 +293,6 @@ def test_confidence_threshold_low_score_falls_back_to_default() -> None:
     """
     result = guess_statement_item_type(raw_row={"Reference": "XYZ"}, total_entries={"Credit": "10"}, contact_config=None)
     assert result == "payment"
+
+
+# endregion
