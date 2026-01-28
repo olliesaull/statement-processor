@@ -12,9 +12,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from config import S3_BUCKET_NAME, logger
+from config import S3_BUCKET_NAME
 from core.models import TextractionEvent
 from core.textract_statement import run_textraction
+from logger import logger
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # pylint: disable=unused-argument

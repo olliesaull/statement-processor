@@ -12,7 +12,8 @@ from xero_python.api_client import ApiClient  # type: ignore
 from xero_python.api_client.configuration import Configuration  # type: ignore
 from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 
-from config import CLIENT_ID, CLIENT_SECRET, logger
+from config import CLIENT_ID, CLIENT_SECRET
+from logger import logger
 from tenant_data_repository import TenantStatus
 from utils.tenant_status import get_cached_tenant_status
 

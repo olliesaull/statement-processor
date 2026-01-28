@@ -3,239 +3,208 @@ Unit tests for date and money formatting helpers.
 These focus on how contact configuration drives display formatting.
 """
 
+from dataclasses import dataclass
+
+import pytest
+
 from utils.formatting import format_money
 from utils.statement_view import _format_statement_value, get_date_format_from_config, get_number_separators_from_config
 
-CONTACT_CONFIG_DEFAULT = {"date_format": "DD/MM/YYYY", "decimal_separator": ".", "thousands_separator": ","}
-CONTACT_CONFIG_EU = {"date_format": "DD/MM/YYYY", "decimal_separator": ",", "thousands_separator": "."}
-CONTACT_CONFIG_SPACE = {"date_format": "DD/MM/YYYY", "decimal_separator": ".", "thousands_separator": " "}
-CONTACT_CONFIG_INVALID_SEPARATORS = {"decimal_separator": "|", "thousands_separator": "?"}
-CONTACT_CONFIG_ORDINAL = {"date_format": "Do MMM YYYY", "decimal_separator": ".", "thousands_separator": ","}
-CONTACT_CONFIG_TEXT_MONTH = {"date_format": "MMMM D YYYY", "decimal_separator": ".", "thousands_separator": ","}
-CONTACT_CONFIG_TWO_DIGIT_YEAR = {"date_format": "DD/MM/YY", "decimal_separator": ".", "thousands_separator": ","}
+
+@dataclass(frozen=True)
+class ContactConfig:
+    """
+    Represents contact formatting config inputs for view helper tests.
+
+    This test-only model mirrors the config shape used by the statement view helpers.
+
+    Attributes:
+        date_format: Moment-style date format string.
+        decimal_separator: Decimal separator character.
+        thousands_separator: Thousands separator character.
+    """
+
+    date_format: str | None = None
+    decimal_separator: str | None = None
+    thousands_separator: str | None = None
+
+    def as_dict(self) -> dict[str, str]:
+        """
+        Build a config dict compatible with view helpers.
+
+        Args:
+            None.
+
+        Returns:
+            Config dict with only configured fields.
+        """
+        payload: dict[str, str] = {}
+        if self.date_format is not None:
+            payload["date_format"] = self.date_format
+        if self.decimal_separator is not None:
+            payload["decimal_separator"] = self.decimal_separator
+        if self.thousands_separator is not None:
+            payload["thousands_separator"] = self.thousands_separator
+        return payload
+
+
+@dataclass(frozen=True)
+class DateTemplateCase:
+    """
+    Represents a template extraction case for date format configs.
+
+    This test-only model keeps the date template matrix easy to expand.
+
+    Attributes:
+        name: Human-friendly case id for pytest output.
+        contact_config: Contact config under test.
+        expected: Expected date format template.
+    """
+
+    name: str
+    contact_config: ContactConfig
+    expected: str
+
+
+@dataclass(frozen=True)
+class DateFormatCase:
+    """
+    Represents a date formatting case for statement values.
+
+    This test-only model groups inputs for _format_statement_value calls.
+
+    Attributes:
+        name: Human-friendly case id for pytest output.
+        raw_value: Input statement value.
+        contact_config: Contact config used to derive the date format.
+        expected: Expected formatted output.
+    """
+
+    name: str
+    raw_value: str
+    contact_config: ContactConfig | None
+    expected: str
+
+
+@dataclass(frozen=True)
+class NumberFormatCase:
+    """
+    Represents a number formatting case driven by contact config.
+
+    This test-only model keeps separator-driven cases readable.
+
+    Attributes:
+        name: Human-friendly case id for pytest output.
+        contact_config: Contact config providing separator hints.
+        raw_value: Input numeric string.
+        expected: Expected formatted output.
+    """
+
+    name: str
+    contact_config: ContactConfig
+    raw_value: str
+    expected: str
+
+
+@dataclass(frozen=True)
+class FormatMoneyCase:
+    """
+    Represents a direct format_money passthrough case.
+
+    This test-only model captures the formatter behavior for empty or non-numeric values.
+
+    Attributes:
+        name: Human-friendly case id for pytest output.
+        raw_value: Input value passed directly to format_money.
+        expected: Expected formatted output.
+    """
+
+    name: str
+    raw_value: str | None
+    expected: str
+
+
+CONTACT_CONFIG_DEFAULT = ContactConfig(date_format="DD/MM/YYYY", decimal_separator=".", thousands_separator=",")
+CONTACT_CONFIG_EU = ContactConfig(date_format="DD/MM/YYYY", decimal_separator=",", thousands_separator=".")
+CONTACT_CONFIG_SPACE = ContactConfig(date_format="DD/MM/YYYY", decimal_separator=".", thousands_separator=" ")
+CONTACT_CONFIG_INVALID_SEPARATORS = ContactConfig(decimal_separator="|", thousands_separator="?")
+CONTACT_CONFIG_ORDINAL = ContactConfig(date_format="Do MMM YYYY", decimal_separator=".", thousands_separator=",")
+CONTACT_CONFIG_TEXT_MONTH = ContactConfig(date_format="MMMM D YYYY", decimal_separator=".", thousands_separator=",")
+CONTACT_CONFIG_TWO_DIGIT_YEAR = ContactConfig(date_format="DD/MM/YY", decimal_separator=".", thousands_separator=",")
 
 
 # region Date format (contact config)
-def test_date_format_from_config_returns_template() -> None:
-    """Return the configured date format string from contact config.
-
-    We keep this simple to assert that date formatting tests are driven by the
-    same config shape the app uses, rather than hardcoded templates.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    result = get_date_format_from_config(CONTACT_CONFIG_DEFAULT)
-    assert result == "DD/MM/YYYY"
+_DATE_TEMPLATE_CASES = [
+    # The date helper should return the configured template unchanged.
+    DateTemplateCase(name="default template", contact_config=CONTACT_CONFIG_DEFAULT, expected="DD/MM/YYYY")
+]
 
 
-def test_date_format_formats_iso_when_template_mismatch() -> None:
-    """Reformat ISO dates even when the configured template does not match input.
-
-    Statement uploads often normalize dates to ISO. The display layer should
-    still render according to the contact's configured format when possible.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    result = _format_statement_value("2024-03-01", "date", get_date_format_from_config(CONTACT_CONFIG_DEFAULT), ".", ",")
-    assert result == "01/03/2024"
-
-
-def test_date_format_preserves_unparseable_input() -> None:
-    """Leave values unchanged when they cannot be parsed as dates.
-
-    This guards against corrupting data when an OCR or user-provided value does
-    not match either the configured format or ISO fallbacks.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    raw_value = "not-a-date"
-    result = _format_statement_value(raw_value, "date", get_date_format_from_config(CONTACT_CONFIG_DEFAULT), ".", ",")
-    assert result == raw_value
+_DATE_FORMAT_CASES = [
+    # ISO input should still follow the configured template when possible.
+    DateFormatCase(name="iso to configured format", raw_value="2024-03-01", contact_config=CONTACT_CONFIG_DEFAULT, expected="01/03/2024"),
+    # Unparseable values should be preserved to avoid corrupting data.
+    DateFormatCase(name="preserve unparseable", raw_value="not-a-date", contact_config=CONTACT_CONFIG_DEFAULT, expected="not-a-date"),
+    # Ordinal tokens should round-trip when the template expects them.
+    DateFormatCase(name="ordinal day tokens", raw_value="1st Jan 2024", contact_config=CONTACT_CONFIG_ORDINAL, expected="1st Jan 2024"),
+    # Full month names should be supported by the configured template.
+    DateFormatCase(name="textual months", raw_value="March 5 2024", contact_config=CONTACT_CONFIG_TEXT_MONTH, expected="March 5 2024"),
+    # Two-digit years should stay in their original output form.
+    DateFormatCase(name="two digit year", raw_value="05/03/24", contact_config=CONTACT_CONFIG_TWO_DIGIT_YEAR, expected="05/03/24"),
+    # When no format is configured, keep ISO output.
+    DateFormatCase(name="missing config uses iso", raw_value="2024-03-01", contact_config=None, expected="2024-03-01"),
+]
 
 
-def test_date_format_handles_ordinal_days() -> None:
-    """Format ordinal day inputs when the template uses Do.
-
-    Some suppliers use ordinal day tokens (e.g., "1st"). We validate that the
-    parser accepts them and the formatter preserves the expected output.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    result = _format_statement_value("1st Jan 2024", "date", get_date_format_from_config(CONTACT_CONFIG_ORDINAL), ".", ",")
-    assert result == "1st Jan 2024"
+@pytest.mark.parametrize("case", _DATE_TEMPLATE_CASES, ids=[case.name for case in _DATE_TEMPLATE_CASES])
+def test_date_format_from_config_returns_template(case: DateTemplateCase) -> None:
+    result = get_date_format_from_config(case.contact_config.as_dict())
+    assert result == case.expected
 
 
-def test_date_format_handles_textual_months() -> None:
-    """Format full month names when configured.
-
-    This locks in support for formats like "March 5 2024" so month-name parsing
-    continues to work as templates evolve.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    result = _format_statement_value("March 5 2024", "date", get_date_format_from_config(CONTACT_CONFIG_TEXT_MONTH), ".", ",")
-    assert result == "March 5 2024"
-
-
-def test_date_format_handles_two_digit_years() -> None:
-    """Support two-digit year templates without shifting output format.
-
-    We treat "YY" as 2000-based years for parsing, but when formatting with a
-    two-digit template we should keep the original "YY" output form.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    result = _format_statement_value("05/03/24", "date", get_date_format_from_config(CONTACT_CONFIG_TWO_DIGIT_YEAR), ".", ",")
-    assert result == "05/03/24"
-
-
-def test_date_format_defaults_to_iso_when_config_missing() -> None:
-    """Default to ISO output when no date format is configured.
-
-    The display layer should fall back to the canonical ISO representation when
-    a contact has no configured date format to avoid losing date values.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    result = _format_statement_value("2024-03-01", "date", None, ".", ",")
-    assert result == "2024-03-01"
+@pytest.mark.parametrize("case", _DATE_FORMAT_CASES, ids=[case.name for case in _DATE_FORMAT_CASES])
+def test_date_formatting(case: DateFormatCase) -> None:
+    date_fmt = get_date_format_from_config(case.contact_config.as_dict()) if case.contact_config else None
+    result = _format_statement_value(case.raw_value, "date", date_fmt, ".", ",")
+    assert result == case.expected
 
 
 # endregion
 
 
 # region Number formatting (contact config)
-def test_number_formatting_parses_eu_separators() -> None:
-    """Parse EU-style separators using contact config and format consistently.
-
-    The parser should accept values like "1.234,50" when the config declares
-    comma decimals and dot thousands. Output stays in the standard UI format.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    dec_sep, thou_sep = get_number_separators_from_config(CONTACT_CONFIG_EU)
-    result = format_money("1.234,50", decimal_separator=dec_sep, thousands_separator=thou_sep)
-    assert result == "1,234.50"
+_NUMBER_FORMAT_CASES = [
+    # EU separators should parse and normalize into the default UI format.
+    NumberFormatCase(name="eu separators", contact_config=CONTACT_CONFIG_EU, raw_value="1.234,50", expected="1,234.50"),
+    # Space thousands separators should normalize into standard output.
+    NumberFormatCase(name="space thousands", contact_config=CONTACT_CONFIG_SPACE, raw_value="1 234.5", expected="1,234.50"),
+    # Invalid separator config should fall back to defaults.
+    NumberFormatCase(name="invalid config falls back", contact_config=CONTACT_CONFIG_INVALID_SEPARATORS, raw_value="1234.5", expected="1,234.50"),
+    # Mismatched separator configs should return the original value.
+    NumberFormatCase(name="mismatched separators", contact_config=CONTACT_CONFIG_SPACE, raw_value="1,234.50", expected="1,234.50"),
+]
 
 
-def test_number_formatting_parses_space_thousands_separator() -> None:
-    """Parse space-separated thousands when configured.
-
-    Many statements use spaces for thousands. We ensure those values are parsed
-    and formatted into the canonical output representation.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    dec_sep, thou_sep = get_number_separators_from_config(CONTACT_CONFIG_SPACE)
-    result = format_money("1 234.5", decimal_separator=dec_sep, thousands_separator=thou_sep)
-    assert result == "1,234.50"
+_FORMAT_MONEY_CASES = [
+    # Empty strings should stay empty so UI blanks remain blank.
+    FormatMoneyCase(name="empty string", raw_value="", expected=""),
+    # None inputs should also return blank output.
+    FormatMoneyCase(name="none value", raw_value=None, expected=""),
+    # Non-numeric values should be preserved verbatim.
+    FormatMoneyCase(name="non numeric", raw_value="N/A", expected="N/A"),
+]
 
 
-def test_number_formatting_invalid_config_falls_back_to_defaults() -> None:
-    """Fall back to default separators when config values are unsupported.
-
-    The UI should remain stable even if invalid separators are configured. The
-    parser falls back to default separators and still formats the number.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    dec_sep, thou_sep = get_number_separators_from_config(CONTACT_CONFIG_INVALID_SEPARATORS)
-    result = format_money("1234.5", decimal_separator=dec_sep, thousands_separator=thou_sep)
-    assert result == "1,234.50"
+@pytest.mark.parametrize("case", _NUMBER_FORMAT_CASES, ids=[case.name for case in _NUMBER_FORMAT_CASES])
+def test_number_formatting_with_config(case: NumberFormatCase) -> None:
+    dec_sep, thou_sep = get_number_separators_from_config(case.contact_config.as_dict())
+    result = format_money(case.raw_value, decimal_separator=dec_sep, thousands_separator=thou_sep)
+    assert result == case.expected
 
 
-def test_number_formatting_empty_and_none_return_blank() -> None:
-    """Return blank strings for empty inputs.
-
-    The display layer treats missing totals as empty values. We ensure formatting
-    keeps the output blank instead of a literal "None" or "0.00".
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    assert format_money("") == ""
-    assert format_money(None) == ""
-
-
-def test_number_formatting_non_numeric_value_is_preserved() -> None:
-    """Preserve non-numeric values rather than forcing a number format.
-
-    OCR or user inputs can include placeholders like "N/A". The formatter should
-    leave those intact so the UI does not hide original statement values.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    assert format_money("N/A") == "N/A"
-
-
-# endregion
-
-
-# region Config mismatch behavior
-def test_number_formatting_mismatched_separators_returns_original_value() -> None:
-    """Leave values unchanged when config separators do not match the statement.
-
-    If the statement uses commas for thousands but the config expects spaces,
-    the parser cannot normalize the value and returns the original string.
-    This documents the current behavior so we can revisit it intentionally.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    dec_sep, thou_sep = get_number_separators_from_config(CONTACT_CONFIG_SPACE)
-    raw_value = "1,234.50"
-    result = format_money(raw_value, decimal_separator=dec_sep, thousands_separator=thou_sep)
-    assert result == raw_value
+@pytest.mark.parametrize("case", _FORMAT_MONEY_CASES, ids=[case.name for case in _FORMAT_MONEY_CASES])
+def test_format_money_passthrough(case: FormatMoneyCase) -> None:
+    assert format_money(case.raw_value) == case.expected
 
 
 # endregion

@@ -49,7 +49,8 @@ to fields and emit structured statement JSON.
 
 from typing import Any, TypedDict, cast
 
-from config import logger, textract_client
+from config import textract_client
+from logger import logger
 
 
 class TableOnPage(TypedDict):

@@ -20,7 +20,7 @@ import re
 from collections import Counter
 from typing import Any
 
-from config import logger
+from logger import logger
 
 FLAG_LABEL = "ml-outlier"
 

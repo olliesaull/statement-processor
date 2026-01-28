@@ -9,7 +9,8 @@ from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 from flask import session
 
-from config import S3_BUCKET_NAME, logger, s3_client, tenant_statements_table
+from config import S3_BUCKET_NAME, s3_client, tenant_statements_table
+from logger import logger
 from utils.storage import statement_json_s3_key, statement_pdf_s3_key
 
 _DDB_UPDATE_MAX_WORKERS = max(4, min(16, (os.cpu_count() or 4)))

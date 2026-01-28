@@ -4,7 +4,8 @@ import json
 
 from botocore.exceptions import ClientError
 
-from config import S3_BUCKET_NAME, TEXTRACTION_STATE_MACHINE_ARN, logger, stepfunctions_client
+from config import S3_BUCKET_NAME, TEXTRACTION_STATE_MACHINE_ARN, stepfunctions_client
+from logger import logger
 
 
 def start_textraction_state_machine(tenant_id: str, contact_id: str, statement_id: str, pdf_key: str, json_key: str) -> bool:

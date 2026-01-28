@@ -23,11 +23,12 @@ from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 import cache_provider
-from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, logger
+from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
 from core.models import StatementItem
+from logger import logger
 from sync import check_load_required, sync_data
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import active_tenant_required, block_when_loading, route_handler_logging, save_xero_oauth2_token, scope_str, xero_token_required

@@ -15,7 +15,7 @@ from collections.abc import Iterable, Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from config import logger
+from logger import logger
 
 _DEBIT_HINTS: tuple[str, ...] = ("debit", "dr")
 _CREDIT_HINTS: tuple[str, ...] = ("credit", "cr")

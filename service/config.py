@@ -5,14 +5,14 @@ This module loads environment variables, initializes AWS clients/resources,
 and fetches required SSM parameters at import time.
 """
 
-import logging
 import os
 
 import boto3
-from aws_lambda_powertools.logging import Logger
 from dotenv import load_dotenv
 from mypy_boto3_ssm import SSMClient
 from mypy_boto3_stepfunctions import SFNClient
+
+from logger import logger
 
 load_dotenv()
 
@@ -37,12 +37,6 @@ ddb = session.resource("dynamodb")
 tenant_statements_table = ddb.Table(TENANT_STATEMENTS_TABLE_NAME)
 tenant_contacts_config_table = ddb.Table(TENANT_CONTACTS_CONFIG_TABLE_NAME)
 tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME)
-
-logger: Logger = Logger()
-
-_SUPPRESSED_LOGGERS: tuple[str, ...] = ("boto", "urllib3", "s3transfer", "boto3", "botocore", "nose")
-for n in _SUPPRESSED_LOGGERS:
-    logging.getLogger(n).setLevel(logging.CRITICAL)
 
 ssm_client: SSMClient = session.client("ssm")
 

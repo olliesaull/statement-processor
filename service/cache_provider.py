@@ -2,7 +2,7 @@
 
 from flask_caching import Cache
 
-from config import logger
+from logger import logger
 
 _STATUS_SUFFIX = "_status"
 

@@ -4,7 +4,8 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
-from config import logger, tenant_contacts_config_table
+from config import tenant_contacts_config_table
+from logger import logger
 
 
 def get_contact_config(tenant_id: str, contact_id: str) -> dict[str, Any]:

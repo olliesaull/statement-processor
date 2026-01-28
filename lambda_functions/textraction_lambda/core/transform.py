@@ -16,11 +16,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
-from config import logger
 from core.date_utils import parse_with_format
 from core.extraction import TableOnPage
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.models import StatementItem, SupplierStatement
+from logger import logger
 
 
 def _generate_statement_item_id(statement_id: str | None, sequence: int) -> str:

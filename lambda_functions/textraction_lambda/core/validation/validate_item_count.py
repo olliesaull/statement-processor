@@ -27,8 +27,8 @@ from typing import Any
 
 import pdfplumber
 
-from config import logger
 from exceptions import ItemCountDisagreementError
+from logger import logger
 
 PdfInput = str | bytes | bytearray | io.BytesIO | Any
 

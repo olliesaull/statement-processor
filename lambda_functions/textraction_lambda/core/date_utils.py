@@ -16,7 +16,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from typing import Any
 
-from config import logger
+from logger import logger
 
 # Order matters: match longer tokens before shorter ones so "MMMM" wins over "MM".
 TOKEN_ORDER: Sequence[str] = ("YYYY", "MMMM", "MMM", "MM", "DD", "YY", "Do", "dddd", "M", "D")

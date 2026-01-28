@@ -17,7 +17,8 @@ from flask import session
 from xero_python.accounting import AccountingApi
 from xero_python.exceptions import AccountingBadRequestException
 
-from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, logger, s3_client
+from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, s3_client
+from logger import logger
 from utils.auth import get_xero_api_client, raise_for_unauthorized
 from utils.formatting import fmt_date, fmt_invoice_data
 

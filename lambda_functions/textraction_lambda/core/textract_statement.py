@@ -35,11 +35,12 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from config import S3_BUCKET_NAME, logger, s3_client, tenant_statements_table
+from config import S3_BUCKET_NAME, s3_client, tenant_statements_table
 from core.extraction import TableOnPage, get_tables_for_job
 from core.transform import table_to_json
 from core.validation.anomaly_detection import apply_outlier_flags
 from core.validation.validate_item_count import validate_references_roundtrip
+from logger import logger
 
 
 def _sanitize_for_dynamodb(value: Any) -> Any:  # pylint: disable=too-many-return-statements

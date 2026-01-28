@@ -1,7 +1,7 @@
 """Tenant status helpers."""
 
 import cache_provider
-from config import logger
+from logger import logger
 from tenant_data_repository import TenantDataRepository, TenantStatus
 
 

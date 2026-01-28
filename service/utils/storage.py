@@ -8,7 +8,8 @@ from typing import Any
 from botocore.exceptions import BotoCoreError, ClientError
 from werkzeug.datastructures import FileStorage
 
-from config import S3_BUCKET_NAME, logger, s3_client
+from config import S3_BUCKET_NAME, s3_client
+from logger import logger
 
 # MIME/extension guards for uploads
 ALLOWED_EXTENSIONS = {".pdf", ".PDF"}

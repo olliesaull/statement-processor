@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from config import logger
+from logger import logger
 
 _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
 
