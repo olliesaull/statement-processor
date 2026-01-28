@@ -587,3 +587,8 @@ Where possible, run / ensure compatibility with:
 - `ruff format .`
 
 If tests cannot be run, state what you would have run and why.
+
+**Important**:
+ - Whenever you update the code, check README.md in the root to see if it needs updating with what you just added.
+ - Make sure the updates you make are documented in a lot of detail, not just at a high level.
+ 
