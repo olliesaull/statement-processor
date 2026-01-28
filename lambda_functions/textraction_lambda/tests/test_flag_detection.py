@@ -2,12 +2,16 @@
 Unit tests for statement flag attachment.
 """
 
+import pytest
+
 import core.transform as transform
 
 
 # region Flag detection
-def test_table_to_json_attaches_invalid_date_flags(monkeypatch) -> None:
+def test_table_to_json_attaches_invalid_date_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     """Attach invalid-date flags to items and statement-level metadata.
+
+    This ensures invalid dates surface both in row flags and debug payloads.
 
     Args:
         None.
@@ -17,6 +21,8 @@ def test_table_to_json_attaches_invalid_date_flags(monkeypatch) -> None:
     """
     contact_cfg = {"date_format": "DD/MM/YYYY", "statement_items": {"date": "Date", "number": "Number"}}
 
+    # The transform layer normally reads/writes contact config via DynamoDB.
+    # We stub those calls so the test is offline and deterministic.
     monkeypatch.setattr(transform, "get_contact_config", lambda tenant_id, contact_id: contact_cfg)
     monkeypatch.setattr(transform, "set_contact_config", lambda tenant_id, contact_id, config: None)
 

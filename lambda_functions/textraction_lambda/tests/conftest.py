@@ -9,6 +9,7 @@ import types
 
 fake_config = types.ModuleType("config")
 # NOTE: These attributes are required by modules that import config at import time.
+fake_config.S3_BUCKET_NAME = ""
 fake_config.tenant_contacts_config_table = None
 fake_config.textract_client = None
 fake_config.tenant_statements_table = None

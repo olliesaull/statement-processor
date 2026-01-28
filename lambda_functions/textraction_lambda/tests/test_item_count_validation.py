@@ -2,6 +2,8 @@
 Unit tests for reference validation against PDF text.
 """
 
+import pytest
+
 import core.validation.validate_item_count as validate_item_count
 from exceptions import ItemCountDisagreementError
 
@@ -29,7 +31,7 @@ class _FakePdf:
         return None
 
 
-def _patch_pdf_open(monkeypatch, page_texts: list[str]) -> None:
+def _patch_pdf_open(monkeypatch: pytest.MonkeyPatch, page_texts: list[str]) -> None:
     def _open(_arg) -> _FakePdf:
         return _FakePdf(page_texts)
 
@@ -37,8 +39,10 @@ def _patch_pdf_open(monkeypatch, page_texts: list[str]) -> None:
 
 
 # region Item count validation
-def test_item_count_validation_skips_image_only_pdfs(monkeypatch) -> None:
+def test_item_count_validation_skips_image_only_pdfs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Skip validation when pdfplumber cannot extract text.
+
+    This prevents false alarms for scanned PDFs with no selectable text.
 
     Args:
         None.
@@ -55,8 +59,10 @@ def test_item_count_validation_skips_image_only_pdfs(monkeypatch) -> None:
     assert result["pdf_candidates"] == 0
 
 
-def test_item_count_validation_passes_when_references_match(monkeypatch) -> None:
+def test_item_count_validation_passes_when_references_match(monkeypatch: pytest.MonkeyPatch) -> None:
     """Return summary when JSON references are present in PDF text.
+
+    We bypass pdfplumber internals and focus on the comparison logic.
 
     Args:
         None.
@@ -75,8 +81,10 @@ def test_item_count_validation_passes_when_references_match(monkeypatch) -> None
     assert result["pdf_candidates"] == 2
 
 
-def test_item_count_validation_raises_when_references_missing(monkeypatch) -> None:
+def test_item_count_validation_raises_when_references_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Raise when extracted references are missing from the PDF text.
+
+    This documents the error path used to alert on missing items.
 
     Args:
         None.
@@ -101,6 +109,29 @@ def test_item_count_validation_raises_when_references_missing(monkeypatch) -> No
         assert exc.textract_count == 2
     else:
         raise AssertionError("Expected ItemCountDisagreementError")
+
+
+# endregion
+
+
+# region Reference family regex
+def test_reference_family_regex_matches_known_prefixes() -> None:
+    """Learn a regex that matches the observed reference families.
+
+    This guards against regressions in the prefix/digit-length heuristics.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    pattern = validate_item_count.make_family_regex_from_examples(["INV-100", "INV-101", "INV-102", "CN-5000"])
+
+    assert pattern.fullmatch("INV100")
+    assert pattern.fullmatch("INV101")
+    assert pattern.fullmatch("CN5000")
+    assert not pattern.fullmatch("BILL100")
 
 
 # endregion

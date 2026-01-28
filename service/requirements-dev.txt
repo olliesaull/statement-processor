@@ -4,3 +4,4 @@ pylint
 pytest-playwright
 ruff
 vulture
+pytest

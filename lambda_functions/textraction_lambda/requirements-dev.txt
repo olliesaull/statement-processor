@@ -2,3 +2,5 @@ bandit
 mypy
 pylint
 ruff
+vulture
+pytest

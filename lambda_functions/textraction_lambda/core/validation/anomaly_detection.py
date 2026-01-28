@@ -18,7 +18,7 @@ or attached to the output for inspection.
 
 import re
 from collections import Counter
-from typing import Any
+from typing import Any, TypedDict
 
 from logger import logger
 
@@ -49,6 +49,26 @@ SUSPECT_TOKEN_RULES: list[tuple[set[str], str]] = [
     ({"summary"}, "summary"),
     ({"balance"}, "balance"),
 ]
+
+
+class FlagIssueDetail(TypedDict, total=False):
+    """Structured detail describing why a single field was flagged."""
+
+    field: str
+    issue: str
+    keyword: str
+    value: str
+
+
+class FlagDetailPayload(TypedDict, total=False):
+    """Structured metadata for a specific flag on a statement item."""
+
+    issues: list[str]
+    details: list[FlagIssueDetail]
+    source: str
+
+
+FlagDetails = dict[str, FlagDetailPayload]
 
 
 def _normalize_text(value: Any) -> str:
@@ -119,6 +139,9 @@ def apply_outlier_flags(statement: dict[str, Any], *, remove: bool = False, one_
     Returns:
     - `statement`: the input dict, possibly modified in-place
     - `summary`: counts + per-item detail about what was flagged and why
+
+    For flagged items, we also attach `FlagDetails` so downstream systems can
+    persist structured reasons without changing UI behavior.
     """
     items = statement.get("statement_items", []) or []
     if not items:
@@ -159,6 +182,13 @@ def apply_outlier_flags(statement: dict[str, Any], *, remove: bool = False, one_
             for issue in issues:
                 rule_counter[issue] += 1
             flagged_items.append({"index": (idx + 1) if one_based_index else idx, "reasons": [FLAG_LABEL], "issues": issues, "details": details})
+            if isinstance(item, dict):
+                flag_details = item.get("FlagDetails")
+                if not isinstance(flag_details, dict):
+                    flag_details = {}
+                    item["FlagDetails"] = flag_details
+                flag_payload: FlagDetailPayload = {"issues": list(issues), "details": [dict(entry) for entry in details], "source": "anomaly_detection"}
+                flag_details[FLAG_LABEL] = flag_payload
 
     flagged_index_set = set(flagged_indices)
     if remove:

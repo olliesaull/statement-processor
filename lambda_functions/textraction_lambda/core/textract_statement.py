@@ -222,6 +222,11 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
     item_count = len(statement.get("statement_items", []) or [])
     logger.info("Built statement JSON", job_id=job_id, statement_id=statement_id, items=item_count)
 
+    # Flag outliers without removing them, so downstream consumers can inspect anomalies.
+    # This runs before persistence so flag metadata is saved to DynamoDB.
+    statement, summary = apply_outlier_flags(statement, remove=False)
+    logger.info("Performed anomaly detection", summary=json.dumps(summary, indent=2))
+
     try:
         # Persist items to DynamoDB (delete + rewrite); failures here should not prevent JSON output.
         _persist_statement_items(
@@ -243,10 +248,6 @@ def run_textraction(job_id: str, bucket: str, pdf_key: str, json_key: str, tenan
         validate_references_roundtrip(pdf_bytes, statement_items)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Reference validation skipped", key=key, tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
-
-    # Flag outliers without removing them, so downstream consumers can inspect anomalies
-    statement, summary = apply_outlier_flags(statement, remove=False, one_based_index=True)
-    logger.info("Performed anomaly detection", summary=json.dumps(summary, indent=2))
 
     # Upload the enriched JSON back to S3 for the caller to consume
     # StepFunctions passes `jsonKey` into this Lambda; writing to that key is how we publish the output artifact.

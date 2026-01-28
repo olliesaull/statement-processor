@@ -14,9 +14,6 @@ requests
 xero-python
 Flask-WTF
 
-# Testing
-pytest
-
 # Other
 pandas
 pydantic
