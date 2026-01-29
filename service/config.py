@@ -22,7 +22,7 @@ S3_BUCKET_NAME: str | None = os.getenv("S3_BUCKET_NAME")
 STAGE: str | None = os.getenv("STAGE")
 TEXTRACTION_STATE_MACHINE_ARN: str | None = os.getenv("TEXTRACTION_STATE_MACHINE_ARN")
 # Ignoring Bandit suggestion as tempfile.gettempdir returns /tmp anyways (B108:hardcoded_tmp_directory)
-LOCAL_DATA_DIR: str = "./tmp/data" if STAGE == "dev" else "/tmp/data"  # nosec B108
+LOCAL_DATA_DIR: str = "./tmp/data" if STAGE in {"dev", "local"} else "/tmp/data"  # nosec B108
 
 TENANT_CONTACTS_CONFIG_TABLE_NAME: str | None = os.getenv("TENANT_CONTACTS_CONFIG_TABLE_NAME")
 TENANT_STATEMENTS_TABLE_NAME: str | None = os.getenv("TENANT_STATEMENTS_TABLE_NAME")

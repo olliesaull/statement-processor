@@ -7,7 +7,7 @@ Configuration: set environment variables to match the service app.
   - AWS_PROFILE, AWS_REGION, S3_BUCKET_NAME
   - TENANT_CONTACTS_CONFIG_TABLE_NAME, TENANT_STATEMENTS_TABLE_NAME
   - XERO_CLIENT_ID, XERO_CLIENT_SECRET
-  - XERO_TOKEN_PATH (default: ~/.xero_token.json)
+  - XERO_TOKEN_PATH (default: <script dir>/.xero_token.json)
   - XERO_TENANT_ID (optional; auto-discovered if missing)
   - XERO_ACCOUNT_CODE_EXPENSE (for bills, e.g. an expense/purchases account code)
   - XERO_ACCOUNT_CODE_REVENUE (for sales invoices, e.g. a revenue account code)
@@ -20,11 +20,12 @@ Notes:
     You can obtain this by authenticating once via the service UI and then saving the
     resulting token dict to a file, or by any other mechanism you prefer. The script
     will refresh and persist tokens automatically via the SDK once seeded.
+  - The token file defaults to the same directory as this script
+    (scripts/populate_xero/.xero_token.json). Override with XERO_TOKEN_PATH if needed.
+  - This script always creates purchase bills (ACCPAY), not sales invoices (ACCREC).
   - The script is idempotent using Invoice/CreditNote Reference = "stmt:{STATEMENT_ID}:row:{index}".
     Re-running will skip rows already created.
 """
-
-from __future__ import annotations
 
 import json
 import os
@@ -35,6 +36,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+import re
 
 import boto3
 import requests
@@ -83,7 +85,11 @@ from xero_python.exceptions import AccountingBadRequestException  # type: ignore
 # Global settings
 # ---------------------
 
-TENANT_ID = os.getenv("TENANT_ID", "80985eea-b0fe-4b9e-a6f8-787e0b017ce9")
+# Demo Company
+TENANT_ID = os.getenv("TENANT_ID", "c3da4d9c-45f1-4eb0-b368-f129215aa4ba")
+STATEMENT_ID = os.getenv("STATEMENT_ID", "eb21a7cf-b378-4336-b064-b4b334c3de9e")
+CONTACT_ID = os.getenv("CONTACT_ID", "21f45583-5df4-4655-a0b9-e992b47306c4")
+
 # ButtaNut
 # STATEMENT_ID = os.getenv("STATEMENT_ID", "0de99b0d-6b5e-4f64-b548-8b9a4b477e21")
 # CONTACT_ID = os.getenv("CONTACT_ID", "d187a088-978e-46c3-9bb9-26f3c3961e51")
@@ -109,12 +115,12 @@ TENANT_ID = os.getenv("TENANT_ID", "80985eea-b0fe-4b9e-a6f8-787e0b017ce9")
 # CONTACT_ID = os.getenv("CONTACT_ID", "738729e8-ff76-4341-8f29-f96a667d6014")
 
 # Weldhagen Eggs
-STATEMENT_ID = os.getenv("STATEMENT_ID", "31140616-eff3-4bc7-a816-ca12d0768c56")
-CONTACT_ID = os.getenv("CONTACT_ID", "70a00e19-192c-4a69-b090-8fb01e83d058")
+# STATEMENT_ID = os.getenv("STATEMENT_ID", "31140616-eff3-4bc7-a816-ca12d0768c56")
+# CONTACT_ID = os.getenv("CONTACT_ID", "70a00e19-192c-4a69-b090-8fb01e83d058")
 
 XERO_CLIENT_ID = os.getenv("XERO_CLIENT_ID") or CONFIG_XERO_CLIENT_ID
 XERO_CLIENT_SECRET = os.getenv("XERO_CLIENT_SECRET") or CONFIG_XERO_CLIENT_SECRET
-XERO_TOKEN_PATH = Path(os.getenv("XERO_TOKEN_PATH", str(Path.home() / ".xero_token.json")))
+XERO_TOKEN_PATH = Path(os.getenv("XERO_TOKEN_PATH", str(THIS_DIR / ".xero_token.json")))
 XERO_TENANT_ID = os.getenv("XERO_TENANT_ID")  # optional; discover if missing
 XERO_REDIRECT_URI = os.getenv("XERO_REDIRECT_URI", "http://localhost:8080/callback")
 
@@ -128,9 +134,6 @@ LINE_AMOUNT_TYPES = os.getenv("XERO_LINE_AMOUNT_TYPES", "Inclusive")  # NoTax/Ex
 TAX_TYPE = os.getenv("XERO_TAX_TYPE", "NONE")
 FORCE_CREATE = os.getenv("XERO_FORCE_CREATE", "").strip().lower() in {"1", "true", "yes"}
 SKIP_NUMBER = os.getenv("XERO_SKIP_NUMBER", "").strip().lower() in {"1", "true", "yes"}
-# Choose document side (sale vs purchase) via env or auto-detect from contact
-DOC_SIDE_ENV = os.getenv("XERO_DOC_SIDE", "sale").strip().lower()  # 'sale' or 'purchase'
-IS_SALE_FLAG = os.getenv("XERO_IS_SALE", "").strip().lower() in {"1", "true", "yes"}
 
 # Xero OAuth endpoints and scopes (align with service)
 AUTH_URL = "https://login.xero.com/identity/connect/authorize"
@@ -428,49 +431,8 @@ def discover_account_code(api: AccountingApi, tenant_id: str, for_expense: bool)
     return None
 
 
-def _get_contact_role(api: AccountingApi, tenant_id: str, contact_id: str) -> tuple[Optional[bool], Optional[bool]]:
-    """Return (is_customer, is_supplier) for the contact if available."""
-    try:
-        res = api.get_contacts(
-            xero_tenant_id=tenant_id,
-            where=f'ContactID==Guid("{contact_id}")',
-            page_size=1,
-        )
-        c = (res.contacts or [None])[0]
-        if c is None:
-            return None, None
-        return getattr(c, "is_customer", None), getattr(c, "is_supplier", None)
-    except Exception:
-        return None, None
-
-
-def resolve_expense_side(api: AccountingApi, tenant_id: str, contact_id: str) -> bool:
-    """Decide whether to create purchases (ACCPAY=True) or sales (ACCREC=False).
-
-    Order of precedence:
-      1) XERO_DOC_SIDE env: 'sale' or 'purchase'
-      2) XERO_IS_SALE env: boolean
-      3) Contact flags: is_customer/is_supplier
-      4) Default to sales (invoice)
-    """
-    if DOC_SIDE_ENV in {"sale", "sales", "accrec"}:
-        return False
-    if DOC_SIDE_ENV in {"purchase", "purchases", "accpay", "bill", "bills"}:
-        return True
-    if IS_SALE_FLAG:
-        return False
-    # Try contact metadata
-    is_customer, is_supplier = _get_contact_role(api, tenant_id, contact_id)
-    if is_customer is True and (is_supplier is not True):
-        return False
-    if is_supplier is True and (is_customer is not True):
-        return True
-    # Default: create sales invoices
-    return False
-
-
 def get_statement_json(session: boto3.session.Session, bucket: str, tenant_id: str, statement_id: str) -> Dict[str, Any]:
-    key = f"{tenant_id}/{statement_id}.json"
+    key = f"{tenant_id}/statements/{statement_id}.json"
     s3 = session.client("s3")
     try:
         obj = s3.get_object(Bucket=bucket, Key=key)
@@ -617,6 +579,57 @@ def classify_statement_entry(raw_row: Dict[str, Any], reference_text: Optional[s
     return base_type
 
 
+_SKIP_ROW_KEYWORDS = ("no match", "no-match", "nomatch", "balance forward")
+
+
+def should_skip_statement_row(reference_text: Optional[str], raw_row: Dict[str, Any]) -> bool:
+    """Return True when a row should not create Xero documents.
+
+    These markers keep deliberate mismatches (or non-document rows) in place
+    so UI regression tests can assert the view output is stable.
+
+    Args:
+        reference_text: Reference/number text from the statement row.
+        raw_row: Raw statement row mapping.
+
+    Returns:
+        True when the row should be skipped.
+    """
+    text_sources: List[str] = []
+    if reference_text:
+        text_sources.append(reference_text)
+    if isinstance(raw_row, dict):
+        for key in ("Description", "description"):
+            val = raw_row.get(key)
+            if isinstance(val, str) and val.strip():
+                text_sources.append(val)
+                break
+    text_norm = _normalize_for_match(" ".join(text_sources))
+    if not text_norm:
+        return False
+    return any(keyword in text_norm for keyword in _SKIP_ROW_KEYWORDS)
+
+
+_DOC_NUMBER_RE = re.compile(r"([A-Z]{2,6}[- ]?\d{2,}(?:[-/]\d{1,4})?)", re.IGNORECASE)
+
+
+def _extract_document_number(value: Any) -> Optional[str]:
+    """Extract a clean document number from reference-like text.
+
+    Args:
+        value: Raw reference or number value.
+
+    Returns:
+        Extracted document number if present.
+    """
+    s = str(value or "").strip()
+    if not s:
+        return None
+    match = _DOC_NUMBER_RE.search(s)
+    if not match:
+        return None
+    return match.group(1).replace(" ", "")
+
 # reference and numbers are derived from config; pick_identifiers removed
 
 
@@ -653,7 +666,7 @@ def extract_invoice_number(it: Dict[str, Any], items_template: Dict[str, Any]) -
     # Prefer canonical field if present, else use config mapping to raw
     n = (it.get("number") or "").strip()
     if n:
-        return n
+        return _extract_document_number(n) or n
     mapped = None
     try:
         header = items_template.get("number") if isinstance(items_template, dict) else None
@@ -662,7 +675,7 @@ def extract_invoice_number(it: Dict[str, Any], items_template: Dict[str, Any]) -
     except Exception:
         mapped = None
     if mapped:
-        return mapped
+        return _extract_document_number(mapped) or mapped
     return None
 
 
@@ -991,10 +1004,9 @@ def main():
     print("Initialising Xero client…")
     api, _api_client, tenant_id = build_xero_client()
 
-    # Decide sales vs purchases side (ACCREC vs ACCPAY)
-    expense = resolve_expense_side(api, tenant_id, CONTACT_ID)
-    side_label = "ACCPAY (bill)" if expense else "ACCREC (invoice)"
-    print(f"Document side: {side_label}")
+    # Always create purchase bills (ACCPAY).
+    expense = True
+    print("Document side: ACCPAY (bill)")
     account_code = discover_account_code(api, tenant_id, for_expense=expense)
     if not account_code:
         print("Warning: could not auto-discover account code; Xero may require one.")
@@ -1018,6 +1030,10 @@ def main():
 
         raw = it.get("raw", {}) if isinstance(it.get("raw"), dict) else {}
         ref_value = extract_reference(it, items_template)
+        if should_skip_statement_row(ref_value, raw):
+            skipped += 1
+            print(f"- Row {idx}: skip (intentionally unmatched or non-document row)")
+            continue
         entry_kind = classify_statement_entry(raw, ref_value)
         doc_type = "credit_note" if entry_kind in {"credit_note", "payment"} else "invoice"
         amt = pick_amount(it, doc_type)

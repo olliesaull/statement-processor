@@ -163,6 +163,12 @@
   - Tenant metadata: `service/tenant_data_repository.py`
   - Tests: `service/tests/`, `service/playwright_tests/`
 
+- **Stage-aware local cache path** (`service/config.py`)
+  - `LOCAL_DATA_DIR` is the base directory for cached Xero datasets (`contacts.json`, `invoices.json`, `payments.json`, `credit_notes.json`) that are written by `service/sync.py` and read by `service/xero_repository.py`.
+  - When `STAGE` is `dev` or `local`, the base path is `./tmp/data` (relative to the current working directory, typically `service/`), so tenant files land under `service/tmp/data/<tenant_id>/...`.
+  - For any other stage (including prod), the base path is `/tmp/data` on the host filesystem.
+  - If a local dataset is missing, `service/xero_repository.py:load_local_dataset` downloads from S3 and stores it under the same base path.
+
 - **Key routes/endpoints and purpose** (all in `service/app.py`)
   - **Core UI**
     - `/` (GET): landing page (`index`).

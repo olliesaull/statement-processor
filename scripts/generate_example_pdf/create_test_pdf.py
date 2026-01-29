@@ -1,4 +1,8 @@
-"""Utility to generate a two-page PDF for testing."""
+"""Utility to generate a two-page PDF for testing.
+
+The generated statement includes exact matches, substring matches, intentional no-match rows,
+a payment-keyword row, an invalid date row, and a balance-forward row.
+"""
 
 from pathlib import Path
 
@@ -6,14 +10,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import (
-    PageBreak,
-    Paragraph,
-    SimpleDocTemplate,
-    Spacer,
-    Table,
-    TableStyle,
-)
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
 def build_test_pdf(destination: Path) -> None:
@@ -65,15 +62,17 @@ def build_test_pdf(destination: Path) -> None:
 
     ledger_with_headers = Table(
         [
-            ["Date", "Reference", "Description", "Debit", "Credit", "Balance"],
-            ["2025-08-01", "REF-250801", "Opening balance", "", "", "5,000.00"],
-            ["2025-08-03", "INV-250803", "Supplier payment", "1,200.00", "", "3,800.00"],
-            ["2025-08-05", "CN-250805", "Credit note - maintenance adjustment", "", "150.00","3,950.00"],
-            ["2025-08-10", "INV-250810", "Tenant service invoice", "425.00", "", "3,525.00"],
-            ["2025-08-16", "RCPT-250816", "Rent collection", "", "2,200.00", "5,725.00"],
-            ["2025-08-22", "FEE-250822", "Management fee", "350.00", "", "5,375.00"],
+            ["Date", "Reference", "Description", "Debit", "Credit"],
+            ["2025-08-09", "Balance Forward", "Balance Forward", "", ""],
+            ["2025-08-01", "INV-1001", "Exact invoice match", "1,200.00", ""],
+            ["2025-08-02", "Invoice # INV-1002", "Substring invoice match", "300.00", ""],
+            ["2025-08-03", "INV-1003-NOMATCH", "Invoice no match", "150.00", ""],
+            ["2025-08-04", "CRN-2001", "Exact credit note match", "", "75.00"],
+            ["2025-08-05", "Credit Note CRN-2002", "Substring credit note match", "", "50.00"],
+            ["2025-08-06", "CRN-2003-NOMATCH", "Credit note no match", "", "60.00"],
+            ["2025-08-07", "Payment for INV-1004", "Payment keyword should skip match", "", "200.00"],
         ],
-        colWidths=[0.9 * inch, 1.1 * inch, 2.2 * inch, 0.8 * inch, 0.8 * inch, 0.9 * inch],
+        colWidths=[0.9 * inch, 1.7 * inch, 2.5 * inch, 0.8 * inch, 0.8 * inch],
         hAlign="LEFT",
     )
     ledger_with_headers.setStyle(
@@ -94,15 +93,10 @@ def build_test_pdf(destination: Path) -> None:
 
     continuation_table = Table(
         [
-            ["2025-08-24", "ADJ-250824", "Adjustment posted", "125.00", "", "5,500.00"],
-            ["2025-08-25", "RCPT-250825", "Utility reimbursement", "", "300.00", "5,800.00"],
-            ["2025-08-26", "REP-250826", "Emergency repair", "850.00", "", "4,950.00"],
-            ["2025-08-28", "DEP-250828", "Security deposit release", "1,000.00", "", "3,950.00"],
-            ["2025-08-29", "DIST-250829", "Owner distribution", "2,500.00", "", "1,450.00"],
-            ["2025-08-30", "INT-250830", "Interest earned", "", "5.75", "1,455.75"],
-            ["2025-08-31", "BAL-250831", "Statement closing balance", "", "", "1,455.75"],
+            ["2025-02-30", "INV-1005", "Invalid date row", "90.00", ""],
+            ["2025-08-10", "INV-1006", "Exact invoice match (page 2)", "500.00", ""],
         ],
-        colWidths=[0.9 * inch, 1.1 * inch, 2.2 * inch, 0.8 * inch, 0.8 * inch, 0.9 * inch],
+        colWidths=[0.9 * inch, 1.7 * inch, 2.5 * inch, 0.8 * inch, 0.8 * inch],
         hAlign="LEFT",
     )
     continuation_table.setStyle(
@@ -118,10 +112,10 @@ def build_test_pdf(destination: Path) -> None:
     )
 
     story = [
-        Paragraph("Acme Property Management", heading_style),
+        Paragraph("Test Statements Ltd", heading_style),
         Paragraph("415 Summit Avenue", body_style),
         Paragraph("Seattle, WA 98104", body_style),
-        Paragraph("Phone: (206) 555-0142 | accounts@acmeproperty.com", body_style),
+        Paragraph("Phone: (206) 555-0142 | accounts@teststatements.com", body_style),
         Spacer(1, 0.25 * inch),
         Paragraph("Monthly Statement", subheading_style),
         Paragraph("Property: Northgate Apartments", body_style),
