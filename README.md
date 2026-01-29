@@ -182,6 +182,7 @@
   - **Tenant APIs**
     - `/api/tenant-statuses` (GET): returns tenant sync statuses (cached) for polling UI.
     - `/api/tenants/<tenant_id>/sync` (POST): triggers background Xero sync for a tenant.
+    - **Auth behavior for API routes**: When `@xero_token_required` protects a `/api/...` endpoint and the session token is missing or expired, the decorator returns `401` JSON (`{"error": "auth_required"}`) instead of redirecting. The frontend polling/sync code (`service/static/assets/js/main.js`) treats either a 401 response or a redirected login response as a signal to navigate to `/login`, so passive actions still force a full re-login.
   - **Auth**
     - `/login` (GET): start Xero OAuth flow.
     - `/callback` (GET): OAuth callback (token validation + tenant load).

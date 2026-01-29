@@ -93,6 +93,16 @@ async function handleSyncClick(button) {
       credentials: "same-origin",
     });
 
+    if (response.redirected && response.url.includes("/login")) {
+      window.location.href = response.url;
+      return;
+    }
+
+    if (response.status === 401) {
+      window.location.href = `${window.location.origin}/login`;
+      return;
+    }
+
     if (!response.ok && response.status !== 202) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -156,8 +166,13 @@ async function callGetTenantStatusesAPI() {
 		},
 	});
 
+	if (response.redirected && response.url.includes("/login")) {
+		window.location.href = response.url;
+		return;
+	}
+
 	if (response.status === 401) {
-		window.location.href = `${baseUrl}/status`; // Force re-login
+		window.location.href = `${baseUrl}/login`; // Force re-login
 		return;
 	}
 

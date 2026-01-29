@@ -5,7 +5,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from flask import Response, redirect, request, session, url_for
+from flask import Response, jsonify, redirect, request, session, url_for
 from werkzeug.exceptions import HTTPException
 from xero_python.accounting import AccountingApi
 from xero_python.api_client import ApiClient  # type: ignore
@@ -190,7 +190,8 @@ def raise_for_unauthorized(error: Exception) -> None:
 
 def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
     """Require a valid (non-expired) Xero token and active tenant for route access.
-    This redirects to login when the session token is missing or expired.
+    This redirects to login for UI routes and returns 401 JSON for API routes
+    when the session token is missing or expired.
 
     Args:
         f: Route handler to wrap.
@@ -201,10 +202,13 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
 
     @wraps(f)
     def decorated_function(*args: Any, **kwargs: Any) -> Any:
+        is_api_request = request.path.startswith("/api/")
         tenant_id = session.get("xero_tenant_id")
         token = get_xero_oauth2_token()
         if not tenant_id or not token:
             logger.info("Missing Xero token or tenant; redirecting", route=request.path, tenant_id=tenant_id)
+            if is_api_request:
+                return jsonify({"error": "auth_required"}), 401
             return redirect(url_for("login"))
 
         try:
@@ -215,6 +219,8 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
         if expires_at and time.time() > expires_at:
             # Avoid hitting Xero with expired tokens and surfacing hard 401s.
             logger.info("Xero token expired; redirecting", route=request.path, tenant_id=tenant_id)
+            if is_api_request:
+                return jsonify({"error": "auth_required"}), 401
             return redirect(url_for("login"))
 
         return f(*args, **kwargs)
