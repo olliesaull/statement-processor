@@ -22,6 +22,33 @@ These tests exercise the full workflow: login via Xero OAuth, configure a contac
 6) Install Playwright browsers:
    - `python3.13 -m playwright install`
 
+## Demo Company (UK) regression fixture: Test Statements Ltd
+This run is designed to lock in the refactor baseline for the multi-scenario statement PDF. Demo Company data can be reset by Xero, so the PDF + Xero docs should be re-seeded when that happens.
+
+### One-time (or after Demo Company reset)
+1) Generate the test PDF:
+   - `python3.13 statement-processor/scripts/generate_example_pdf/create_test_pdf.py`
+2) Copy the PDF into the Playwright statements folder:
+   - `test_pdf.pdf` → `statement-processor/service/playwright_tests/statements/test_statements_ltd.pdf`
+3) Upload the PDF via the UI:
+   - Log in and switch to tenant **Demo Company (UK)**.
+   - Upload `test_statements_ltd.pdf` for contact **Test Statements Ltd**.
+4) Ensure the contact config matches the PDF headers:
+   - Number column: `reference`
+   - Date column: `date`
+   - Total columns: `debit`, `credit`
+   - Date format: `YYYY-MM-DD`
+5) Populate Xero from the extracted JSON:
+   - Run `python3.13 statement-processor/scripts/populate_xero/populate_xero.py`.
+   - The script defaults to the Demo Company (UK) tenant and the Test Statements Ltd statement/contact IDs; override via env vars if needed (`TENANT_ID`, `STATEMENT_ID`, `CONTACT_ID`).
+6) Capture the baseline Excel export:
+   - Open the statement detail view and click “Download Excel”.
+   - Save it as `service/playwright_tests/fixtures/expected/test_statements_ltd.xlsx`.
+
+### Notes
+- The populate script intentionally skips “no match”, “balance forward”, and invalid date rows to preserve mismatch scenarios in the UI.
+- If Demo Company resets, repeat the steps above (PDF generation is deterministic, so re-running it is safe).
+
 ## Optional environment variables
 - `XERO_EMAIL`
 

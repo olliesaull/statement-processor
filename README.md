@@ -358,3 +358,32 @@
   - Logic: `validate_references_roundtrip(...)` compares extracted references against PDF text (pdfplumber) and raises `ItemCountDisagreementError` on mismatch, but the call is wrapped in `try/except` in `run_textraction`, so failures only log warnings and do not block output (`lambda_functions/textraction_lambda/core/validation/validate_item_count.py`, `lambda_functions/textraction_lambda/core/textract_statement.py`).
   - Why it exists: provides a safety check while preserving pipeline availability when PDFs are noisy or scanned.
   - Example: If the PDF is image‑only (no extractable text), validation is skipped to avoid false mismatches.
+
+## Playwright Regression Fixture: Test Statements Ltd (Demo Company UK)
+
+This fixture locks the end-to-end statement rendering logic against a known PDF + Xero dataset. Demo Company (UK) is periodically reset by Xero, so the dataset must be re-seeded when that happens.
+
+### Setup (after resets or when bootstrapping)
+1) Generate the PDF fixture:
+   - `python3.13 /home/ollie/statement-processor/scripts/generate_example_pdf/create_test_pdf.py`
+2) Copy the generated PDF to the Playwright fixtures folder:
+   - Source: `/home/ollie/statement-processor/scripts/generate_example_pdf/test_pdf.pdf`
+   - Destination: `/home/ollie/statement-processor/service/playwright_tests/statements/test_statements_ltd.pdf`
+3) Upload the PDF via the UI:
+   - Log in to the app and switch to tenant **Demo Company (UK)**.
+   - Upload `test_statements_ltd.pdf` for contact **Test Statements Ltd**.
+4) Ensure the contact mapping matches the PDF headers:
+   - Number column: `reference`
+   - Date column: `date`
+   - Total columns: `debit`, `credit`
+   - Date format: `YYYY-MM-DD`
+5) Populate Xero from the extracted statement JSON:
+   - Run `python3.13 /home/ollie/statement-processor/scripts/populate_xero/populate_xero.py`.
+   - The script defaults to Demo Company (UK) and the Test Statements Ltd statement/contact IDs; override as needed with `TENANT_ID`, `STATEMENT_ID`, and `CONTACT_ID` env vars.
+6) Capture the Excel baseline:
+   - From the statement detail page, click “Download Excel”.
+   - Save it as `/home/ollie/statement-processor/service/playwright_tests/fixtures/expected/test_statements_ltd.xlsx`.
+
+### Notes
+- The population script intentionally skips “no match”, “balance forward”, and invalid date rows so the UI shows both matched and unmatched cases.
+- If the Demo Company tenant resets, repeat the setup steps above to restore the fixture.

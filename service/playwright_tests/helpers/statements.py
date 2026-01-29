@@ -122,7 +122,8 @@ def delete_statement_if_exists(page: Page, test_run: StatementFlowRun) -> None:
         page.once("dialog", lambda dialog: dialog.accept())
         page.locator("[data-automation='statement-delete-button']").click()
         page.wait_for_url("**/statements")
-        page.wait_for_selector("[data-automation='statements-table']")
+        # After deletion the list may be empty; accept either the table or the "no statements" alert.
+        page.wait_for_selector("[data-automation='statements-table'], .alert.alert-info")
 
 
 def mark_first_incomplete_item(page: Page) -> None:
