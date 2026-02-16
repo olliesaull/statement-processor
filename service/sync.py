@@ -148,8 +148,8 @@ def _merge_resource_payload(resource: XeroType, existing: Any, delta: Any) -> An
 
     sort_keys = {
         XeroType.CONTACTS: lambda c: (c.get("name") or "").casefold(),
-        XeroType.CREDIT_NOTES: lambda note: (note.get("credit_note_id") or ""),
-        XeroType.PAYMENTS: lambda payment: (payment.get("payment_id") or ""),
+        XeroType.CREDIT_NOTES: lambda note: note.get("credit_note_id") or "",
+        XeroType.PAYMENTS: lambda payment: payment.get("payment_id") or "",
         XeroType.INVOICES: lambda inv: str(inv.get("number") or "").casefold(),
     }
     sort_key = sort_keys.get(resource)

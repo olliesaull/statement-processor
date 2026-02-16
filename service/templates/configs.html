@@ -25,7 +25,7 @@
               <table class="table table-bordered table-sm align-middle">
                 <thead class="table-light">
                   <tr>
-                    <th style="width: 55%">Xero field</th>
+                    <th class="configs-xero-column-example">Xero field</th>
                     <th>Statement column</th>
                   </tr>
                 </thead>
@@ -98,7 +98,7 @@
   {% endif %}
 
   <!-- Contact selector -->
-  <form method="POST" action="{{ url_for('configs') }}" class="mb-4 config-load-form" id="config-load-form" data-automation="config-load-form">
+  <form method="POST" action="{{ url_for('configs') }}" class="mb-4" id="config-load-form" data-automation="config-load-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset class="row gy-2 gx-3 align-items-center">
       <input type="hidden" name="action" value="load">
@@ -106,7 +106,7 @@
         <label class="visually-hidden" for="contactInput">Contact</label>
         <input type="text" id="contactInput" name="contact_name" class="form-control config-contact-input" data-automation="config-contact-input"
                placeholder="Select contact" list="contacts-list" autocomplete="off"
-               value="{{ selected_contact_name or '' }}" style="min-width: 320px;">
+               value="{{ selected_contact_name or '' }}">
         <datalist id="contacts-list">
           {% for c in contacts %}
           <option value="{{ c['name'] }}"></option>
@@ -120,7 +120,7 @@
   </form>
 
   {% if selected_contact_id %}
-  <form method="POST" action="{{ url_for('configs') }}" class="config-save-form" id="config-save-form" data-automation="config-save-form">
+  <form method="POST" action="{{ url_for('configs') }}" id="config-save-form" data-automation="config-save-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset>
     <input type="hidden" name="action" value="save_map">
@@ -133,7 +133,7 @@
       <table class="table table-bordered align-middle">
         <thead class="table-light">
           <tr>
-            <th style="width: 60%">Xero</th>
+            <th class="configs-xero-column">Xero</th>
             <th>Statement column</th>
           </tr>
         </thead>
@@ -230,7 +230,7 @@
       </ul>
     </div>
 
-    <button type="submit" class="btn btn-success mb-5 config-save-button" id="config-save-button" data-automation="config-save-button">Save</button>
+    <button type="submit" class="btn btn-success mb-5" id="config-save-button" data-automation="config-save-button">Save</button>
     </fieldset>
   </form>
   {% endif %}

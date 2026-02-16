@@ -75,7 +75,7 @@
       </div>
 
       <div class="table-responsive statement-table-wrapper">
-        <table class="table table-striped table-bordered align-middle table-fixed-height table-compare w-100 statement-table" id="statement-table" data-automation="statement-table">
+        <table class="table table-bordered align-middle table-compare w-100 statement-table" id="statement-table" data-automation="statement-table">
           <thead class="table-light">
             <tr>
               <th class="text-center col-type" rowspan="2">Type</th>
@@ -108,13 +108,13 @@
                   {% set row_class = 'table-success' if row.matches else 'table-danger' %}
                 {% endif %}
                 {% if row.is_completed %}
-                  {% set row_class = row_class + ' opacity-50' %}
+                  {% set row_class = row_class + ' opacity-75' %}
                 {% endif %}
                 <tr class="{{ row_class }}">
                   <td class="text-center col-type">{{ row.item_type_label }}</td>
                   {% set cells = row.cell_comparisons or [] %}
                   {% for cell in cells %}
-                    <td class="{% if loop.last %}split-right{% endif %}{% if anomalous and not cell.matches %} anomaly-cell{% endif %}">
+                    <td class="{% if loop.last %}split-right{% endif %}">
                       {% set stmt_text = cell.statement_value %}
                       {% set show_indicator = row.matches and not cell.matches %}
                       <span class="cell-value-wrapper">
@@ -126,7 +126,7 @@
                     </td>
                   {% endfor %}
                   {% for cell in cells %}
-                    <td class="{% if anomalous and not cell.matches %}anomaly-cell{% endif %}">
+                    <td>
                       {% set xero_text = cell.xero_value %}
                       {% set show_indicator = row.matches and not cell.matches %}
                       <span class="cell-value-wrapper">
@@ -155,7 +155,7 @@
                           <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
                           <input type="hidden" name="items_view" value="{{ items_view }}">
                           <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
-                          <button type="submit" class="btn btn-sm btn-outline-warning text-nowrap px-2 py-0" data-automation="statement-row-incomplete">Mark incomplete</button>
+                          <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap px-2 py-0" data-automation="statement-row-incomplete">Mark incomplete</button>
                         </form>
                       {% else %}
                         <form method="post" class="d-inline">
@@ -164,7 +164,7 @@
                           <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
                           <input type="hidden" name="items_view" value="{{ items_view }}">
                           <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
-                          <button type="submit" class="btn btn-sm btn-outline-success text-nowrap px-2 py-0" data-automation="statement-row-complete">Mark complete</button>
+                          <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap px-2 py-0" data-automation="statement-row-complete">Mark complete</button>
                         </form>
                       {% endif %}
                     {% else %}

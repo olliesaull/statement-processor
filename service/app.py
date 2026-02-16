@@ -802,7 +802,7 @@ def _build_excel_headers(display_headers: list[str]) -> tuple[list[tuple[str, st
     return header_labels, excel_headers
 
 
-def _add_excel_legend(workbook: Workbook, *, fill_success: PatternFill, fill_danger: PatternFill, fill_warning: PatternFill, font_completed: Font, mismatch_border: Border) -> None:
+def _add_excel_legend(workbook: Workbook, *, fill_success: PatternFill, fill_danger: PatternFill, fill_warning: PatternFill, mismatch_border: Border) -> None:
     """Add a legend sheet describing statement row styles."""
     legend = workbook.create_sheet(title="Legend")
     legend.column_dimensions["A"].width = 26
@@ -817,8 +817,7 @@ def _add_excel_legend(workbook: Workbook, *, fill_success: PatternFill, fill_dan
     legend["B4"].fill = fill_warning
     legend.append(["Cell mismatch (matched rows)", ""])
     legend["B5"].border = mismatch_border
-    legend.append(["Completed (faded)", ""])
-    legend["A7"].font = font_completed
+    legend.append(["Completed (see Status column)", ""])
 
 
 def _status_for_excel_row(item: Any, item_status_map: dict[str, bool]) -> tuple[str, bool]:
@@ -860,13 +859,11 @@ def _row_fill_for_item(item: Any, row_match: bool, *, fill_warning: PatternFill,
     return fill_success if row_match else fill_danger
 
 
-def _apply_row_fill(worksheet, *, current_row: int, total_columns: int, fill: PatternFill, font_completed: Font, is_item_completed: bool) -> None:
+def _apply_row_fill(worksheet, *, current_row: int, total_columns: int, fill: PatternFill) -> None:
     """Apply row coloring to a worksheet row."""
     for col in range(1, total_columns + 1):
         cell = worksheet.cell(row=current_row, column=col)
         cell.fill = fill
-        if is_item_completed:
-            cell.font = font_completed
 
 
 def _apply_divider_borders(worksheet, *, current_row: int, statement_end_col: int, xero_start_col: int, divider_side: Side) -> None:
@@ -950,7 +947,6 @@ def _append_excel_rows(
     fill_success: PatternFill,
     fill_danger: PatternFill,
     fill_warning: PatternFill,
-    font_completed: Font,
     mismatch_border: Border,
     mismatch_side: Side,
     divider_side: Side,
@@ -989,7 +985,7 @@ def _append_excel_rows(
 
         row_match = row_matches[idx] if idx < len(row_matches) else False
         fill = _row_fill_for_item(item, row_match, fill_warning=fill_warning, fill_success=fill_success, fill_danger=fill_danger)
-        _apply_row_fill(worksheet, current_row=current_row, total_columns=len(excel_headers), fill=fill, font_completed=font_completed, is_item_completed=is_item_completed)
+        _apply_row_fill(worksheet, current_row=current_row, total_columns=len(excel_headers), fill=fill)
 
         if statement_col_count:
             _apply_divider_borders(worksheet, current_row=current_row, statement_end_col=statement_end_col, xero_start_col=xero_start_col, divider_side=divider_side)
@@ -1055,9 +1051,8 @@ def _build_statement_excel_response(
     worksheet.append(excel_headers)
 
     fill_success = PatternFill(fill_type="solid", fgColor="C6EFCE")
-    fill_danger = PatternFill(fill_type="solid", fgColor="FFC7CE")
+    fill_danger = PatternFill(fill_type="solid", fgColor="CD5C5C")
     fill_warning = PatternFill(fill_type="solid", fgColor="FFEB9C")
-    font_completed = Font(color="808080")
     mismatch_side = Side(style="thin", color="E6B8B7")
     mismatch_border = Border(left=mismatch_side, right=mismatch_side, top=mismatch_side, bottom=mismatch_side)
     divider_side = Side(style="medium", color="808080")
@@ -1065,7 +1060,7 @@ def _build_statement_excel_response(
     statement_end_col = 1 + statement_col_count
     xero_start_col = statement_end_col + 1
 
-    _add_excel_legend(workbook, fill_success=fill_success, fill_danger=fill_danger, fill_warning=fill_warning, font_completed=font_completed, mismatch_border=mismatch_border)
+    _add_excel_legend(workbook, fill_success=fill_success, fill_danger=fill_danger, fill_warning=fill_warning, mismatch_border=mismatch_border)
 
     if statement_col_count:
         worksheet.cell(row=1, column=statement_end_col).border = Border(right=divider_side)
@@ -1090,7 +1085,6 @@ def _build_statement_excel_response(
         fill_success=fill_success,
         fill_danger=fill_danger,
         fill_warning=fill_warning,
-        font_completed=font_completed,
         mismatch_border=mismatch_border,
         mismatch_side=mismatch_side,
         divider_side=divider_side,
