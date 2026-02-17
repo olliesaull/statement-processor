@@ -2,75 +2,79 @@
 {% block title %}Instructions{% endblock %}
 
 {% block content %}
-  <div class="container py-4">
-    <h1 class="mb-4">Getting Started</h1>
+<div class="page-main">
+  <header class="page-header">
+    <p class="page-kicker mb-1">How It Works</p>
+    <h1 class="mb-2">Getting Started</h1>
+    <p class="page-subtitle mb-0">Follow this flow from first connection to final reconciliation.</p>
+  </header>
 
-    <div class="row g-4">
-      <div class="col-12 col-lg-6">
-        <div class="card h-100">
-          <div class="card-body">
-            <h2 class="h5">1. On First Connection</h2>
-            <p class="mb-2">
-              After connecting your Xero tenant for the first time, a <strong>Load</strong> will begin. This gets all your contacts, invoices, credit notes, and payments.
-            </p>
-            <p class="mb-0">
-              While the load runs, most actions are locked. If you try to move away, you'll be sent back to the tenant page. You can still switch to another tenant that isn't loading.
-              Note: The app only locks actions for tenants that are loading, therefore you can switch tenants and perform tasks if you want.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div class="col-12 col-lg-6">
-        <div class="card h-100">
-          <div class="card-body">
-            <h2 class="h5">2. Use Sync to Stay Current</h2>
-            <p class="mb-2">
-              The <strong>Sync</strong> action refreshes your Xero data so new contacts, invoices, credit notes, and payments appear in matching. It's quick and safe to run whenever you need a fresh view.
-            </p>
-            <p class="mb-0">
-              If something looks out of date, run a sync and re-open the statement.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div class="col-12 col-lg-6">
-        <div class="card h-100">
-          <div class="card-body">
-            <h2 class="h5">3. Typical Workflow</h2>
-            <ul class="mb-0">
-              <li>Select your tenant.</li>
-              <li>Load (first-time) or Sync to refresh Xero data.</li>
-              <li>Upload supplier statements with the right contact selected.</li>
-              <li>Open the statement to reconcile, mark items complete, and download the Excel export if needed.</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-
-      <div class="col-12 col-lg-6">
-        <div class="card h-100">
-          <div class="card-body">
-            <h2 class="h5">4. Updating Contact Configs</h2>
-            <p class="mb-2">
-              Need to tweak a contact configuration? Make your changes, then delete the existing statement and upload it again. This ensures the new mapping is applied to every item. 
-            <p class="mb-0">
-              Re-uploading triggers a fresh analysis. If you re-upload without deleting the original, you'll create a duplicate statement.
-            </p>
-            </p>
-          </div>
+  <div class="row g-4 mb-4">
+    <div class="col-12 col-lg-6">
+      <div class="card h-100 instructions-card">
+        <div class="card-body">
+          <h2 class="h5">1. On First Connection</h2>
+          <p class="mb-2">
+            After connecting your Xero tenant for the first time, a <strong>Load</strong> will begin. This gets all your contacts, invoices, credit notes, and payments.
+          </p>
+          <p class="mb-0">
+            While the load runs, most actions are locked. If you try to move away, you'll be sent back to the tenant page. You can still switch to another tenant that isn't loading.
+            Note: The app only locks actions for tenants that are loading, therefore you can switch tenants and perform tasks if you want.
+          </p>
         </div>
       </div>
     </div>
 
-    <div class="mt-5">
-      <h2 class="h5">Quick Tips</h2>
-      <ul>
-        <li>The app will let you know when a Load or Sync finishes (on the Home page).</li>
-        <li>Anything marked as an anomaly deserves an extra glance before marking it complete.</li>
-        <li>Download the Excel export for a snapshot you can share or archive.</li>
-      </ul>
+    <div class="col-12 col-lg-6">
+      <div class="card h-100 instructions-card">
+        <div class="card-body">
+          <h2 class="h5">2. Use Sync to Stay Current</h2>
+          <p class="mb-2">
+            The <strong>Sync</strong> action refreshes your Xero data so new contacts, invoices, credit notes, and payments appear in matching. It's quick and safe to run whenever you need a fresh view.
+          </p>
+          <p class="mb-0">
+            If something looks out of date, run a sync and re-open the statement.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+      <div class="card h-100 instructions-card">
+        <div class="card-body">
+          <h2 class="h5">3. Typical Workflow</h2>
+          <ul class="mb-0">
+            <li>Select your tenant.</li>
+            <li>Load (first-time) or Sync to refresh Xero data.</li>
+            <li>Upload supplier statements with the right contact selected.</li>
+            <li>Open the statement to reconcile, mark items complete, and download the Excel export if needed.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+      <div class="card h-100 instructions-card">
+        <div class="card-body">
+          <h2 class="h5">4. Updating Contact Configs</h2>
+          <p class="mb-2">
+            Need to tweak a contact configuration? Make your changes, then delete the existing statement and upload it again. This ensures the new mapping is applied to every item.
+          </p>
+          <p class="mb-0">
+            Re-uploading triggers a fresh analysis. If you re-upload without deleting the original, you'll create a duplicate statement.
+          </p>
+        </div>
+      </div>
     </div>
   </div>
+
+  <section class="page-panel page-panel-muted">
+    <h2 class="h5 mb-3">Quick Tips</h2>
+    <ul class="instructions-tips-list">
+      <li>The app will let you know when a Load or Sync finishes (on the Home page).</li>
+      <li>Anything marked as an anomaly deserves an extra glance before marking it complete.</li>
+      <li>Download the Excel export for a snapshot you can share or archive.</li>
+    </ul>
+  </section>
+</div>
 {% endblock %}

@@ -1,8 +1,12 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="py-4">
-    <h1 class="mb-4">Tenant Management</h1>
+<div class="page-main">
+  <header class="page-header">
+    <p class="page-kicker mb-1">Workspace Setup</p>
+    <h1 class="mb-2">Tenant Management</h1>
+    <p class="page-subtitle mb-0">Connect tenants, switch the active tenant, and run syncs when you need refreshed Xero data.</p>
+  </header>
 
   {% if message %}
     <div class="alert alert-success" role="alert">{{ message }}</div>
@@ -10,16 +14,20 @@
   {% if error %}
     <div class="alert alert-danger" role="alert">{{ error }}</div>
   {% endif %}
-    <div class="d-flex flex-wrap gap-2 mb-4">
+
+  <section class="page-panel page-panel-flat mb-4">
+    <div class="d-flex flex-wrap align-items-center gap-2">
       <a class="btn btn-primary" href="{{ url_for('login') }}">Add Tenant</a>
       {% if active_tenant %}
-        <span class="align-self-center">Current tenant: <strong>{{ active_tenant.tenantName or active_tenant.tenantId }}</strong></span>
+        <span class="tenant-current-chip">Current tenant: <strong>{{ active_tenant.tenantName or active_tenant.tenantId }}</strong></span>
       {% endif %}
     </div>
+  </section>
 
-    {% if tenants %}
+  {% if tenants %}
+    <div class="page-table-shell">
       <div class="table-responsive">
-        <table class="table table-bordered align-middle">
+        <table class="table table-bordered align-middle tenant-table">
           <thead class="table-light">
             <tr>
               <th scope="col">Tenant Name</th>
@@ -44,10 +52,8 @@
                   </div>
                 </td>
                 <td class="text-center">
-                  <div class="d-flex justify-content-center gap-2">
-                    <button class="btn btn-outline-secondary btn-sm sync-btn" type="button" data-tenant-id="{{ tenant.tenantId }}">
-                      Sync
-                    </button>
+                  <div class="d-flex flex-wrap justify-content-center gap-2">
+                    <button class="btn btn-outline-secondary btn-sm sync-btn" type="button" data-tenant-id="{{ tenant.tenantId }}">Sync</button>
                     {% if not is_active %}
                       <form method="post" action="{{ url_for('select_tenant') }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -67,8 +73,11 @@
           </tbody>
         </table>
       </div>
-    {% else %}
-      <p>No tenants connected yet. Use the button above to add one.</p>
-    {% endif %}
+    </div>
+  {% else %}
+    <div class="page-panel">
+      <p class="mb-0">No tenants connected yet. Use the button above to add one.</p>
+    </div>
+  {% endif %}
 </div>
 {% endblock %}

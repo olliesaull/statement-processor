@@ -3,7 +3,18 @@ const getCsrfToken = () => {
   return meta ? meta.getAttribute("content") : "";
 };
 
+const NAVBAR_SCROLLED_CLASS = "navbar-scrolled";
+
+const updateNavbarScrollState = () => {
+  const navbar = document.querySelector(".navbar");
+  if (!navbar) return;
+  navbar.classList.toggle(NAVBAR_SCROLLED_CLASS, window.scrollY > 8);
+};
+
 window.addEventListener("load", () => {
+  updateNavbarScrollState();
+  window.addEventListener("scroll", updateNavbarScrollState, { passive: true });
+
   if (window.location.pathname === "/tenant_management") {
 			// Event listeners to check for inactivity 
 			document.addEventListener("mousemove", throttle(resetActivityTimer, 1000)); // 1000ms delay between events

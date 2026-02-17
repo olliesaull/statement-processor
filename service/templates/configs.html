@@ -2,8 +2,12 @@
 {% block title %}Edit Contact Config{% endblock %}
 
 {% block content %}
-<div class="container mt-4">
-  <h1 class="mb-4">Edit Contact Config</h1>
+<div class="page-main">
+  <header class="page-header">
+    <p class="page-kicker mb-1">Configuration</p>
+    <h1 class="mb-2">Edit Contact Config</h1>
+    <p class="page-subtitle mb-0">Map supplier statement columns and formatting so uploads parse consistently.</p>
+  </header>
 
   <div class="mb-4">
     <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#exampleConfig" aria-expanded="false" aria-controls="exampleConfig">
@@ -12,7 +16,7 @@
   </div>
 
   <div class="collapse mb-4" id="exampleConfig">
-    <div class="card">
+    <div class="card page-panel-flat">
       <div class="card-header">How the PDF lines up with a config</div>
       <div class="card-body">
         <div class="row g-4 align-items-start">
@@ -98,7 +102,7 @@
   {% endif %}
 
   <!-- Contact selector -->
-  <form method="POST" action="{{ url_for('configs') }}" class="mb-4" id="config-load-form" data-automation="config-load-form">
+  <form method="POST" action="{{ url_for('configs') }}" class="mb-4 page-panel page-panel-flat" id="config-load-form" data-automation="config-load-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset class="row gy-2 gx-3 align-items-center">
       <input type="hidden" name="action" value="load">
@@ -120,7 +124,7 @@
   </form>
 
   {% if selected_contact_id %}
-  <form method="POST" action="{{ url_for('configs') }}" id="config-save-form" data-automation="config-save-form">
+  <form method="POST" action="{{ url_for('configs') }}" class="page-panel" id="config-save-form" data-automation="config-save-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset>
     <input type="hidden" name="action" value="save_map">
@@ -128,57 +132,59 @@
     <input type="hidden" name="contact_name" value="{{ selected_contact_name }}">
 
     <h2 class="h5">Column Header Mappings</h2>
-    <div class="table-responsive">
-      <p><i>Please note that empty fields will not be displayed.</i></p>
-      <table class="table table-bordered align-middle">
-        <thead class="table-light">
-          <tr>
-            <th class="configs-xero-column">Xero</th>
-            <th>Statement column</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in mapping_rows %}
-          {% set field_key = row.field %}
-          {% set field_label_raw = field_key.replace('_', ' ') %}
-          {% set field_label = field_label_raw.title() %}
-          {% if field_key in ['number', 'total'] %}
-          {% set field_label = field_label + ' (Mandatory)' %}
-          {% endif %}
-          <tr>
-            <td>
-              <div class="fw-semibold">{{ field_label }}</div>
-              {% set desc = field_descriptions.get(field_key) if field_descriptions else None %}
-              {% if desc %}
-              <div class="text-muted small mt-1">{{ desc }}</div>
-              {% endif %}
-            </td>
-            <td>
-              <input type="hidden" name="fields[]" value="{{ field_key }}">
-              {% set values = row['values'] or [] %}
-              {% if row.is_multi %}
-              <div id="container-{{ field_key }}" data-automation="config-map-{{ field_key }}-container">
-                {% for v in values %}
-                <div class="input-group mb-2">
-                  <input type="text" class="form-control" name="map[{{ field_key }}][]" value="{{ v }}" placeholder="Enter column heading" data-automation="config-map-{{ field_key }}" {% if field_key == 'total' %}required{% endif %}>
-                  <button type="button" class="btn btn-outline-danger" onclick="removeInput(this, '{{ field_key }}')">Remove</button>
+    <p class="mb-3"><i>Please note that empty fields will not be displayed.</i></p>
+    <div class="page-table-shell mb-3">
+      <div class="table-responsive">
+        <table class="table table-bordered align-middle">
+          <thead class="table-light">
+            <tr>
+              <th class="configs-xero-column">Xero</th>
+              <th>Statement column</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in mapping_rows %}
+            {% set field_key = row.field %}
+            {% set field_label_raw = field_key.replace('_', ' ') %}
+            {% set field_label = field_label_raw.title() %}
+            {% if field_key in ['number', 'total'] %}
+            {% set field_label = field_label + ' (Mandatory)' %}
+            {% endif %}
+            <tr>
+              <td>
+                <div class="fw-semibold">{{ field_label }}</div>
+                {% set desc = field_descriptions.get(field_key) if field_descriptions else None %}
+                {% if desc %}
+                <div class="text-muted small mt-1">{{ desc }}</div>
+                {% endif %}
+              </td>
+              <td>
+                <input type="hidden" name="fields[]" value="{{ field_key }}">
+                {% set values = row['values'] or [] %}
+                {% if row.is_multi %}
+                <div id="container-{{ field_key }}" data-automation="config-map-{{ field_key }}-container">
+                  {% for v in values %}
+                  <div class="input-group mb-2">
+                    <input type="text" class="form-control" name="map[{{ field_key }}][]" value="{{ v }}" placeholder="Enter column heading" data-automation="config-map-{{ field_key }}" {% if field_key == 'total' %}required{% endif %}>
+                    <button type="button" class="btn btn-outline-danger" onclick="removeInput(this, '{{ field_key }}')">Remove</button>
+                  </div>
+                  {% endfor %}
                 </div>
-                {% endfor %}
-              </div>
-              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addInput('{{ field_key }}')" data-automation="config-map-{{ field_key }}-add">Add another column</button>
-              {% else %}
-              <input type="text" class="form-control" name="map[{{ field_key }}]" value="{{ values[0] if values else '' }}" placeholder="Enter column heading" data-automation="config-map-{{ field_key }}" {% if field_key == 'number' %}required{% endif %}>
-              {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addInput('{{ field_key }}')" data-automation="config-map-{{ field_key }}-add">Add another column</button>
+                {% else %}
+                <input type="text" class="form-control" name="map[{{ field_key }}]" value="{{ values[0] if values else '' }}" placeholder="Enter column heading" data-automation="config-map-{{ field_key }}" {% if field_key == 'number' %}required{% endif %}>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <hr>
 
-    <div class="mt-4">
+    <div class="page-panel page-panel-muted mt-4">
       <h2 class="h5">Formatting</h2>
       <p class="text-muted small mb-3">Tell us how this supplier prints dates and numbers so we can parse the statement correctly.</p>
       <div class="row g-3">
@@ -208,7 +214,7 @@
       </div>
     </div>
 
-    <div class="mt-4">
+    <div class="page-panel page-panel-muted mt-4">
       <h2 class="h5">Supplier Date Format (SDF) reference</h2>
       <p>Use the following tokens when describing how your supplier prints dates:</p>
       <ul class="mb-3">
@@ -230,7 +236,7 @@
       </ul>
     </div>
 
-    <button type="submit" class="btn btn-success mb-5" id="config-save-button" data-automation="config-save-button">Save</button>
+    <button type="submit" class="btn btn-success mt-4" id="config-save-button" data-automation="config-save-button">Save</button>
     </fieldset>
   </form>
   {% endif %}

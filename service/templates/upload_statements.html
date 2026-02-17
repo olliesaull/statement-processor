@@ -2,8 +2,13 @@
 {% block title %}Upload Statements{% endblock %}
 
 {% block content %}
-<div class="d-flex flex-column align-items-center upload-statements-page">
-  <h1>Upload Statements</h1>
+<div class="page-main upload-statements-page">
+  <header class="page-header content-max-720">
+    <p class="page-kicker mb-1">Statements</p>
+    <h1 class="mb-2">Upload Statements</h1>
+    <p class="page-subtitle mb-0">Add one or more statement PDFs and pair each file with the correct contact before upload.</p>
+  </header>
+
   {% if success_count %}
     <div class="alert alert-success w-100 content-max-720" role="alert">
       Uploaded {{ success_count }} statement{% if success_count != 1 %}s{% endif %} successfully.
@@ -19,10 +24,10 @@
     </div>
   {% endif %}
 
-  <form method="POST" action="{{ url_for('upload_statements') }}" enctype="multipart/form-data" class="mt-3 content-max-720" id="upload-statements-form">
+  <form method="POST" action="{{ url_for('upload_statements') }}" enctype="multipart/form-data" class="content-max-720" id="upload-statements-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <fieldset>
-      <table class="table table-sm align-middle">
+    <fieldset class="page-panel">
+      <table class="table table-sm align-middle upload-statements-table mb-3">
         <thead>
           <tr>
             <th class="upload-column-file">Statement (PDF)</th>
@@ -54,7 +59,7 @@
         {% endfor %}
       </datalist>
 
-      <div class="d-flex gap-2">
+      <div class="d-flex flex-wrap gap-2">
         <button id="add-row" type="button" class="btn btn-outline-secondary" data-automation="statement-upload-add">Add statement</button>
         <button type="submit" class="btn btn-primary" data-automation="statement-upload-submit">Upload</button>
       </div>
@@ -63,10 +68,10 @@
 </div>
 
 <script>
-  const rows = document.getElementById('rows');
-  const addBtn = document.getElementById('add-row');
+  const rowsContainer = document.getElementById("rows");
+  const addRowButton = document.getElementById("add-row");
 
-  function makeRow() {
+  function createRow() {
     const tr = document.createElement('tr');
 
     tr.innerHTML = `
@@ -95,18 +100,15 @@
     return tr;
   }
 
-  function onTableClick(e) {
-    if (e.target && e.target.classList.contains('remove-row')) {
-      const tr = e.target.closest('tr');
-      if (tr) tr.remove();
-    }
+  function handleTableClick(event) {
+    const removeButton = event.target.closest(".remove-row");
+    if (!removeButton) return;
+    removeButton.closest("tr")?.remove();
   }
 
-  if (addBtn) {
-    addBtn.addEventListener('click', () => rows.appendChild(makeRow()));
-  }
-  if (rows) {
-    rows.addEventListener('click', onTableClick);
+  if (addRowButton && rowsContainer) {
+    addRowButton.addEventListener("click", () => rowsContainer.appendChild(createRow()));
+    rowsContainer.addEventListener("click", handleTableClick);
   }
 </script>
 {% endblock %}

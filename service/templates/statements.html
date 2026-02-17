@@ -2,17 +2,22 @@
 {% block title %}{{ 'Completed' if show_completed else 'Incomplete' }} Statements{% endblock %}
 
 {% block content %}
-  <div class="container mt-5 statements-page">
-    <h1 class="mb-4">{{ 'Completed Statements' if show_completed else 'Incomplete Statements' }}</h1>
+<div class="page-main">
+  <header class="page-header">
+    <p class="page-kicker mb-1">Reconciliation</p>
+    <h1 class="mb-2">{{ 'Completed Statements' if show_completed else 'Incomplete Statements' }}</h1>
+    <p class="page-subtitle mb-0">Open statements to reconcile line items and keep your processing queue moving.</p>
+  </header>
 
-    {% if message %}
-      <div class="alert alert-success" role="alert">
-        {{ message }}
-      </div>
-    {% endif %}
+  {% if message %}
+    <div class="alert alert-success" role="alert">
+      {{ message }}
+    </div>
+  {% endif %}
 
-    {% if statements %}
-      <div class="d-flex justify-content-end align-items-center gap-2 mb-3">
+  {% if statements %}
+    <div class="page-panel page-panel-muted mb-3">
+      <div class="statements-sort-bar">
         <span class="text-muted">Sort by:</span>
         <div class="btn-group" role="group" aria-label="Sort statements">
           <a href="{{ sort_links.contact }}" class="btn btn-sm {% if current_sort == 'contact' %}btn-primary{% else %}btn-outline-primary{% endif %}">
@@ -26,49 +31,68 @@
           </a>
         </div>
       </div>
-      <table class="table table-striped table-bordered align-middle statements-table" id="statements-table" data-automation="statements-table">
-        <thead class="table-light">
-          <tr>
-            <th scope="col">Contact Name</th>
-            <th scope="col">Item Date Range</th>
-            <th scope="col">Statement Filename</th>
-            <th scope="col" class="text-center">Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for stmt in statements %}
-            <tr data-statement-id="{{ stmt['StatementID'] }}" data-contact-name="{{ stmt.get('ContactName') or '' }}" data-automation="statement-row">
-              <td>{{ stmt.get("ContactName") or "—" }}</td>
-              <td>{{ stmt.get("ItemDateRangeDisplay") or "—" }}</td>
-              <td>{{ stmt.get("OriginalStatementFilename") or "—" }}</td>
-              <td class="text-center">
-                <div class="d-flex justify-content-center gap-2">
-                  <a href="{{ url_for('statement', statement_id=stmt['StatementID']) }}"
-                     class="btn btn-sm btn-primary" data-automation="statement-reconcile-link">
-                    Reconcile
-                  </a>
-                  <form method="post" action="{{ url_for('delete_statement', statement_id=stmt['StatementID']) }}" class="d-inline" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                  </form>
-                </div>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <div class="alert alert-info" role="alert">
-        No {{ 'completed' if show_completed else 'incomplete' }} statements found.
-      </div>
-    {% endif %}
-
-    <div class="d-flex justify-content-end gap-2 mt-4 statements-page-toggle">
-      {% if show_completed %}
-        <a href="{{ url_for('statements', sort=current_sort, dir=current_dir) }}" class="btn btn-secondary">View incomplete</a>
-      {% else %}
-        <a href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir) }}" class="btn btn-outline-secondary">View completed</a>
-      {% endif %}
     </div>
+    <div class="page-table-shell">
+      <div class="table-responsive">
+        <table class="table table-striped table-bordered align-middle statements-table" id="statements-table" data-automation="statements-table">
+          <thead class="table-light">
+            <tr>
+              <th scope="col" class="statements-col-contact">Contact Name</th>
+              <th scope="col" class="statements-col-date-range">Item Date Range</th>
+              <th scope="col" class="statements-col-filename">Statement Filename</th>
+              <th scope="col" class="text-center statements-col-action">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for stmt in statements %}
+              {% set contact_name = stmt.get("ContactName") or "—" %}
+              {% set item_date_range = stmt.get("ItemDateRangeDisplay") or "—" %}
+              {% set statement_filename = stmt.get("OriginalStatementFilename") or "—" %}
+              <tr data-statement-id="{{ stmt['StatementID'] }}" data-contact-name="{{ stmt.get('ContactName') or '' }}" data-automation="statement-row">
+                <td class="statements-col-contact">
+                  <span class="cell-value-wrapper">
+                    <span class="cell-value-truncate" title="{{ contact_name|default('', true)|e }}">{{ contact_name }}</span>
+                  </span>
+                </td>
+                <td class="statements-col-date-range">
+                  <span class="cell-value-wrapper">
+                    <span class="cell-value-truncate" title="{{ item_date_range|default('', true)|e }}">{{ item_date_range }}</span>
+                  </span>
+                </td>
+                <td class="statements-col-filename">
+                  <span class="cell-value-wrapper">
+                    <span class="cell-value-truncate" title="{{ statement_filename|default('', true)|e }}">{{ statement_filename }}</span>
+                  </span>
+                </td>
+                <td class="text-center statements-col-action">
+                  <div class="d-flex flex-wrap justify-content-center gap-2">
+                    <a href="{{ url_for('statement', statement_id=stmt['StatementID']) }}" class="btn btn-sm btn-primary" data-automation="statement-reconcile-link">
+                      Reconcile
+                    </a>
+                    <form method="post" action="{{ url_for('delete_statement', statement_id=stmt['StatementID']) }}" class="d-inline" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% else %}
+    <div class="alert alert-info" role="alert">
+      No {{ 'completed' if show_completed else 'incomplete' }} statements found.
+    </div>
+  {% endif %}
+
+  <div class="page-actions-end mt-4 statements-page-toggle">
+    {% if show_completed %}
+      <a href="{{ url_for('statements', sort=current_sort, dir=current_dir) }}" class="btn btn-secondary">View incomplete</a>
+    {% else %}
+      <a href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir) }}" class="btn btn-outline-secondary">View completed</a>
+    {% endif %}
   </div>
+</div>
 {% endblock %}
