@@ -5,7 +5,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from flask import Response, jsonify, redirect, request, session, url_for
+from flask import Response, jsonify, make_response, redirect, request, session, url_for
 from werkzeug.exceptions import HTTPException
 from xero_python.accounting import AccountingApi
 from xero_python.api_client import ApiClient  # type: ignore
@@ -33,6 +33,9 @@ SCOPES = [
     "files.read",
 ]
 _XERO_TOKEN_FIELDS = {"access_token", "refresh_token", "expires_in", "expires_at", "token_type", "scope", "id_token"}
+COOKIE_CONSENT_COOKIE_NAME = "cookie_consent"
+SESSION_IS_SET_COOKIE_NAME = "session_is_set"
+SESSION_IS_SET_COOKIE_MAX_AGE_SECONDS = 31 * 60
 
 
 def _sanitize_xero_token(token: dict | None) -> dict | None:
@@ -116,6 +119,45 @@ def scope_str() -> str:
         Space-separated scope string for OAuth requests.
     """
     return " ".join(SCOPES)
+
+
+def has_cookie_consent() -> bool:
+    """Check whether the browser has accepted essential cookie usage.
+
+    Args:
+        None.
+
+    Returns:
+        True when the consent cookie is present and set to "true", otherwise False.
+    """
+    cookie_value = str(request.cookies.get(COOKIE_CONSENT_COOKIE_NAME) or "").strip().lower()
+    return cookie_value == "true"
+
+
+def set_session_is_set_cookie(response: Response) -> Response:
+    """Set the UI helper cookie used to show a logout link in the navbar.
+
+    Args:
+        response: Response that should carry the cookie update.
+
+    Returns:
+        The same response with the session state cookie set.
+    """
+    response.set_cookie(key=SESSION_IS_SET_COOKIE_NAME, value="true", max_age=SESSION_IS_SET_COOKIE_MAX_AGE_SECONDS, path="/", samesite="Lax", secure=request.is_secure)
+    return response
+
+
+def clear_session_is_set_cookie(response: Response) -> Response:
+    """Remove the UI helper cookie used to show a logout link in the navbar.
+
+    Args:
+        response: Response that should clear the cookie.
+
+    Returns:
+        The same response with the session state cookie removed.
+    """
+    response.delete_cookie(key=SESSION_IS_SET_COOKIE_NAME, path="/")
+    return response
 
 
 class RedirectToLogin(HTTPException):
@@ -203,13 +245,23 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(f)
     def decorated_function(*args: Any, **kwargs: Any) -> Any:
         is_api_request = request.path.startswith("/api/")
+        if not has_cookie_consent():
+            logger.info("Cookie consent missing; blocking protected route", route=request.path, is_api_request=is_api_request)
+            if is_api_request:
+                response = jsonify({"error": "cookie_consent_required", "redirect": url_for("cookies")})
+                response.status_code = 401
+                return response
+            return redirect(url_for("cookies"))
+
         tenant_id = session.get("xero_tenant_id")
         token = get_xero_oauth2_token()
         if not tenant_id or not token:
             logger.info("Missing Xero token or tenant; redirecting", route=request.path, tenant_id=tenant_id)
             if is_api_request:
-                return jsonify({"error": "auth_required"}), 401
-            return redirect(url_for("login"))
+                response = jsonify({"error": "auth_required"})
+                response.status_code = 401
+                return clear_session_is_set_cookie(response)
+            return clear_session_is_set_cookie(redirect(url_for("login")))
 
         try:
             expires_at = float(token.get("expires_at", 0))
@@ -220,10 +272,15 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
             # Avoid hitting Xero with expired tokens and surfacing hard 401s.
             logger.info("Xero token expired; redirecting", route=request.path, tenant_id=tenant_id)
             if is_api_request:
-                return jsonify({"error": "auth_required"}), 401
-            return redirect(url_for("login"))
+                response = jsonify({"error": "auth_required"})
+                response.status_code = 401
+                return clear_session_is_set_cookie(response)
+            return clear_session_is_set_cookie(redirect(url_for("login")))
 
-        return f(*args, **kwargs)
+        result = f(*args, **kwargs)
+        if is_api_request:
+            return result
+        return set_session_is_set_cookie(make_response(result))
 
     return decorated_function
 
@@ -246,6 +303,8 @@ def active_tenant_required(
     def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(f)
         def wrapped(*args: Any, **kwargs: Any) -> Any:
+            if not has_cookie_consent():
+                return redirect(url_for("cookies"))
             tenant_id = session.get("xero_tenant_id")
             if tenant_id:
                 return f(*args, **kwargs)
@@ -272,6 +331,8 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
 
     @wraps(f)
     def decorated_function(*args: Any, **kwargs: Any) -> Any:
+        if not has_cookie_consent():
+            return redirect(url_for("cookies"))
         tenant_id = session.get("xero_tenant_id")
         if tenant_id:
             status = get_cached_tenant_status(tenant_id)
@@ -298,7 +359,7 @@ def route_handler_logging(function: Callable[..., Any]) -> Callable[..., Any]:
 
     @wraps(function)
     def decorator(*args: Any, **kwargs: Any) -> Any:
-        tenant_id = session.get("xero_tenant_id")
+        tenant_id = session.get("xero_tenant_id") if has_cookie_consent() else None
         logger.info("Entering route", route=request.path, event_type="USER_TRAIL", path=request.path, tenant_id=tenant_id)
 
         return function(*args, **kwargs)

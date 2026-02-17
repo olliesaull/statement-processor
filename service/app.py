@@ -31,7 +31,17 @@ from core.models import StatementItem
 from logger import logger
 from sync import check_load_required, sync_data
 from tenant_data_repository import TenantDataRepository, TenantStatus
-from utils.auth import active_tenant_required, block_when_loading, route_handler_logging, save_xero_oauth2_token, scope_str, xero_token_required
+from utils.auth import (
+    active_tenant_required,
+    block_when_loading,
+    clear_session_is_set_cookie,
+    has_cookie_consent,
+    route_handler_logging,
+    save_xero_oauth2_token,
+    scope_str,
+    set_session_is_set_cookie,
+    xero_token_required,
+)
 from utils.dynamo import (
     add_statement_to_table,
     delete_statement_data,
@@ -486,6 +496,13 @@ def instructions():
 def about():
     """Render the about page."""
     return render_template("about.html")
+
+
+@app.route("/cookies")
+@route_handler_logging
+def cookies():
+    """Render the cookie policy and consent page."""
+    return render_template("cookies.html")
 
 
 @app.route("/statements")
@@ -1560,6 +1577,10 @@ def configs():
 def login():
     """Start the Xero OAuth flow and redirect to the authorize URL."""
     logger.info("Login initiated")
+    if not has_cookie_consent():
+        logger.info("Login blocked; cookie consent missing")
+        return redirect(url_for("cookies"))
+
     if not CLIENT_ID or not CLIENT_SECRET:
         return "Missing XERO_CLIENT_ID or XERO_CLIENT_SECRET env vars", 500
 
@@ -1576,6 +1597,10 @@ def login():
 @route_handler_logging
 def callback():  # pylint: disable=too-many-return-statements
     """Handle the OAuth callback, validate tokens, and load tenant context."""
+    if not has_cookie_consent():
+        logger.info("OAuth callback blocked; cookie consent missing")
+        return redirect(url_for("cookies"))
+
     # Handle user-denied or error cases
     error = request.args.get("error")
     if error is not None:
@@ -1646,7 +1671,8 @@ def callback():  # pylint: disable=too-many-return-statements
         _set_active_tenant(None)
 
     logger.info("OAuth callback processed", tenants=len(tenants))
-    return redirect(url_for("tenant_management"))
+    response = redirect(url_for("tenant_management"))
+    return set_session_is_set_cookie(response)
 
 
 @app.route("/logout")
@@ -1655,7 +1681,8 @@ def logout():
     """Clear the session and return to the landing page."""
     logger.info("Logout requested", had_tenant=bool(session.get("xero_tenant_id")))
     session.clear()
-    return redirect(url_for("index"))
+    response = redirect(url_for("index"))
+    return clear_session_is_set_cookie(response)
 
 
 @app.route("/.well-known/<path:path>")

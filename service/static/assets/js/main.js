@@ -3,7 +3,84 @@ const getCsrfToken = () => {
   return meta ? meta.getAttribute("content") : "";
 };
 
+const COOKIE_CONSENT_COOKIE_NAME = "cookie_consent";
+const SESSION_IS_SET_COOKIE_NAME = "session_is_set";
+const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
 const NAVBAR_SCROLLED_CLASS = "navbar-scrolled";
+
+const getCookie = (cookieName) => {
+  const cookies = document.cookie ? document.cookie.split(";") : [];
+  for (const cookie of cookies) {
+    const [rawKey, ...rawValue] = cookie.split("=");
+    if ((rawKey || "").trim() === cookieName) {
+      return rawValue.join("=");
+    }
+  }
+  return "";
+};
+
+const setCookie = (cookieName, value, maxAgeSeconds) => {
+  document.cookie = `${cookieName}=${value}; path=/; max-age=${maxAgeSeconds}; SameSite=Lax`;
+};
+
+const clearCookie = (cookieName) => {
+  document.cookie = `${cookieName}=; path=/; max-age=0; SameSite=Lax`;
+};
+
+const updateNavbarAuthLink = () => {
+  const authLink = document.getElementById("nav-auth-link");
+  if (!authLink) return;
+
+  const hasConsent = getCookie(COOKIE_CONSENT_COOKIE_NAME) === "true";
+  const isSessionSet = hasConsent && getCookie(SESSION_IS_SET_COOKIE_NAME) === "true";
+  const loginHref = authLink.dataset.loginHref || "/login";
+  const logoutHref = authLink.dataset.logoutHref || "/logout";
+  const loginLabel = authLink.dataset.loginLabel || "Login";
+  const logoutLabel = authLink.dataset.logoutLabel || "Logout";
+
+  authLink.href = isSessionSet ? logoutHref : loginHref;
+  authLink.textContent = isSessionSet ? logoutLabel : loginLabel;
+  const isActive = window.location.pathname === (isSessionSet ? logoutHref : loginHref);
+  authLink.classList.toggle("active", isActive);
+};
+
+const setupCookieConsentButton = () => {
+  if (window.location.pathname !== "/cookies") return;
+  const consentButton = document.getElementById("cookie-accept-button");
+  if (!consentButton) return;
+
+  consentButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    setCookie(COOKIE_CONSENT_COOKIE_NAME, "true", ONE_YEAR_SECONDS);
+    window.location.href = consentButton.href;
+  });
+};
+
+const redirectForUnauthorizedResponse = async (response, fallbackUrl) => {
+  if (response.redirected && response.url.includes("/login")) {
+    clearCookie(SESSION_IS_SET_COOKIE_NAME);
+    window.location.href = response.url;
+    return true;
+  }
+
+  if (response.status !== 401) {
+    return false;
+  }
+
+  clearCookie(SESSION_IS_SET_COOKIE_NAME);
+  try {
+    const payload = await response.clone().json();
+    if (payload && payload.error === "cookie_consent_required") {
+      window.location.href = payload.redirect || `${window.location.origin}/cookies`;
+      return true;
+    }
+  } catch (_error) {
+    // Ignore JSON parse errors and fall through to the default auth redirect.
+  }
+
+  window.location.href = fallbackUrl;
+  return true;
+};
 
 const updateNavbarScrollState = () => {
   const navbar = document.querySelector(".navbar");
@@ -14,9 +91,11 @@ const updateNavbarScrollState = () => {
 window.addEventListener("load", () => {
   updateNavbarScrollState();
   window.addEventListener("scroll", updateNavbarScrollState, { passive: true });
+  setupCookieConsentButton();
+  updateNavbarAuthLink();
 
   if (window.location.pathname === "/tenant_management") {
-			// Event listeners to check for inactivity 
+      // Event listeners to check for inactivity 
 			document.addEventListener("mousemove", throttle(resetActivityTimer, 1000)); // 1000ms delay between events
 			document.addEventListener("keydown", throttle(resetActivityTimer, 1000));
 			document.addEventListener("mousedown", throttle(resetActivityTimer, 1000));
@@ -104,13 +183,7 @@ async function handleSyncClick(button) {
       credentials: "same-origin",
     });
 
-    if (response.redirected && response.url.includes("/login")) {
-      window.location.href = response.url;
-      return;
-    }
-
-    if (response.status === 401) {
-      window.location.href = `${window.location.origin}/login`;
+    if (await redirectForUnauthorizedResponse(response, `${window.location.origin}/login`)) {
       return;
     }
 
@@ -171,21 +244,15 @@ const resetActivityTimer = () => {
 async function callGetTenantStatusesAPI() {
 	const baseUrl = window.location.origin;
     const response = await fetch(`${baseUrl}/api/tenant-statuses`, {
-		method: 'GET', // Specify the request method
-		headers: {
-			'Content-Type': 'application/json', // Indicate that we're sending JSON data
-		},
-	});
+			method: 'GET', // Specify the request method
+			headers: {
+				'Content-Type': 'application/json', // Indicate that we're sending JSON data
+			},
+		});
 
-	if (response.redirected && response.url.includes("/login")) {
-		window.location.href = response.url;
-		return;
-	}
-
-	if (response.status === 401) {
-		window.location.href = `${baseUrl}/login`; // Force re-login
-		return;
-	}
+		if (await redirectForUnauthorizedResponse(response, `${baseUrl}/login`)) {
+			return;
+		}
 
 	if (!response.ok) {
 		throw new Error('Network response was not ok');

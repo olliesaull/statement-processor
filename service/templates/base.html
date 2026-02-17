@@ -4,7 +4,9 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    {% if request.endpoint == "tenant_management" %}
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    {% endif %}
     <title>{% block title %}Statement Processor{% endblock %}</title>
 
     <!-- ✅ Bootstrap CSS from official CDN -->
@@ -25,7 +27,6 @@
 
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
-                    {% if session.get('access_token') and session.get('xero_tenant_id') %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}"
                             href="{{ url_for('index') }}">Home</a>
@@ -55,19 +56,14 @@
                             href="{{ url_for('configs') }}">Configuration</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'logout' %}active{% endif %}"
-                            href="{{ url_for('logout') }}">Logout</a>
+                        <a id="nav-auth-link"
+                            class="nav-link {% if request.endpoint == 'login' %}active{% endif %}"
+                            href="{{ url_for('login') }}"
+                            data-login-href="{{ url_for('login') }}"
+                            data-logout-href="{{ url_for('logout') }}"
+                            data-login-label="Login"
+                            data-logout-label="Logout">Login</a>
                     </li>
-                    {% else %}
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'about' %}active{% endif %}"
-                            href="{{ url_for('about') }}">About</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'login' %}active{% endif %}"
-                            href="{{ url_for('login') }}">Login</a>
-                    </li>
-                    {% endif %}
                 </ul>
             </div>
         </div>

@@ -172,6 +172,7 @@
 - **Key routes/endpoints and purpose** (all in `service/app.py`)
   - **Core UI**
     - `/` (GET): landing page (`index`).
+    - `/cookies` (GET): cookie policy + consent page for essential cookies.
     - `/tenant_management` (GET): tenant picker/overview (requires Xero auth via `@xero_token_required`).
     - `/upload-statements` (GET/POST): upload PDFs and trigger textraction (requires tenant + Xero auth, blocks while loading).
     - `/statements` (GET): list and sort statements (requires tenant + Xero auth, blocks while loading).
@@ -190,6 +191,8 @@
     - `/logout` (GET): clear session.
     - `/tenants/select` (POST): set active tenant in session.
     - `/tenants/disconnect` (POST): disconnect tenant from Xero.
+    - **Cookie consent gate**: Protected routes and `/login` require the browser cookie `cookie_consent=true`. If consent is missing, UI routes redirect to `/cookies`; API routes return `401` JSON with `{"error": "cookie_consent_required", "redirect": "/cookies"}`.
+    - **Session-state UI cookie**: Authenticated UI responses set `session_is_set=true` (short-lived helper cookie) so frontend JavaScript can toggle the final navbar item between `Login` and `Logout` without template-time session checks.
   - **Misc**
     - `/.well-known/<path>` (GET): returns 204 for DevTools probes.
 
