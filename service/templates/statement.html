@@ -108,7 +108,7 @@
                   {% set row_class = 'table-success' if row.matches else 'table-danger' %}
                 {% endif %}
                 {% if row.is_completed %}
-                  {% set row_class = row_class + ' opacity-75' %}
+                  {% set row_class = row_class + ' completed-row-fade' %}
                 {% endif %}
                 <tr class="{{ row_class }}">
                   <td class="text-center col-type">{{ row.item_type_label }}</td>

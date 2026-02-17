@@ -299,6 +299,10 @@ a:focus-visible {
   color: #713f12;
 }
 
+.statement-table tbody tr.completed-row-fade {
+  opacity: 0.65;
+}
+
 .statement-legend .legend-swatch.bg-success {
   background-color: #c6efce !important;
 }

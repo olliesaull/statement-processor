@@ -805,7 +805,7 @@ def _build_excel_headers(display_headers: list[str]) -> tuple[list[tuple[str, st
 def _add_excel_legend(workbook: Workbook, *, fill_success: PatternFill, fill_danger: PatternFill, fill_warning: PatternFill, mismatch_border: Border) -> None:
     """Add a legend sheet describing statement row styles."""
     legend = workbook.create_sheet(title="Legend")
-    legend.column_dimensions["A"].width = 26
+    legend.column_dimensions["A"].width = 30
     legend.column_dimensions["B"].width = 18
     legend.append(["Legend", ""])
     legend["A1"].font = Font(bold=True)
@@ -817,7 +817,6 @@ def _add_excel_legend(workbook: Workbook, *, fill_success: PatternFill, fill_dan
     legend["B4"].fill = fill_warning
     legend.append(["Cell mismatch (matched rows)", ""])
     legend["B5"].border = mismatch_border
-    legend.append(["Completed (see Status column)", ""])
 
 
 def _status_for_excel_row(item: Any, item_status_map: dict[str, bool]) -> tuple[str, bool]:
@@ -965,7 +964,7 @@ def _append_excel_rows(
         right_row = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
         item = items[idx] if idx < len(items) else {}
 
-        status_label, is_item_completed = _status_for_excel_row(item, item_status_map)
+        status_label, _is_item_completed = _status_for_excel_row(item, item_status_map)
         row_values = _build_excel_row_values(header_labels, left_row, right_row, item_types, idx)
         xero_invoice_id, xero_credit_note_id = _xero_ids_for_row(item_number_header, left_row, matched_invoice_to_statement_item)
         if xero_credit_note_id:
@@ -1053,7 +1052,7 @@ def _build_statement_excel_response(
     fill_success = PatternFill(fill_type="solid", fgColor="C6EFCE")
     fill_danger = PatternFill(fill_type="solid", fgColor="CD5C5C")
     fill_warning = PatternFill(fill_type="solid", fgColor="FFEB9C")
-    mismatch_side = Side(style="thin", color="E6B8B7")
+    mismatch_side = Side(style="thin", color="D8A0A0")
     mismatch_border = Border(left=mismatch_side, right=mismatch_side, top=mismatch_side, bottom=mismatch_side)
     divider_side = Side(style="medium", color="808080")
     statement_col_count = len(header_labels)
