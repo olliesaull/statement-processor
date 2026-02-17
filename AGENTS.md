@@ -42,6 +42,9 @@ You are a **Senior Python Developer** with expertise in:
 - Use strong typing to catch errors at development time, not runtime
 - Write code that future developers (and agents) can understand and modify
 
+## Frontend
+- You are also responsible for maintaining simple, performant, SEO-friendly HTML/CSS when frontend changes are required.
+
 ## Development Environment
 
 **All development is done on Linux** (Ubuntu), regardless of host OS:
@@ -444,6 +447,103 @@ Bandit failures **must be fixed** before committing. Do not suppress warnings wi
 - [ ] No SSRF (validate URLs before fetching)
 - [ ] Authenticated routes use `@xero_token_required`
 - [ ] Query parameters added to allowlist if needed
+
+## Frontend (HTML / CSS / JS) Guidelines
+
+The frontend layer is intentionally lightweight and server-rendered via Flask/Jinja.
+Do not introduce frontend frameworks, build systems, or architectural changes unless explicitly requested.
+
+This project prioritises:
+- Simplicity
+- Performance
+- SEO
+- Maintainability
+
+---
+
+### General Principles
+
+- Keep UI simple, clean, and functional.
+- Prefer small incremental changes over large rewrites.
+- Match the existing layout, spacing, and design patterns.
+- Reuse existing templates, components, and CSS classes before adding new ones.
+- Do not introduce React, Vue, Tailwind, or any JS build tooling unless explicitly instructed.
+- Do not convert server-rendered pages into SPAs.
+
+---
+
+### HTML
+
+- Use semantic HTML (`main`, `section`, `article`, `nav`, `header`, `footer`) where appropriate.
+- Avoid deeply nested `div` structures.
+- Keep Jinja logic minimal — business logic belongs in Python.
+- Do not duplicate layout code already defined in base templates.
+- Maintain accessibility:
+  - Use proper button types.
+  - Include `alt` attributes for images.
+  - Associate labels with form inputs.
+  - Use aria attributes only when necessary.
+
+---
+
+### SEO (Very Important)
+
+SEO is a first-class concern.
+
+When modifying or creating pages:
+
+- Ensure each page has a meaningful `<title>` tag.
+- Include a descriptive `<meta name="description">`.
+- Use proper heading hierarchy (`h1` → `h2` → `h3`, no skipping levels).
+- Ensure only one `<h1>` per page.
+- Use descriptive link text (avoid "click here").
+- Add `alt` text to images that describes content meaningfully.
+- Avoid rendering important content purely via JavaScript.
+- Ensure canonical URLs are preserved where relevant.
+- Do not remove structured data or metadata without explicit instruction.
+
+If creating new pages, include basic SEO scaffolding by default.
+
+---
+
+### CSS
+
+- Reuse existing classes before creating new ones.
+- Follow the current naming conventions.
+- Avoid global overrides that affect unrelated pages.
+- Do not change global typography, spacing scale, or colour palette unless explicitly instructed.
+- Keep styles scoped and minimal.
+- Prefer small extensions over large redesigns.
+
+---
+
+### JavaScript
+
+- Keep JavaScript minimal and progressive.
+- Enhance server-rendered content rather than replacing it.
+- Avoid adding large libraries.
+- Do not introduce bundlers or Node tooling.
+- Prefer simple DOM manipulation over abstraction layers.
+- Avoid inline JavaScript in templates unless trivial.
+
+---
+
+### Visual Consistency
+
+- Maintain consistent spacing and alignment.
+- Maintain consistent border radius and font sizes.
+- Preserve colour palette.
+- Do not introduce new design styles without instruction.
+
+---
+
+### Before Making UI Changes
+
+1. Inspect how similar elements are implemented elsewhere in the project.
+2. Reuse existing patterns.
+3. Avoid introducing new UI paradigms.
+4. Confirm that SEO structure remains intact.
+
 
 ## Dependencies
 

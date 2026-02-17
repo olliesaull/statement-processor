@@ -1,0 +1,43 @@
+<svg width="1600" height="1000" viewBox="0 0 1600 1000" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGradient" x1="120" y1="80" x2="1480" y2="920" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E9F0FC"/>
+    </linearGradient>
+    <linearGradient id="screenGradient" x1="250" y1="210" x2="1350" y2="790" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F1F6FD"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#bgGradient)"/>
+  <rect x="120" y="90" width="1360" height="820" rx="28" fill="#D8E3F5" fill-opacity="0.35"/>
+  <rect x="180" y="140" width="1240" height="720" rx="24" fill="url(#screenGradient)" stroke="#BFD0EA" stroke-width="3"/>
+
+  <rect x="180" y="140" width="1240" height="78" rx="24" fill="#1E3A8A"/>
+  <circle cx="230" cy="179" r="10" fill="#E5ECFA"/>
+  <circle cx="262" cy="179" r="10" fill="#E5ECFA"/>
+  <circle cx="294" cy="179" r="10" fill="#E5ECFA"/>
+
+  <rect x="235" y="265" width="360" height="38" rx="10" fill="#DEE8F8"/>
+  <rect x="235" y="318" width="520" height="26" rx="8" fill="#E7EFFB"/>
+  <rect x="235" y="356" width="470" height="26" rx="8" fill="#E7EFFB"/>
+
+  <rect x="235" y="415" width="1120" height="370" rx="18" fill="#FFFFFF" stroke="#CBD9EE" stroke-width="2"/>
+  <rect x="255" y="438" width="1080" height="52" rx="10" fill="#EAF1FC"/>
+
+  <rect x="255" y="515" width="520" height="36" rx="8" fill="#F3F7FE"/>
+  <rect x="805" y="515" width="530" height="36" rx="8" fill="#F3F7FE"/>
+  <rect x="255" y="566" width="520" height="36" rx="8" fill="#F3F7FE"/>
+  <rect x="805" y="566" width="530" height="36" rx="8" fill="#F3F7FE"/>
+  <rect x="255" y="617" width="520" height="36" rx="8" fill="#F3F7FE"/>
+  <rect x="805" y="617" width="530" height="36" rx="8" fill="#F3F7FE"/>
+  <rect x="255" y="668" width="520" height="36" rx="8" fill="#F3F7FE"/>
+  <rect x="805" y="668" width="530" height="36" rx="8" fill="#F3F7FE"/>
+
+  <rect x="1140" y="286" width="215" height="50" rx="12" fill="#1E3A8A"/>
+
+  <text x="800" y="868" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" fill="#1E3A8A" font-weight="700">
+    Screenshot Placeholder (1600 x 1000)
+  </text>
+</svg>

@@ -402,17 +402,73 @@ a:focus-visible {
   background-color: #eef4ff;
 }
 
-.instructions-card .card-body {
-  padding: 1.2rem 1.25rem;
-}
-
-.instructions-tips-list {
+/* Instructions page */
+.instructions-intro-list,
+.instructions-troubleshooting-list {
+  color: var(--text);
   margin-bottom: 0;
-  padding-left: 1.2rem;
+  padding-left: 1.1rem;
 }
 
-.instructions-tips-list li + li {
+.instructions-intro-list li + li,
+.instructions-troubleshooting-list li + li {
   margin-top: 0.4rem;
+}
+
+.instructions-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.instructions-step {
+  background: linear-gradient(155deg, #ffffff 0%, #f2f6ff 100%);
+  border: 1px solid #d2dff0;
+  border-radius: 1rem;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.07);
+  padding: 1.1rem 1.25rem;
+}
+
+.instructions-step-kicker {
+  color: var(--primary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.instructions-step h2 {
+  color: var(--primary);
+  letter-spacing: -0.01em;
+}
+
+.instructions-step p {
+  color: var(--secondary);
+  max-width: 58ch;
+}
+
+.instructions-step-media {
+  background-color: var(--surface);
+  border: 1px solid #d3deed;
+  border-radius: 0.9rem;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+  padding: 0.55rem;
+}
+
+.instructions-step-image {
+  background-color: #edf2f9;
+  border-radius: 0.65rem;
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+}
+
+.instructions-step-caption {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 0.5rem;
 }
 
 /* Home page sections */
@@ -625,6 +681,10 @@ a:focus-visible {
 }
 
 @media (max-width: 991.98px) {
+  .instructions-step {
+    padding: 1rem;
+  }
+
   .home-hero-media {
     min-height: 240px;
   }
@@ -644,6 +704,10 @@ a:focus-visible {
 }
 
 @media (max-width: 575.98px) {
+  .instructions-step-media {
+    padding: 0.45rem;
+  }
+
   .config-contact-input {
     min-width: 0;
     width: 100%;

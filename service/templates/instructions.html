@@ -6,74 +6,189 @@
   <header class="page-header">
     <p class="page-kicker mb-1">How It Works</p>
     <h1 class="mb-2">Getting Started</h1>
-    <p class="page-subtitle mb-0">Follow this flow from first connection to final reconciliation.</p>
+    <p class="page-subtitle mb-0">Follow this step-by-step guide from tenant setup to final reconciliation export.</p>
   </header>
 
-  <div class="row g-4 mb-4">
-    <div class="col-12 col-lg-6">
-      <div class="card h-100 instructions-card">
-        <div class="card-body">
-          <h2 class="h5">1. On First Connection</h2>
-          <p class="mb-2">
-            After connecting your Xero tenant for the first time, a <strong>Load</strong> will begin. This gets all your contacts, invoices, credit notes, and payments.
-          </p>
-          <p class="mb-0">
-            While the load runs, most actions are locked. If you try to move away, you'll be sent back to the tenant page. You can still switch to another tenant that isn't loading.
-            Note: The app only locks actions for tenants that are loading, therefore you can switch tenants and perform tasks if you want.
-          </p>
-        </div>
-      </div>
-    </div>
+  <section class="page-panel page-panel-muted mb-4">
+    <h2 class="h5 mb-2">Before you begin</h2>
+    <p class="mb-2">Statement Processor compares supplier statement rows against Xero data and helps your team complete reconciliation in a structured workflow.</p>
+    <ul class="instructions-intro-list">
+      <li>Some actions run in the background, so you may need to wait briefly while processing completes.</li>
+      <li>If a statement is still processing, keep the page open and it will refresh automatically.</li>
+      <li>When contact mappings change, delete and re-upload existing statements so extraction is regenerated with the latest config.</li>
+    </ul>
+  </section>
 
-    <div class="col-12 col-lg-6">
-      <div class="card h-100 instructions-card">
-        <div class="card-body">
-          <h2 class="h5">2. Use Sync to Stay Current</h2>
-          <p class="mb-2">
-            The <strong>Sync</strong> action refreshes your Xero data so new contacts, invoices, credit notes, and payments appear in matching. It's quick and safe to run whenever you need a fresh view.
-          </p>
-          <p class="mb-0">
-            If something looks out of date, run a sync and re-open the statement.
-          </p>
+  <div class="instructions-steps">
+    <section class="instructions-step">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-6">
+          <p class="instructions-step-kicker mb-1">Step 1</p>
+          <h2 class="h4 mb-2">Login and select your tenant</h2>
+          <p class="mb-0">Open <strong>Tenant Management</strong>, connect Xero if needed, then switch to the tenant you want to process.</p>
+        </div>
+        <div class="col-12 col-lg-6">
+          <figure class="instructions-step-media mb-0">
+            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 1 of supplier statement reconciliation in Statement Processor: select your Xero tenant in Tenant Management before processing statements" width="1600" height="1000" loading="lazy">
+            <figcaption class="instructions-step-caption">Placeholder screenshot: Tenant Management with an active tenant selected.</figcaption>
+          </figure>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="col-12 col-lg-6">
-      <div class="card h-100 instructions-card">
-        <div class="card-body">
-          <h2 class="h5">3. Typical Workflow</h2>
-          <ul class="mb-0">
-            <li>Select your tenant.</li>
-            <li>Load (first-time) or Sync to refresh Xero data.</li>
-            <li>Upload supplier statements with the right contact selected.</li>
-            <li>Open the statement to reconcile, mark items complete, and download the Excel export if needed.</li>
-          </ul>
+    <section class="instructions-step">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-6 order-lg-2">
+          <p class="instructions-step-kicker mb-1">Step 2</p>
+          <h2 class="h4 mb-2">Wait for first-time load</h2>
+          <p class="mb-0">If the tenant status is <strong>LOADING</strong>, wait for contacts and transactions to finish importing before continuing.</p>
+        </div>
+        <div class="col-12 col-lg-6 order-lg-1">
+          <figure class="instructions-step-media mb-0">
+            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 2 of supplier statement reconciliation in Statement Processor: wait for the selected Xero tenant to finish initial loading before continuing" width="1600" height="1000" loading="lazy">
+            <figcaption class="instructions-step-caption">Placeholder screenshot: Tenant status showing LOADING or ready state.</figcaption>
+          </figure>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="col-12 col-lg-6">
-      <div class="card h-100 instructions-card">
-        <div class="card-body">
-          <h2 class="h5">4. Updating Contact Configs</h2>
-          <p class="mb-2">
-            Need to tweak a contact configuration? Make your changes, then delete the existing statement and upload it again. This ensures the new mapping is applied to every item.
-          </p>
-          <p class="mb-0">
-            Re-uploading triggers a fresh analysis. If you re-upload without deleting the original, you'll create a duplicate statement.
-          </p>
+    <section class="instructions-step">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-6">
+          <p class="instructions-step-kicker mb-1">Step 3</p>
+          <h2 class="h4 mb-2">Open Configuration and load contact config</h2>
+          <p class="mb-0">Go to <strong>Configuration</strong>, choose the supplier contact, then click <strong>Load Config</strong>.</p>
+        </div>
+        <div class="col-12 col-lg-6">
+          <figure class="instructions-step-media mb-0">
+            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 3 of supplier statement reconciliation in Statement Processor: load supplier contact configuration before uploading PDF statements" width="1600" height="1000" loading="lazy">
+            <figcaption class="instructions-step-caption">Placeholder screenshot: Contact selection and config load action.</figcaption>
+          </figure>
         </div>
       </div>
-    </div>
+    </section>
+
+    <section class="instructions-step">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-6 order-lg-2">
+          <p class="instructions-step-kicker mb-1">Step 4</p>
+          <h2 class="h4 mb-2">Map required fields and formatting</h2>
+          <p class="mb-0">Set <strong>Number</strong> and <strong>Total</strong> mappings, then confirm date format and number separators match the supplier statement.</p>
+        </div>
+        <div class="col-12 col-lg-6 order-lg-1">
+          <figure class="instructions-step-media mb-0">
+            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 4 of supplier statement reconciliation in Statement Processor: map invoice number and total fields and set supplier date and number formats" width="1600" height="1000" loading="lazy">
+            <figcaption class="instructions-step-caption">Placeholder screenshot: Field mappings and formatting options.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="instructions-step">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-6">
+          <p class="instructions-step-kicker mb-1">Step 5</p>
+          <h2 class="h4 mb-2">Upload supplier statements</h2>
+          <p class="mb-0">Open <strong>Upload Statements</strong>, choose one or more PDF files, and pair each file with the correct supplier contact.</p>
+        </div>
+        <div class="col-12 col-lg-6">
+          <figure class="instructions-step-media mb-0">
+            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 5 of supplier statement reconciliation in Statement Processor: upload supplier statement PDFs and assign each file to the correct contact" width="1600" height="1000" loading="lazy">
+            <figcaption class="instructions-step-caption">Placeholder screenshot: Upload form with file and contact columns.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="instructions-step">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-6 order-lg-2">
+          <p class="instructions-step-kicker mb-1">Step 6</p>
+          <h2 class="h4 mb-2">Open statement when processing completes</h2>
+          <p class="mb-0">Go to <strong>Statements</strong>, then open the uploaded statement from the list once it is available.</p>
+        </div>
+        <div class="col-12 col-lg-6 order-lg-1">
+          <figure class="instructions-step-media mb-0">
+            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 6 of supplier statement reconciliation in Statement Processor: open the statements list and select an uploaded statement once processing is complete" width="1600" height="1000" loading="lazy">
+            <figcaption class="instructions-step-caption">Placeholder screenshot: Statements table and Reconcile action.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="instructions-step">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-6">
+          <p class="instructions-step-kicker mb-1">Step 7</p>
+          <h2 class="h4 mb-2">Reconcile matched and unmatched rows</h2>
+          <p class="mb-0">Review row colours and cell indicators to resolve matches, mismatches, and flagged anomalies.</p>
+        </div>
+        <div class="col-12 col-lg-6">
+          <figure class="instructions-step-media mb-0">
+            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 7 of supplier statement reconciliation in Statement Processor: review statement rows against Xero transactions and resolve mismatches and anomalies" width="1600" height="1000" loading="lazy">
+            <figcaption class="instructions-step-caption">Placeholder screenshot: Statement vs Xero comparison grid with legend.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="instructions-step">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-6 order-lg-2">
+          <p class="instructions-step-kicker mb-1">Step 8</p>
+          <h2 class="h4 mb-2">Mark rows and statement complete</h2>
+          <p class="mb-0">Use row-level actions where needed, then complete the full statement once your review is finished.</p>
+        </div>
+        <div class="col-12 col-lg-6 order-lg-1">
+          <figure class="instructions-step-media mb-0">
+            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 8 of supplier statement reconciliation in Statement Processor: mark rows complete and finish the statement reconciliation workflow" width="1600" height="1000" loading="lazy">
+            <figcaption class="instructions-step-caption">Placeholder screenshot: Completion actions and status badges.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="instructions-step">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-6">
+          <p class="instructions-step-kicker mb-1">Step 9</p>
+          <h2 class="h4 mb-2">Download Excel export</h2>
+          <p class="mb-0">Use <strong>Download Excel</strong> to export the current reconciliation view for sharing or archiving.</p>
+        </div>
+        <div class="col-12 col-lg-6">
+          <figure class="instructions-step-media mb-0">
+            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 9 of supplier statement reconciliation in Statement Processor: download the reconciled supplier statement as an Excel export" width="1600" height="1000" loading="lazy">
+            <figcaption class="instructions-step-caption">Placeholder screenshot: Download Excel action on statement page.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="instructions-step">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-6 order-lg-2">
+          <p class="instructions-step-kicker mb-1">Step 10</p>
+          <h2 class="h4 mb-2">Re-upload when config changes</h2>
+          <p class="mb-0">If you change a contact mapping, delete the existing statement and upload it again so extraction is regenerated with the updated config.</p>
+        </div>
+        <div class="col-12 col-lg-6 order-lg-1">
+          <figure class="instructions-step-media mb-0">
+            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 10 of supplier statement reconciliation in Statement Processor: delete and re-upload statements after changing supplier mapping configuration" width="1600" height="1000" loading="lazy">
+            <figcaption class="instructions-step-caption">Placeholder screenshot: Delete statement and upload replacement file.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
   </div>
 
-  <section class="page-panel page-panel-muted">
-    <h2 class="h5 mb-3">Quick Tips</h2>
-    <ul class="instructions-tips-list">
-      <li>The app will let you know when a Load or Sync finishes (on the Home page).</li>
-      <li>Anything marked as an anomaly deserves an extra glance before marking it complete.</li>
-      <li>Download the Excel export for a snapshot you can share or archive.</li>
+  <section class="page-panel page-panel-muted mt-4">
+    <h2 class="h5 mb-3">Troubleshooting</h2>
+    <ul class="instructions-troubleshooting-list mb-0">
+      <li><strong>Unknown contact:</strong> check the contact name and ensure that contact exists in your selected tenant.</li>
+      <li><strong>Missing config:</strong> create or load the supplier config before attempting upload.</li>
+      <li><strong>Non-PDF upload:</strong> only PDF files are accepted on the upload page.</li>
+      <li><strong>Session expired:</strong> if redirected to login, sign in again and return to your workflow.</li>
+      <li><strong>Statement still processing:</strong> wait briefly and refresh; processing can take a few seconds up to several minutes.</li>
     </ul>
   </section>
 </div>
