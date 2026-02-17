@@ -179,6 +179,7 @@
     - `/statement/<statement_id>/delete` (POST): delete statement + artefacts (requires tenant + Xero auth, blocks while loading).
     - `/configs` (GET/POST): contact mapping configuration UI (requires tenant + Xero auth, blocks while loading).
     - `/instructions` (GET): instructions page.
+    - `/about` (GET): non-technical overview page covering product purpose, use cases, outcomes, and practical limits.
   - **Tenant APIs**
     - `/api/tenant-statuses` (GET): returns tenant sync statuses (cached) for polling UI.
     - `/api/tenants/<tenant_id>/sync` (POST): triggers background Xero sync for a tenant.

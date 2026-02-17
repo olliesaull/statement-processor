@@ -481,6 +481,13 @@ def instructions():
     return render_template("instructions.html")
 
 
+@app.route("/about")
+@route_handler_logging
+def about():
+    """Render the about page."""
+    return render_template("about.html")
+
+
 @app.route("/statements")
 @active_tenant_required("Please select a tenant to view statements.")
 @xero_token_required

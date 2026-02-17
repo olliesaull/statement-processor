@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}About Statement Processor{% endblock %}
+
+{% block content %}
+{% set is_authenticated = session.get('access_token') and session.get('xero_tenant_id') %}
+<div class="page-main">
+  <header class="page-header">
+    <p class="page-kicker mb-1">About</p>
+    <h1 class="mb-2">Built to make supplier statement reconciliation simpler.</h1>
+    <p class="page-subtitle mb-0">
+      Statement Processor helps finance teams reduce manual checks, catch issues earlier, and keep a clear record of completed reconciliation work.
+    </p>
+  </header>
+
+  <section class="page-panel mb-4">
+    <h2 class="h5 mb-2">Why this exists</h2>
+    <p class="mb-0">
+      Reconciliation is often spread across PDFs, spreadsheets, and multiple accounting screens. Statement Processor brings those steps into one consistent workflow so teams can work faster and with fewer missed details.
+    </p>
+  </section>
+
+  <section class="mb-4">
+    <header class="home-section-header mb-3">
+      <p class="home-kicker mb-1">Who It Is For</p>
+      <h2 class="h4 home-section-title mb-0">Designed for day-to-day finance operations</h2>
+    </header>
+    <div class="row g-3">
+      <div class="col-12 col-md-4">
+        <div class="home-use-case">
+          <h3 class="h5 mb-2">Finance Teams</h3>
+          <p class="mb-0">Keep month-end statement review work organised and easier to track across the team.</p>
+        </div>
+      </div>
+      <div class="col-12 col-md-4">
+        <div class="home-use-case">
+          <h3 class="h5 mb-2">Bookkeepers</h3>
+          <p class="mb-0">Review supplier statements against Xero records in one place without constant context switching.</p>
+        </div>
+      </div>
+      <div class="col-12 col-md-4">
+        <div class="home-use-case">
+          <h3 class="h5 mb-2">Non-Technical Users</h3>
+          <p class="mb-0">Follow a clear step-by-step process without needing to understand technical setup details.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="mb-4">
+    <header class="home-section-header mb-3">
+      <p class="home-kicker mb-1">Use Cases</p>
+      <h2 class="h4 home-section-title mb-0">Where teams use it most</h2>
+    </header>
+    <div class="row g-3">
+      <div class="col-12 col-md-4">
+        <div class="home-use-case">
+          <h3 class="h5 mb-2">Monthly Reconciliation</h3>
+          <p class="mb-0">Process supplier statements as they arrive and keep reviews moving consistently.</p>
+        </div>
+      </div>
+      <div class="col-12 col-md-4">
+        <div class="home-use-case">
+          <h3 class="h5 mb-2">Exception Cleanup</h3>
+          <p class="mb-0">Find mismatches and anomalies faster so effort is focused where it matters most.</p>
+        </div>
+      </div>
+      <div class="col-12 col-md-4">
+        <div class="home-use-case">
+          <h3 class="h5 mb-2">Audit Preparation</h3>
+          <p class="mb-0">Use completion tracking and exports to provide a clear reconciliation trail.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page-panel page-panel-muted mb-4">
+    <h2 class="h5 mb-2">How it helps in practice</h2>
+    <ol class="mb-0 ps-3">
+      <li>Upload supplier statement PDFs and assign each file to a supplier contact.</li>
+      <li>Compare statement rows against Xero invoices, credit notes, and payments.</li>
+      <li>Review mismatches and anomalies, then mark rows and statements complete.</li>
+      <li>Download an Excel export when you need a shareable record of the review.</li>
+    </ol>
+  </section>
+
+  <section class="page-panel mb-4">
+    <h2 class="h5 mb-2">Outcomes teams care about</h2>
+    <ul class="home-value-list mb-0">
+      <li>Less manual line-by-line checking.</li>
+      <li>Clear visibility of what is complete and what still needs review.</li>
+      <li>More consistent reconciliation across people and periods.</li>
+    </ul>
+  </section>
+
+  <section class="page-panel page-panel-muted mb-4">
+    <h2 class="h5 mb-2">Practical limits</h2>
+    <ul class="mb-0">
+      <li>Only PDF supplier statements are supported on upload.</li>
+      <li>Results depend on the quality of the source statement and supplier mapping setup.</li>
+      <li>Processing time can vary based on file size and statement complexity.</li>
+    </ul>
+  </section>
+
+  <section class="home-cta-panel">
+    <div>
+      <h2 class="h4 mb-1">Ready to simplify reconciliation?</h2>
+      <p class="mb-0">Start now in Tenant Management, or follow the step-by-step guide first.</p>
+    </div>
+    <div class="d-flex flex-column flex-sm-row gap-2">
+      <a class="btn btn-primary home-btn home-btn-primary" href="{{ url_for('tenant_management') if is_authenticated else url_for('login') }}">
+        {{ "Open Tenant Management" if is_authenticated else "Login with Xero" }}
+      </a>
+      <a class="btn btn-outline-secondary home-btn home-btn-secondary" href="{{ url_for('instructions') }}">View Step-By-Step Guide</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

@@ -13,13 +13,13 @@
           <p class="home-kicker mb-2">Statement Matching For Finance Teams</p>
           <h1 class="home-hero-title mb-3">Reconcile supplier statements with confidence.</h1>
           <p class="home-hero-lead mb-4">
-            Statement Processor helps your team upload supplier statements, compare each line against Xero, and track progress in one clear workflow.
+            Upload supplier statement PDFs, compare each line against Xero, resolve differences, and export a clear record in one place.
           </p>
           <div class="d-flex flex-column flex-sm-row gap-2">
             <a class="btn btn-primary btn-lg home-btn home-btn-primary" href="{{ url_for('tenant_management') if is_authenticated else url_for('login') }}">
               {{ "Go to Tenant Management" if is_authenticated else "Get Started" }}
             </a>
-            <a class="btn btn-outline-secondary btn-lg home-btn home-btn-secondary" href="{{ url_for('instructions') }}">Read Instructions</a>
+            <a class="btn btn-outline-secondary btn-lg home-btn home-btn-secondary" href="{{ url_for('instructions') }}">View Step-By-Step Guide</a>
           </div>
         </div>
         <div class="col-12 col-lg-6">
@@ -35,12 +35,12 @@
     <div class="container">
       <header class="home-section-header mb-3">
         <p class="home-kicker mb-1">At A Glance</p>
-        <h2 class="h3 home-section-title mb-0">Why teams use Statement Processor</h2>
+        <h2 class="h3 home-section-title mb-0">Why use Statement Processor</h2>
       </header>
       <ul class="home-value-list mb-0">
-        <li>Reduce manual statement checks and spend less time on repetitive reconciliation tasks.</li>
-        <li>Keep invoice, credit note, and payment comparisons in one place so issues are easier to spot.</li>
-        <li>Track completion clearly, then export to Excel when you need a shareable record.</li>
+        <li>Upload supplier PDF statements and compare each row with Xero invoices, credit notes, and payments.</li>
+        <li>Spot matches, mismatches, and anomalies quickly so your team can focus on exceptions.</li>
+        <li>Track completion clearly and export to Excel when you need a shareable record.</li>
       </ul>
     </div>
   </section>
@@ -79,7 +79,7 @@
       <ul class="home-reassurance-list mb-0">
         <li>Guided workflow from tenant selection to export.</li>
         <li>Built for finance teams, including non-technical users.</li>
-        <li>Designed to make reconciliation clearer and more consistent.</li>
+        <li>New here? Start with the step-by-step instructions page.</li>
       </ul>
     </div>
   </section>
@@ -89,13 +89,13 @@
       <div class="home-cta-panel">
         <div>
           <h2 class="h4 mb-1">Ready to get started?</h2>
-          <p class="mb-0">Open tenant management to begin, or read the instructions first.</p>
+          <p class="mb-0">Open Tenant Management to begin, or use the step-by-step guide first.</p>
         </div>
         <div class="d-flex flex-column flex-sm-row gap-2">
           <a class="btn btn-primary home-btn home-btn-primary" href="{{ url_for('tenant_management') if is_authenticated else url_for('login') }}">
             {{ "Open Tenant Management" if is_authenticated else "Login with Xero" }}
           </a>
-          <a class="btn btn-outline-secondary home-btn home-btn-secondary" href="{{ url_for('instructions') }}">Instructions</a>
+          <a class="btn btn-outline-secondary home-btn home-btn-secondary" href="{{ url_for('instructions') }}">View Step-By-Step Guide</a>
         </div>
       </div>
     </div>

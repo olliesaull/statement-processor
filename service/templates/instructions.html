@@ -6,16 +6,17 @@
   <header class="page-header">
     <p class="page-kicker mb-1">How It Works</p>
     <h1 class="mb-2">Getting Started</h1>
-    <p class="page-subtitle mb-0">Follow this step-by-step guide from tenant setup to final reconciliation export.</p>
+    <p class="page-subtitle mb-0">New to the app? Follow these steps in order from setup to final export.</p>
   </header>
 
   <section class="page-panel page-panel-muted mb-4">
     <h2 class="h5 mb-2">Before you begin</h2>
-    <p class="mb-2">Statement Processor compares supplier statement rows against Xero data and helps your team complete reconciliation in a structured workflow.</p>
+    <p class="mb-2">Statement Processor compares supplier statement rows against Xero data and guides your team through reconciliation.</p>
     <ul class="instructions-intro-list">
-      <li>Some actions run in the background, so you may need to wait briefly while processing completes.</li>
-      <li>If a statement is still processing, keep the page open and it will refresh automatically.</li>
-      <li>When contact mappings change, delete and re-upload existing statements so extraction is regenerated with the latest config.</li>
+      <li><strong>Tenant</strong> means the Xero organisation (company) you are working in.</li>
+      <li><strong>Contact config</strong> means the supplier mapping rules (for example, which columns are date, number, and total).</li>
+      <li>First-time setup for a supplier is usually Steps 1 to 4. Regular processing usually starts at Step 5.</li>
+      <li>Some actions run in the background. If a statement is processing, keep the page open and it will refresh.</li>
     </ul>
   </section>
 
@@ -24,8 +25,8 @@
       <div class="row g-4 align-items-center">
         <div class="col-12 col-lg-6">
           <p class="instructions-step-kicker mb-1">Step 1</p>
-          <h2 class="h4 mb-2">Login and select your tenant</h2>
-          <p class="mb-0">Open <strong>Tenant Management</strong>, connect Xero if needed, then switch to the tenant you want to process.</p>
+          <h2 class="h4 mb-2">Sign in and choose your Xero tenant</h2>
+          <p class="mb-0">Open <strong>Tenant Management</strong>, connect Xero if needed, then select the company you want to process.</p>
         </div>
         <div class="col-12 col-lg-6">
           <figure class="instructions-step-media mb-0">
@@ -40,8 +41,8 @@
       <div class="row g-4 align-items-center">
         <div class="col-12 col-lg-6 order-lg-2">
           <p class="instructions-step-kicker mb-1">Step 2</p>
-          <h2 class="h4 mb-2">Wait for first-time load</h2>
-          <p class="mb-0">If the tenant status is <strong>LOADING</strong>, wait for contacts and transactions to finish importing before continuing.</p>
+          <h2 class="h4 mb-2">Wait for first-time load to finish</h2>
+          <p class="mb-0">If the tenant status is <strong>LOADING</strong>, wait until contacts and transactions are imported before continuing.</p>
         </div>
         <div class="col-12 col-lg-6 order-lg-1">
           <figure class="instructions-step-media mb-0">
@@ -56,8 +57,8 @@
       <div class="row g-4 align-items-center">
         <div class="col-12 col-lg-6">
           <p class="instructions-step-kicker mb-1">Step 3</p>
-          <h2 class="h4 mb-2">Open Configuration and load contact config</h2>
-          <p class="mb-0">Go to <strong>Configuration</strong>, choose the supplier contact, then click <strong>Load Config</strong>.</p>
+          <h2 class="h4 mb-2">Load the supplier contact config</h2>
+          <p class="mb-0">Go to <strong>Configuration</strong>, choose the supplier contact, then click <strong>Load Config</strong> (or create one if it does not exist yet).</p>
         </div>
         <div class="col-12 col-lg-6">
           <figure class="instructions-step-media mb-0">
@@ -72,8 +73,8 @@
       <div class="row g-4 align-items-center">
         <div class="col-12 col-lg-6 order-lg-2">
           <p class="instructions-step-kicker mb-1">Step 4</p>
-          <h2 class="h4 mb-2">Map required fields and formatting</h2>
-          <p class="mb-0">Set <strong>Number</strong> and <strong>Total</strong> mappings, then confirm date format and number separators match the supplier statement.</p>
+          <h2 class="h4 mb-2">Map key fields and formats</h2>
+          <p class="mb-0">Set the supplier column mappings for <strong>Number</strong> and <strong>Total</strong>, then confirm date format and number separators match the statement.</p>
         </div>
         <div class="col-12 col-lg-6 order-lg-1">
           <figure class="instructions-step-media mb-0">
@@ -88,8 +89,8 @@
       <div class="row g-4 align-items-center">
         <div class="col-12 col-lg-6">
           <p class="instructions-step-kicker mb-1">Step 5</p>
-          <h2 class="h4 mb-2">Upload supplier statements</h2>
-          <p class="mb-0">Open <strong>Upload Statements</strong>, choose one or more PDF files, and pair each file with the correct supplier contact.</p>
+          <h2 class="h4 mb-2">Upload supplier statement PDFs</h2>
+          <p class="mb-0">Open <strong>Upload Statements</strong>, select one or more PDF files, and pair each file with the correct supplier contact.</p>
         </div>
         <div class="col-12 col-lg-6">
           <figure class="instructions-step-media mb-0">
@@ -104,7 +105,7 @@
       <div class="row g-4 align-items-center">
         <div class="col-12 col-lg-6 order-lg-2">
           <p class="instructions-step-kicker mb-1">Step 6</p>
-          <h2 class="h4 mb-2">Open statement when processing completes</h2>
+          <h2 class="h4 mb-2">Open the statement when processing completes</h2>
           <p class="mb-0">Go to <strong>Statements</strong>, then open the uploaded statement from the list once it is available.</p>
         </div>
         <div class="col-12 col-lg-6 order-lg-1">
@@ -120,8 +121,8 @@
       <div class="row g-4 align-items-center">
         <div class="col-12 col-lg-6">
           <p class="instructions-step-kicker mb-1">Step 7</p>
-          <h2 class="h4 mb-2">Reconcile matched and unmatched rows</h2>
-          <p class="mb-0">Review row colours and cell indicators to resolve matches, mismatches, and flagged anomalies.</p>
+          <h2 class="h4 mb-2">Review matches, mismatches, and anomalies</h2>
+          <p class="mb-0">Use row colours and indicators to review each line and resolve anything that does not match Xero.</p>
         </div>
         <div class="col-12 col-lg-6">
           <figure class="instructions-step-media mb-0">
@@ -136,8 +137,8 @@
       <div class="row g-4 align-items-center">
         <div class="col-12 col-lg-6 order-lg-2">
           <p class="instructions-step-kicker mb-1">Step 8</p>
-          <h2 class="h4 mb-2">Mark rows and statement complete</h2>
-          <p class="mb-0">Use row-level actions where needed, then complete the full statement once your review is finished.</p>
+          <h2 class="h4 mb-2">Mark rows and statement as complete</h2>
+          <p class="mb-0">Use row-level actions where needed, then mark the full statement complete when your review is finished.</p>
         </div>
         <div class="col-12 col-lg-6 order-lg-1">
           <figure class="instructions-step-media mb-0">
@@ -152,7 +153,7 @@
       <div class="row g-4 align-items-center">
         <div class="col-12 col-lg-6">
           <p class="instructions-step-kicker mb-1">Step 9</p>
-          <h2 class="h4 mb-2">Download Excel export</h2>
+          <h2 class="h4 mb-2">Download the Excel export</h2>
           <p class="mb-0">Use <strong>Download Excel</strong> to export the current reconciliation view for sharing or archiving.</p>
         </div>
         <div class="col-12 col-lg-6">
@@ -168,8 +169,8 @@
       <div class="row g-4 align-items-center">
         <div class="col-12 col-lg-6 order-lg-2">
           <p class="instructions-step-kicker mb-1">Step 10</p>
-          <h2 class="h4 mb-2">Re-upload when config changes</h2>
-          <p class="mb-0">If you change a contact mapping, delete the existing statement and upload it again so extraction is regenerated with the updated config.</p>
+          <h2 class="h4 mb-2">Re-upload only if config changes</h2>
+          <p class="mb-0">If you change supplier mapping rules, delete the old statement and upload it again so extraction uses the updated config.</p>
         </div>
         <div class="col-12 col-lg-6 order-lg-1">
           <figure class="instructions-step-media mb-0">

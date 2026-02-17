@@ -557,7 +557,6 @@ a:focus-visible {
   width: 100%;
   max-height: 420px;
   object-fit: contain;
-  padding: 1rem;
 }
 
 .home-section-alt {
