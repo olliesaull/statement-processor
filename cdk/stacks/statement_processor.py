@@ -290,6 +290,14 @@ class StatementProcessorStack(Stack):
         tenant_data_table.grant_read_write_data(statement_processor_instance_role)
         s3_bucket.grant_read_write(statement_processor_instance_role)
 
+        auto_scaling_configuration = apprunner_alpha.AutoScalingConfiguration(
+            self,
+            "AutoScalingConfiguration",
+            auto_scaling_configuration_name="SingleInsance",
+            max_concurrency=200,
+            max_size=1,
+        )
+
         apprunner_asset = DockerImageAsset(self, "AppRunnerImage", directory="../service/")
         web = apprunner_alpha.Service(
             self,
@@ -298,6 +306,7 @@ class StatementProcessorStack(Stack):
             memory=apprunner_alpha.Memory.ONE_GB,
             cpu=apprunner_alpha.Cpu.QUARTER_VCPU,
             service_name=APP_RUNNER_SERVICE_NAME,
+            auto_scaling_configuration=auto_scaling_configuration,
             source=apprunner_alpha.Source.from_asset(
                 asset=apprunner_asset,
                 image_configuration=apprunner_alpha.ImageConfiguration(
