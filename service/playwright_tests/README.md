@@ -17,7 +17,7 @@ These tests exercise the full workflow: login via Xero OAuth, configure a contac
 1) Update `playwright_tests/fixtures/test_runs.json` with one or more runs.
 2) Put statement PDFs in `./statements`.
 3) Drop baseline Excel exports in `playwright_tests/fixtures/expected/` and reference them via `expected_excel_filename`.
-4) Set `XERO_EMAIL` and be ready to type it when prompted.
+4) Set `PLAYWRIGHT_XERO_EMAIL` (or `XERO_EMAIL`) and optionally `PLAYWRIGHT_XERO_PASSWORD` (or `XERO_PASSWORD`).
 5) Start the Flask app locally.
 6) Install Playwright browsers:
    - `python3.13 -m playwright install`
@@ -39,8 +39,10 @@ This run is designed to lock in the refactor baseline for the multi-scenario sta
    - Total columns: `debit`, `credit`
    - Date format: `YYYY-MM-DD`
 5) Populate Xero from the extracted JSON:
-   - Run `python3.13 statement-processor/scripts/populate_xero/populate_xero.py`.
+   - Run `python3.13 statement-processor/scripts/populate_xero/populate_xero.py` after updating script to reflect Demo Company TENANT_ID, STATEMENT_ID, and CONTACT_ID.
    - The script defaults to the Demo Company (UK) tenant and the Test Statements Ltd statement/contact IDs; override via env vars if needed (`TENANT_ID`, `STATEMENT_ID`, `CONTACT_ID`).
+   - Note: To generate a new Xero token, delete .xero_token.json.
+   - Note: Only connect Demo Company when creating Xero token.
 6) Capture the baseline Excel export:
    - Open the statement detail view and click “Download Excel”.
    - Save it as `service/playwright_tests/fixtures/expected/test_statements_ltd.xlsx`.
@@ -50,7 +52,8 @@ This run is designed to lock in the refactor baseline for the multi-scenario sta
 - If Demo Company resets, repeat the steps above (PDF generation is deterministic, so re-running it is safe).
 
 ## Optional environment variables
-- `XERO_EMAIL`
+- `PLAYWRIGHT_XERO_EMAIL` or `XERO_EMAIL`
+- `PLAYWRIGHT_XERO_PASSWORD` or `XERO_PASSWORD`
 
 ## Running tests
 

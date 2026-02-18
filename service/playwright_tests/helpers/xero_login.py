@@ -12,7 +12,8 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright_tests.helpers.logging import log_step
 
 LOGIN_TIMEOUT_MS = 180 * 1000
-XERO_EMAIL_ENV = "PLAYWRIGHT_XERO_EMAIL"
+XERO_EMAIL_ENV_NAMES = ("PLAYWRIGHT_XERO_EMAIL", "XERO_EMAIL")
+XERO_PASSWORD_ENV_NAMES = ("PLAYWRIGHT_XERO_PASSWORD", "XERO_PASSWORD")
 STORAGE_STATE_PATH = Path(__file__).resolve().parents[2] / "instance" / "xero_storage_state.json"
 
 
@@ -46,16 +47,34 @@ def _persist_storage_state(page: Page) -> None:
     log_step("xero-login", f"Saved browser auth state to {STORAGE_STATE_PATH}.")
 
 
+def _first_env_value(env_names: tuple[str, ...]) -> str:
+    """Return the first non-empty environment value from the given names.
+
+    Args:
+        env_names: Ordered env var names to check.
+
+    Returns:
+        The first non-empty env value, or an empty string when none are set.
+    """
+    for env_name in env_names:
+        value = os.getenv(env_name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def load_xero_credentials() -> XeroCredentials:
     """Load Xero credentials from environment or prompt the user.
 
     Returns:
         XeroCredentials instance.
     """
-    email = os.getenv(XERO_EMAIL_ENV, "").strip()
+    email = _first_env_value(XERO_EMAIL_ENV_NAMES)
     if not email:
         email = input("Xero email: ").strip()
-    password = getpass("Xero password: ")
+    password = _first_env_value(XERO_PASSWORD_ENV_NAMES)
+    if not password:
+        password = getpass("Xero password: ")
     if not email or not password:
         pytest.skip("Xero credentials are required for login.")
     return XeroCredentials(email=email, password=password)
@@ -116,6 +135,39 @@ def _submit_login_form(page: Page, credentials: XeroCredentials) -> bool:
     return True
 
 
+def _accept_cookie_consent_if_needed(page: Page, *, base_url: str) -> None:
+    """Accept essential cookies when the app redirects login flows to /cookies.
+
+    Args:
+        page: Playwright page currently on the app domain.
+        base_url: Base URL for the app under test.
+
+    Returns:
+        None.
+    """
+    normalized_base_url = base_url.rstrip("/")
+    if not page.url.startswith(normalized_base_url):
+        return
+
+    on_cookie_page = page.url.startswith(f"{normalized_base_url}/cookies")
+    consent_button = _first_visible(page, ["[data-automation='cookie-accept-button']", "#cookie-accept-button", "a:has-text('Accept Essential Cookies')"])
+    if not on_cookie_page and not consent_button:
+        return
+    if not consent_button:
+        raise AssertionError("Cookie consent page is shown, but the accept button was not found.")
+
+    log_step("xero-login", "Cookie consent required; accepting essential cookies.")
+    consent_button.click()
+
+    # The consent button navigates to /tenant_management and may then continue to /login or Xero.
+    # Wait briefly to ensure we do not remain stuck on /cookies.
+    for _ in range(20):
+        if not page.url.startswith(f"{normalized_base_url}/cookies"):
+            return
+        page.wait_for_timeout(250)
+    raise AssertionError("Cookie consent did not navigate away from /cookies after accepting.")
+
+
 def _approve_connection(page: Page, *, base_url: str) -> None:
     """Approve the Xero connection if prompted.
 
@@ -155,8 +207,10 @@ def _ensure_active_tenant(page: Page, *, base_url: str, tenant_id: str, tenant_n
     Returns:
         None.
     """
+    normalized_base_url = base_url.rstrip("/")
     log_step("xero-login", f"Ensuring tenant is active: {tenant_name or tenant_id}.")
-    page.goto(f"{base_url.rstrip('/')}/tenant_management", wait_until="domcontentloaded")
+    page.goto(f"{normalized_base_url}/tenant_management", wait_until="domcontentloaded")
+    _accept_cookie_consent_if_needed(page, base_url=normalized_base_url)
 
     row = page.locator(f"#row-{tenant_id}")
     if row.count() == 0 and tenant_name:
@@ -189,14 +243,21 @@ def ensure_xero_login(page: Page, *, base_url: str, tenant_id: str, tenant_name:
     Returns:
         None.
     """
+    normalized_base_url = base_url.rstrip("/")
     log_step("xero-login", "Starting Xero OAuth login flow.")
-    page.goto(f"{base_url.rstrip('/')}/login", wait_until="domcontentloaded")
+    page.goto(f"{normalized_base_url}/login", wait_until="domcontentloaded")
+    _accept_cookie_consent_if_needed(page, base_url=normalized_base_url)
+
     try:
         page.wait_for_url("**xero.com/**", timeout=LOGIN_TIMEOUT_MS)
-    except PlaywrightTimeoutError:
-        if page.url.startswith(base_url.rstrip("/")):
-            log_step("xero-login", "Already authenticated; skipping login form.")
-            _ensure_active_tenant(page, base_url=base_url, tenant_id=tenant_id, tenant_name=tenant_name)
+    except PlaywrightTimeoutError as exc:
+        _accept_cookie_consent_if_needed(page, base_url=normalized_base_url)
+        if page.url.startswith(normalized_base_url):
+            if page.url.startswith(f"{normalized_base_url}/cookies"):
+                raise AssertionError("Login is blocked on /cookies; consent was not accepted by the test flow.") from exc
+            log_step("xero-login", "Already authenticated in app session; skipping login form.")
+            _ensure_active_tenant(page, base_url=normalized_base_url, tenant_id=tenant_id, tenant_name=tenant_name)
+            _persist_storage_state(page)
             return
         raise
 
@@ -205,8 +266,8 @@ def ensure_xero_login(page: Page, *, base_url: str, tenant_id: str, tenant_name:
         credentials = load_xero_credentials()
         _submit_login_form(page, credentials)
 
-    _approve_connection(page, base_url=base_url)
+    _approve_connection(page, base_url=normalized_base_url)
     log_step("xero-login", "Waiting for redirect back to the app.")
-    page.wait_for_url(f"{base_url.rstrip('/')}/**", timeout=LOGIN_TIMEOUT_MS)
-    _ensure_active_tenant(page, base_url=base_url, tenant_id=tenant_id, tenant_name=tenant_name)
+    page.wait_for_url(f"{normalized_base_url}/**", timeout=LOGIN_TIMEOUT_MS)
+    _ensure_active_tenant(page, base_url=normalized_base_url, tenant_id=tenant_id, tenant_name=tenant_name)
     _persist_storage_state(page)

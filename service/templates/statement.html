@@ -57,6 +57,7 @@
     </script>
   {% else %}
     {% set statement_col_count = raw_statement_headers|length %}
+    {% set visible_item_count = statement_rows|length %}
 
     <div class="statement-table-panel page-table-shell">
       <div class="statement-legend d-flex flex-wrap align-items-center gap-3 small text-muted">
@@ -193,8 +194,13 @@
       </div>
     </div>
 
-    <div class="page-panel page-panel-flat d-flex justify-content-between align-items-center flex-wrap gap-3">
-      <a href="{{ url_for('statements') }}" class="btn btn-outline-secondary">Back to statements</a>
+    <div class="page-panel page-panel-flat statement-actions-bar d-flex justify-content-between align-items-center flex-wrap gap-3" id="statement-footer-actions">
+      <div class="d-flex align-items-center flex-wrap gap-2">
+        <a href="{{ url_for('statements') }}" class="btn btn-outline-secondary">Back to statements</a>
+        <span class="action-count-chip" data-automation="statement-item-count">
+          {{ visible_item_count }} statement item{% if visible_item_count != 1 %}s{% endif %}
+        </span>
+      </div>
       <div class="d-flex align-items-center flex-wrap gap-3">
         {% if is_completed %}
           <span class="badge bg-success fs-6">Completed</span>
@@ -215,6 +221,37 @@
         <form method="post" action="{{ url_for('delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn btn-outline-danger text-nowrap px-3 py-1" data-automation="statement-delete-button">Delete statement</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="sticky-action-dock" data-sticky-dock data-sticky-target="#statement-footer-actions" aria-hidden="true">
+      <div class="d-flex align-items-center flex-wrap gap-2">
+        <a href="{{ url_for('statements') }}" class="btn btn-outline-secondary">Back to statements</a>
+        <span class="action-count-chip">
+          {{ visible_item_count }} statement item{% if visible_item_count != 1 %}s{% endif %}
+        </span>
+      </div>
+      <div class="d-flex align-items-center flex-wrap gap-2">
+        {% if is_completed %}
+          <span class="badge bg-success">Completed</span>
+          <form method="post" class="mb-0">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="mark_incomplete">
+            <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
+            <button type="submit" class="btn btn-outline-warning text-nowrap px-3 py-1">Mark incomplete</button>
+          </form>
+        {% else %}
+          <form method="post" class="mb-0">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="mark_complete">
+            <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
+            <button type="submit" class="btn btn-success text-nowrap px-3 py-1">Complete statement</button>
+          </form>
+        {% endif %}
+        <form method="post" action="{{ url_for('delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-outline-danger text-nowrap px-3 py-1">Delete statement</button>
         </form>
       </div>
     </div>

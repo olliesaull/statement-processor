@@ -3,6 +3,7 @@
 
 {% block content %}
 <div class="page-main">
+  {% set statement_count = statements|length %}
   <header class="page-header">
     <p class="page-kicker mb-1">Reconciliation</p>
     <h1 class="mb-2">{{ 'Completed Statements' if show_completed else 'Incomplete Statements' }}</h1>
@@ -87,7 +88,17 @@
     </div>
   {% endif %}
 
-  <div class="page-actions-end mt-4 statements-page-toggle">
+  <div class="page-panel page-panel-flat d-flex justify-content-between align-items-center flex-wrap gap-3 mt-4 statements-page-toggle" id="statements-footer-actions">
+    <span class="action-count-chip">{{ statement_count }} statement{% if statement_count != 1 %}s{% endif %}</span>
+    {% if show_completed %}
+      <a href="{{ url_for('statements', sort=current_sort, dir=current_dir) }}" class="btn btn-secondary">View incomplete</a>
+    {% else %}
+      <a href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir) }}" class="btn btn-outline-secondary">View completed</a>
+    {% endif %}
+  </div>
+
+  <div class="sticky-action-dock sticky-action-dock-compact" data-sticky-dock data-sticky-target="#statements-footer-actions" aria-hidden="true">
+    <span class="action-count-chip">{{ statement_count }} statement{% if statement_count != 1 %}s{% endif %}</span>
     {% if show_completed %}
       <a href="{{ url_for('statements', sort=current_sort, dir=current_dir) }}" class="btn btn-secondary">View incomplete</a>
     {% else %}

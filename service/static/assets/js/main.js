@@ -88,11 +88,63 @@ const updateNavbarScrollState = () => {
   navbar.classList.toggle(NAVBAR_SCROLLED_CLASS, window.scrollY > 8);
 };
 
+const setupStickyActionDocks = () => {
+  const docks = document.querySelectorAll("[data-sticky-dock]");
+  if (!docks.length) return;
+
+  docks.forEach((dock) => {
+    const targetSelector = dock.dataset.stickyTarget;
+    if (!targetSelector) return;
+
+    const anchor = document.querySelector(targetSelector);
+    if (!anchor) return;
+
+    const isAnchorBelowInitialViewport = () => {
+      const anchorDocumentTop = anchor.getBoundingClientRect().top + window.scrollY;
+      return anchorDocumentTop >= window.innerHeight;
+    };
+    let shouldEnableDock = isAnchorBelowInitialViewport();
+
+    // Show the fixed dock only on pages where the real action bar starts below the first viewport.
+    const syncDockVisibility = () => {
+      const anchorRect = anchor.getBoundingClientRect();
+      const anchorBelowViewport = anchorRect.top >= window.innerHeight;
+      const shouldShow = shouldEnableDock && anchorBelowViewport;
+      dock.classList.toggle("is-visible", shouldShow);
+      dock.setAttribute("aria-hidden", shouldShow ? "false" : "true");
+    };
+
+    if ("IntersectionObserver" in window) {
+      const observer = new IntersectionObserver(
+        () => {
+          syncDockVisibility();
+        },
+        { threshold: 0.01 },
+      );
+      observer.observe(anchor);
+    } else {
+      const handleScrollFallback = () => syncDockVisibility();
+      window.addEventListener("scroll", handleScrollFallback, { passive: true });
+      handleScrollFallback();
+    }
+
+    const handleResize = () => {
+      shouldEnableDock = isAnchorBelowInitialViewport();
+      syncDockVisibility();
+    };
+    window.addEventListener("resize", handleResize);
+
+    syncDockVisibility();
+    setTimeout(handleResize, 120);
+  });
+};
+
 window.addEventListener("load", () => {
   updateNavbarScrollState();
   window.addEventListener("scroll", updateNavbarScrollState, { passive: true });
   setupCookieConsentButton();
   updateNavbarAuthLink();
+  setupStickyActionDocks();
 
   if (window.location.pathname === "/tenant_management") {
       // Event listeners to check for inactivity 

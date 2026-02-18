@@ -86,9 +86,9 @@ from xero_python.exceptions import AccountingBadRequestException  # type: ignore
 # ---------------------
 
 # Demo Company
-TENANT_ID = os.getenv("TENANT_ID", "c3da4d9c-45f1-4eb0-b368-f129215aa4ba")
-STATEMENT_ID = os.getenv("STATEMENT_ID", "eb21a7cf-b378-4336-b064-b4b334c3de9e")
-CONTACT_ID = os.getenv("CONTACT_ID", "21f45583-5df4-4655-a0b9-e992b47306c4")
+TENANT_ID = os.getenv("TENANT_ID", "c74bc5f9-23c9-40ef-ab7c-e28e8afe68d7")
+STATEMENT_ID = os.getenv("STATEMENT_ID", "a572ec1e-af77-4d32-ae44-f8100e55d378")
+CONTACT_ID = os.getenv("CONTACT_ID", "47c29fc4-f734-403e-be61-eefb4d118c4b")
 
 # ButtaNut
 # STATEMENT_ID = os.getenv("STATEMENT_ID", "0de99b0d-6b5e-4f64-b548-8b9a4b477e21")
