@@ -13,6 +13,17 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"
         integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
     <link href="/static/assets/css/main.css" rel="stylesheet" type="text/css" />
+    <!-- NOTE: Some IDE CSS linters report false positives here (for example "{ expected" or "empty rule set") because Jinja tags appear inside a
+         <style> block. This is template syntax, not runtime CSS, and renders to valid custom-property declarations in the final HTML response. -->
+    {% if statement_row_css_variables %}
+    <style>
+        :root {
+            {% for variable_name, variable_value in statement_row_css_variables.items() %}
+            {{ variable_name }}: {{ variable_value }};
+            {% endfor %}
+        }
+    </style>
+    {% endif %}
 </head>
 
 <body>
@@ -70,9 +81,44 @@
     </nav>
 
     <!-- Main content -->
-    <div class="{% block container_class %}container mt-4{% endblock %}">
+    <main class="{% block container_class %}container mt-4{% endblock %} site-shell-main">
         {% block content %}{% endblock %}
-    </div>
+    </main>
+
+    <footer class="site-footer mt-5">
+        <div class="container py-5">
+            <div class="row g-4">
+                <section class="col-12 col-lg-5">
+                    <h2 class="site-footer-title h6 mb-2">About Statement Processor</h2>
+                    <p class="mb-0">
+                        Statement Processor helps finance teams reconcile supplier statements against Xero with a clear,
+                        step-by-step workflow and exportable results.
+                    </p>
+                </section>
+
+                <section class="col-12 col-md-6 col-lg-4">
+                    <h2 class="site-footer-title h6 mb-2">Contact</h2>
+                    <p class="mb-0">
+                        Questions or feedback? Email us at
+                        <a href="mailto:hello@example.com">hello@example.com</a>.
+                    </p>
+                </section>
+
+                <section class="col-12 col-md-6 col-lg-3">
+                    <h2 class="site-footer-title h6 mb-2">Legal</h2>
+                    <ul class="site-footer-links list-unstyled mb-0">
+                        <li><span class="site-footer-placeholder">Privacy Policy (placeholder)</span></li>
+                        <li><span class="site-footer-placeholder">Terms &amp; Conditions (placeholder)</span></li>
+                        <li><a href="{{ url_for('cookies') }}">Cookie Policy</a></li>
+                    </ul>
+                </section>
+            </div>
+
+            <div class="site-footer-bottom mt-4 pt-3">
+                <small>Copyright &copy; Statement Processor. All rights reserved.</small>
+            </div>
+        </div>
+    </footer>
 
     <!-- ✅ Bootstrap JS Bundle (needed for navbar toggler) -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>

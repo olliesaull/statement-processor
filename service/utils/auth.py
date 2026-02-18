@@ -243,7 +243,7 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
     """
 
     @wraps(f)
-    def decorated_function(*args: Any, **kwargs: Any) -> Any:
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:  # pylint: disable=too-many-return-statements
         is_api_request = request.path.startswith("/api/")
         if not has_cookie_consent():
             logger.info("Cookie consent missing; blocking protected route", route=request.path, is_api_request=is_api_request)

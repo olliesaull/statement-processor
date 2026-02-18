@@ -157,6 +157,12 @@
     - S3 keying + uploads: `service/utils/storage.py`
     - Step Functions start: `service/utils/workflows.py`
     - Statement view/matching logic: `service/utils/statement_view.py`
+    - Statement Excel export assembly: `service/utils/statement_excel_export.py`
+      - Builds XLSX payload bytes, worksheet styling (match/mismatch/anomaly + completed variants), mismatch borders, legend sheet, and download filename metadata.
+      - `service/app.py` now calls this module and only wraps the payload in a Flask response.
+    - Shared statement row helpers: `service/utils/statement_rows.py`
+      - Centralizes row item-type labeling (`invoice` -> `INV`, etc.) and Xero ID lookup from matched row payloads.
+      - Reused by both HTML row-building and Excel export paths to keep link/label behavior aligned.
     - Formatting/helpers: `service/utils/formatting.py`, `service/utils/tenant_status.py`
   - Xero integration + caching: `service/xero_repository.py`
   - Background sync job: `service/sync.py`
@@ -181,6 +187,14 @@
     - `/configs` (GET/POST): contact mapping configuration UI (requires tenant + Xero auth, blocks while loading).
     - `/instructions` (GET): instructions page.
     - `/about` (GET): non-technical overview page covering product purpose, use cases, outcomes, and practical limits.
+    - **Shared statement row colour system (UI + Excel)**:
+      - Canonical source: `service/core/statement_row_palette.py`.
+      - Base states are `match`, `mismatch`, and `anomaly` with existing row colours.
+      - Completed colours are generated (not hard-coded) by blending each base background toward white via `STATEMENT_ROW_COMPLETED_ALPHA` (default `0.65`), so tuning one value updates both UI and XLSX output.
+      - Completed text colours intentionally stay the same as normal text colours so completed rows remain readable (no text fade).
+      - Flask exposes palette-derived CSS custom properties globally via `service/app.py:_inject_statement_row_palette_css`, and `service/templates/base.html` writes them to `:root`.
+      - Statement table CSS (`service/static/assets/css/main.css`) consumes those variables for both normal and completed rows.
+      - Excel export (`service/utils/statement_excel_export.py`) builds fills from the same palette (`_build_excel_state_fills`) and applies normal vs completed variants per row based on statement item completion status.
   - **Tenant APIs**
     - `/api/tenant-statuses` (GET): returns tenant sync statuses (cached) for polling UI.
     - `/api/tenants/<tenant_id>/sync` (POST): triggers background Xero sync for a tenant.

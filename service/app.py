@@ -16,11 +16,7 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, ses
 from flask_caching import Cache
 from flask_session import Session
 from flask_wtf.csrf import CSRFProtect
-from openpyxl import Workbook
-from openpyxl.styles import Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
 from werkzeug.datastructures import FileStorage
-from werkzeug.utils import secure_filename
 
 import cache_provider
 from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE
@@ -28,6 +24,7 @@ from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
 from core.models import StatementItem
+from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
 from sync import check_load_required, sync_data
 from tenant_data_repository import TenantDataRepository, TenantStatus
@@ -54,6 +51,9 @@ from utils.dynamo import (
     set_all_statement_items_completed,
     set_statement_item_completed,
 )
+from utils.statement_excel_export import build_statement_excel_payload
+from utils.statement_rows import format_item_type_label as _format_item_type_label
+from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
 from utils.statement_view import build_right_rows, build_row_comparisons, get_date_format_from_config, get_number_separators_from_config, match_invoices_to_statement_items, prepare_display_mappings
 from utils.storage import StatementJSONNotFoundError, fetch_json_statement, is_allowed_pdf, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
 from utils.workflows import start_textraction_state_machine
@@ -112,7 +112,21 @@ DECIMAL_SEPARATOR_OPTIONS = [(".", "Dot (.)"), (",", "Comma (,)")]
 THOUSANDS_SEPARATOR_OPTIONS = [("", "None"), (",", "Comma (,)"), (".", "Dot (.)"), (" ", "Space ( )"), ("'", "Apostrophe (')")]
 DECIMAL_SEPARATOR_VALUES = {opt[0] for opt in DECIMAL_SEPARATOR_OPTIONS}
 THOUSANDS_SEPARATOR_VALUES = {opt[0] for opt in THOUSANDS_SEPARATOR_OPTIONS}
-_ITEM_TYPE_LABELS: dict[str, str] = {"credit_note": "CRN", "invoice": "INV", "payment": "PMT"}
+
+
+@app.context_processor
+def _inject_statement_row_palette_css() -> dict[str, Any]:
+    """Expose statement row CSS variables to every template.
+
+    Args:
+        None.
+
+    Returns:
+        Template variables containing the statement row CSS variable map.
+    """
+    # We render CSS variables from one shared Python palette so table colors stay consistent between web UI and the Excel export.
+    # Payload is tiny so performance impact of injecting on every page is negligible
+    return {"statement_row_css_variables": STATEMENT_ROW_CSS_VARIABLES}
 
 
 def _trigger_initial_sync_if_required(tenant_id: str | None) -> None:
@@ -809,226 +823,6 @@ def _build_row_matches(rows_by_header: list[dict[str, Any]], item_number_header:
     return [all(cell.matches for cell in row) for row in row_comparisons]
 
 
-def _build_excel_headers(display_headers: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
-    """Build label pairs and the Excel header row."""
-    header_labels: list[tuple[str, str]] = []
-    statement_headers: list[str] = []
-    xero_headers: list[str] = []
-
-    for header in display_headers:
-        label = (header or "").replace("_", " ").strip()
-        label = label[0].upper() + label[1:] if label else header or ""
-        header_labels.append((header, label))
-        statement_headers.append(f"Statement {label}")
-        xero_headers.append(f"Xero {label}")
-
-    excel_headers = ["Type", *statement_headers, *xero_headers, "Xero Link", "Status"]
-    return header_labels, excel_headers
-
-
-def _add_excel_legend(workbook: Workbook, *, fill_success: PatternFill, fill_danger: PatternFill, fill_warning: PatternFill, mismatch_border: Border) -> None:
-    """Add a legend sheet describing statement row styles."""
-    legend = workbook.create_sheet(title="Legend")
-    legend.column_dimensions["A"].width = 30
-    legend.column_dimensions["B"].width = 18
-    legend.append(["Legend", ""])
-    legend["A1"].font = Font(bold=True)
-    legend.append(["Match", ""])
-    legend["B2"].fill = fill_success
-    legend.append(["Mismatch", ""])
-    legend["B3"].fill = fill_danger
-    legend.append(["Flagged anomaly", ""])
-    legend["B4"].fill = fill_warning
-    legend.append(["Cell mismatch (matched rows)", ""])
-    legend["B5"].border = mismatch_border
-
-
-def _status_for_excel_row(item: Any, item_status_map: dict[str, bool]) -> tuple[str, bool]:
-    """Return the status label and completion flag for an item."""
-    statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
-    if statement_item_id:
-        is_item_completed = item_status_map.get(statement_item_id, False)
-        status_label = "Completed" if is_item_completed else "Incomplete"
-        return status_label, is_item_completed
-    return "", False
-
-
-def _build_excel_row_values(header_labels: list[tuple[str, str]], left_row: dict[str, Any], right_row: dict[str, Any], item_types: list[str], idx: int) -> list[Any]:
-    """Build Excel row values from statement/xero data."""
-    item_type = item_types[idx] if idx < len(item_types) else ""
-    row_values: list[Any] = [_format_item_type_label(item_type)]
-    for src_header, _ in header_labels:
-        left_value = left_row.get(src_header, "") if isinstance(left_row, dict) else ""
-        row_values.append("" if left_value is None else left_value)
-
-    for src_header, _ in header_labels:
-        right_value = right_row.get(src_header, "") if isinstance(right_row, dict) else ""
-        row_values.append("" if right_value is None else right_value)
-
-    return row_values
-
-
-def _is_anomalous_item(item: Any) -> bool:
-    """Return True when the item has anomaly flags."""
-    raw_flags = item.get("_flags") if isinstance(item, dict) else None
-    flag_list = raw_flags if isinstance(raw_flags, list) else []
-    return any(isinstance(flag, str) and flag.strip() in {"ml-outlier", "invalid-date"} for flag in flag_list)
-
-
-def _row_fill_for_item(item: Any, row_match: bool, *, fill_warning: PatternFill, fill_success: PatternFill, fill_danger: PatternFill) -> PatternFill:
-    """Return the fill color for the row."""
-    if _is_anomalous_item(item):
-        return fill_warning
-    return fill_success if row_match else fill_danger
-
-
-def _apply_row_fill(worksheet, *, current_row: int, total_columns: int, fill: PatternFill) -> None:
-    """Apply row coloring to a worksheet row."""
-    for col in range(1, total_columns + 1):
-        cell = worksheet.cell(row=current_row, column=col)
-        cell.fill = fill
-
-
-def _apply_divider_borders(worksheet, *, current_row: int, statement_end_col: int, xero_start_col: int, divider_side: Side) -> None:
-    """Apply divider borders between statement and Xero sections."""
-    worksheet.cell(row=current_row, column=statement_end_col).border = Border(right=divider_side)
-    worksheet.cell(row=current_row, column=xero_start_col).border = Border(left=divider_side)
-
-
-def _apply_mismatch_borders(
-    worksheet,
-    *,
-    header_labels: list[tuple[str, str]],
-    comparisons: list[Any],
-    current_row: int,
-    statement_end_col: int,
-    xero_start_col: int,
-    mismatch_border: Border,
-    mismatch_side: Side,
-    divider_side: Side,
-) -> None:
-    """Apply per-cell mismatch borders for matched rows."""
-    col_count = len(header_labels)
-    for col_idx, comparison in enumerate(comparisons[:col_count]):
-        if getattr(comparison, "matches", True):
-            continue
-        for target_col in (2 + col_idx, 2 + col_count + col_idx):
-            cell = worksheet.cell(row=current_row, column=target_col)
-            if target_col == statement_end_col:
-                cell.border = Border(left=mismatch_side, right=divider_side, top=mismatch_side, bottom=mismatch_side)
-            elif target_col == xero_start_col:
-                cell.border = Border(left=divider_side, right=mismatch_side, top=mismatch_side, bottom=mismatch_side)
-            else:
-                cell.border = mismatch_border
-
-
-def _parse_date_value(value: Any) -> date | None:
-    """Parse a date value from a record field."""
-    if isinstance(value, str):
-        try:
-            return date.fromisoformat(value.strip())
-        except ValueError:
-            return None
-    return None
-
-
-def _format_date_segment(earliest_date: date | None, latest_date: date | None) -> str:
-    """Return the filename date segment from the parsed dates."""
-    if earliest_date and latest_date:
-        if earliest_date == latest_date:
-            return earliest_date.strftime("%Y-%m-%d")
-        return f"{earliest_date.strftime('%Y-%m-%d')}_{latest_date.strftime('%Y-%m-%d')}"
-    if latest_date or earliest_date:
-        chosen = latest_date or earliest_date
-        return chosen.strftime("%Y-%m-%d") if chosen else ""
-    return ""
-
-
-def _contact_segment(record: dict[str, Any], statement_id: str) -> str:
-    """Return the filename contact segment."""
-    contact_name = record.get("ContactName") if isinstance(record, dict) else ""
-    return secure_filename(str(contact_name or "").strip()) or f"statement_{statement_id}"
-
-
-def _append_excel_rows(
-    worksheet,
-    *,
-    header_labels: list[tuple[str, str]],
-    excel_headers: list[str],
-    rows_by_header: list[dict[str, Any]],
-    right_rows_by_header: list[dict[str, Any]],
-    row_comparisons: list[list[Any]],
-    row_matches: list[bool],
-    item_types: list[str],
-    items: list[Any],
-    item_number_header: str | None,
-    matched_invoice_to_statement_item: dict[str, Any],
-    item_status_map: dict[str, bool],
-    statement_col_count: int,
-    statement_end_col: int,
-    xero_start_col: int,
-    fill_success: PatternFill,
-    fill_danger: PatternFill,
-    fill_warning: PatternFill,
-    mismatch_border: Border,
-    mismatch_side: Side,
-    divider_side: Side,
-) -> int:
-    """Append rows to the Excel worksheet and return row count.
-
-    This includes a hyperlink cell for the Xero Link column when available.
-    """
-    row_count = max(len(rows_by_header), len(right_rows_by_header))
-    try:
-        link_col = excel_headers.index("Xero Link") + 1
-    except ValueError:
-        link_col = None
-    for idx in range(row_count):
-        left_row = rows_by_header[idx] if idx < len(rows_by_header) else {}
-        right_row = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
-        item = items[idx] if idx < len(items) else {}
-
-        status_label, _is_item_completed = _status_for_excel_row(item, item_status_map)
-        row_values = _build_excel_row_values(header_labels, left_row, right_row, item_types, idx)
-        xero_invoice_id, xero_credit_note_id = _xero_ids_for_row(item_number_header, left_row, matched_invoice_to_statement_item)
-        if xero_credit_note_id:
-            xero_link = f"https://go.xero.com/AccountsPayable/ViewCreditNote.aspx?creditNoteID={xero_credit_note_id}"
-        elif xero_invoice_id:
-            xero_link = f"https://go.xero.com/AccountsPayable/View.aspx?InvoiceID={xero_invoice_id}"
-        else:
-            xero_link = ""
-        # Providing status in the sheet lets users filter finished work out quickly.
-        row_values.append("Link" if xero_link else "")
-        row_values.append(status_label)
-        worksheet.append(row_values)
-        current_row = worksheet.max_row
-        if xero_link and link_col:
-            link_cell = worksheet.cell(row=current_row, column=link_col)
-            link_cell.hyperlink = xero_link
-
-        row_match = row_matches[idx] if idx < len(row_matches) else False
-        fill = _row_fill_for_item(item, row_match, fill_warning=fill_warning, fill_success=fill_success, fill_danger=fill_danger)
-        _apply_row_fill(worksheet, current_row=current_row, total_columns=len(excel_headers), fill=fill)
-
-        if statement_col_count:
-            _apply_divider_borders(worksheet, current_row=current_row, statement_end_col=statement_end_col, xero_start_col=xero_start_col, divider_side=divider_side)
-
-        if row_match and idx < len(row_comparisons):
-            comparisons = row_comparisons[idx] or []
-            _apply_mismatch_borders(
-                worksheet,
-                header_labels=header_labels,
-                comparisons=comparisons,
-                current_row=current_row,
-                statement_end_col=statement_end_col,
-                xero_start_col=xero_start_col,
-                mismatch_border=mismatch_border,
-                mismatch_side=mismatch_side,
-                divider_side=divider_side,
-            )
-    return row_count
-
-
 def _build_statement_excel_response(
     *,
     display_headers: list[str],
@@ -1046,7 +840,6 @@ def _build_statement_excel_response(
     tenant_id: str,
 ) -> Any:
     """Build an XLSX export response for the current statement view.
-    This applies basic header formatting plus a frozen header row with dropdown filters.
 
     Args:
         display_headers: Statement display headers.
@@ -1066,33 +859,11 @@ def _build_statement_excel_response(
     Returns:
         Flask response containing the XLSX export.
     """
-    header_labels, excel_headers = _build_excel_headers(display_headers)
-
-    workbook = Workbook()
-    worksheet = workbook.active
-    worksheet.title = "Statement"
-    worksheet.append(excel_headers)
-
-    fill_success = PatternFill(fill_type="solid", fgColor="C6EFCE")
-    fill_danger = PatternFill(fill_type="solid", fgColor="CD5C5C")
-    fill_warning = PatternFill(fill_type="solid", fgColor="FFEB9C")
-    mismatch_side = Side(style="thin", color="D8A0A0")
-    mismatch_border = Border(left=mismatch_side, right=mismatch_side, top=mismatch_side, bottom=mismatch_side)
-    divider_side = Side(style="medium", color="808080")
-    statement_col_count = len(header_labels)
-    statement_end_col = 1 + statement_col_count
-    xero_start_col = statement_end_col + 1
-
-    _add_excel_legend(workbook, fill_success=fill_success, fill_danger=fill_danger, fill_warning=fill_warning, mismatch_border=mismatch_border)
-
-    if statement_col_count:
-        worksheet.cell(row=1, column=statement_end_col).border = Border(right=divider_side)
-        worksheet.cell(row=1, column=xero_start_col).border = Border(left=divider_side)
-
-    row_count = _append_excel_rows(
-        worksheet,
-        header_labels=header_labels,
-        excel_headers=excel_headers,
+    # Pylint's duplicate-code check compares raw argument forwarding blocks.
+    # This explicit mapping is intentional so the route wrapper stays easy to audit.
+    # pylint: disable=duplicate-code
+    excel_payload, download_name, row_count = build_statement_excel_payload(
+        display_headers=display_headers,
         rows_by_header=rows_by_header,
         right_rows_by_header=right_rows_by_header,
         row_comparisons=row_comparisons,
@@ -1102,52 +873,11 @@ def _build_statement_excel_response(
         item_number_header=item_number_header,
         matched_invoice_to_statement_item=matched_invoice_to_statement_item,
         item_status_map=item_status_map,
-        statement_col_count=statement_col_count,
-        statement_end_col=statement_end_col,
-        xero_start_col=xero_start_col,
-        fill_success=fill_success,
-        fill_danger=fill_danger,
-        fill_warning=fill_warning,
-        mismatch_border=mismatch_border,
-        mismatch_side=mismatch_side,
-        divider_side=divider_side,
+        record=record,
+        statement_id=statement_id,
     )
-
-    header_font = Font(bold=True)
-    for col_idx in range(1, len(excel_headers) + 1):
-        worksheet.cell(row=1, column=col_idx).font = header_font
-
-    worksheet.freeze_panes = "A2"
-    last_row = max(row_count + 1, 1)
-    last_column = get_column_letter(len(excel_headers))
-    worksheet.auto_filter.ref = f"A1:{last_column}{last_row}"
-
-    width_overrides = {"Type": 8, "Status": 12, "Xero Link": 12}
-    for col_idx, header in enumerate(excel_headers, start=1):
-        width = width_overrides.get(header)
-        if width is None:
-            width = min(max(len(header) + 2, 14), 30)
-        worksheet.column_dimensions[get_column_letter(col_idx)].width = width
-
-    output = BytesIO()
-    workbook.save(output)
-    output.seek(0)
-    excel_payload = output.getvalue()
-    output.close()
-
+    # pylint: enable=duplicate-code
     response = app.response_class(excel_payload, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    earliest_date = _parse_date_value(record.get("EarliestItemDate"))
-    latest_date = _parse_date_value(record.get("LatestItemDate"))
-    date_segment = _format_date_segment(earliest_date, latest_date)
-
-    contact_segment = _contact_segment(record, statement_id)
-
-    parts = [contact_segment]
-    if date_segment:
-        parts.append(date_segment)
-    download_name = "_".join(parts) + "_export.xlsx"
-
     response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
     logger.info("Statement Excel generated", tenant_id=tenant_id, statement_id=statement_id, rows=row_count, excel_filename=download_name)
     return response
@@ -1179,43 +909,6 @@ def _item_flags(item: Any) -> list[str]:
         seen_flags.add(normalized)
         flags.append(normalized)
     return flags
-
-
-def _format_item_type_label(item_type: str | None) -> str:
-    """Format a statement item type for display.
-
-    Args:
-        item_type: Raw statement item type value.
-
-    Returns:
-        Display label for the item type.
-    """
-    normalized = str(item_type or "").strip().lower()
-    if not normalized:
-        return ""
-    if normalized in _ITEM_TYPE_LABELS:
-        return _ITEM_TYPE_LABELS[normalized]
-    return normalized.replace("_", " ").upper()
-
-
-def _xero_ids_for_row(item_number_header: str | None, left_row: dict[str, Any], matched_invoice_to_statement_item: dict[str, Any]) -> tuple[str | None, str | None]:
-    """Return matched Xero invoice/credit note IDs for a row."""
-    if not item_number_header:
-        return None, None
-    row_number = str(left_row.get(item_number_header) or "").strip()
-    if not row_number:
-        return None, None
-    match = matched_invoice_to_statement_item.get(row_number)
-    if not isinstance(match, dict):
-        return None, None
-    inv = match.get("invoice")
-    if not isinstance(inv, dict):
-        return None, None
-    credit_note_id = inv.get("credit_note_id")
-    xero_credit_note_id = credit_note_id.strip() if isinstance(credit_note_id, str) and credit_note_id.strip() else None
-    invoice_id = inv.get("invoice_id")
-    xero_invoice_id = invoice_id.strip() if isinstance(invoice_id, str) and invoice_id.strip() else None
-    return xero_invoice_id, xero_credit_note_id
 
 
 def _build_statement_rows(

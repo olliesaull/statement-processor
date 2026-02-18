@@ -95,6 +95,8 @@ make dev
 This executes formatting, and linting. Do not commit or consider work complete until `make dev` passes without errors.
 Run make dev inside either /service or /lambda_functions/textraction_lambda depending on which directory you are working in.
 
+Pylint is intentionally run with `--jobs=1` via the shared Makefile. This avoids multiprocessing/semaphore permission failures in restricted sandbox and WSL-style environments so lint output is reliable for both humans and agents.
+
 ## Code Style
 
 Configuration is in `pyproject.toml`. Key standards:
