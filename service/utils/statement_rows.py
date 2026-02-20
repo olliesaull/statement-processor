@@ -6,6 +6,8 @@ so keeping them here avoids duplicating row-level formatting/link logic.
 
 from typing import Any
 
+from core.statement_detail_types import MatchedInvoiceMap
+
 _ITEM_TYPE_LABELS: dict[str, str] = {"credit_note": "CRN", "invoice": "INV", "payment": "PMT"}
 
 
@@ -26,7 +28,7 @@ def format_item_type_label(item_type: str | None) -> str:
     return normalized.replace("_", " ").upper()
 
 
-def xero_ids_for_row(item_number_header: str | None, left_row: dict[str, Any], matched_invoice_to_statement_item: dict[str, Any]) -> tuple[str | None, str | None]:
+def xero_ids_for_row(item_number_header: str | None, left_row: dict[str, Any], matched_invoice_to_statement_item: MatchedInvoiceMap) -> tuple[str | None, str | None]:
     """Return matched Xero invoice/credit note IDs for a row.
 
     Args:

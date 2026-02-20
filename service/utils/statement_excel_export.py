@@ -13,6 +13,7 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from werkzeug.utils import secure_filename
 
+from core.statement_detail_types import MatchedInvoiceMap, StatementItemPayload, StatementRowsByHeader
 from core.statement_row_palette import STATEMENT_ROW_PALETTE
 from utils.statement_rows import format_item_type_label, xero_ids_for_row
 
@@ -102,7 +103,7 @@ def _add_excel_legend(workbook: Workbook, *, state_fills: dict[str, dict[str, Pa
     legend[f"B{legend.max_row}"].border = mismatch_border
 
 
-def _status_for_excel_row(item: Any, item_status_map: dict[str, bool]) -> tuple[str, bool]:
+def _status_for_excel_row(item: StatementItemPayload, item_status_map: dict[str, bool]) -> tuple[str, bool]:
     """Return the status label and completion flag for an item.
 
     Args:
@@ -146,7 +147,7 @@ def _build_excel_row_values(header_labels: list[tuple[str, str]], left_row: dict
     return row_values
 
 
-def _is_anomalous_item(item: Any) -> bool:
+def _is_anomalous_item(item: StatementItemPayload) -> bool:
     """Return True when the item has anomaly flags.
 
     Args:
@@ -160,7 +161,7 @@ def _is_anomalous_item(item: Any) -> bool:
     return any(isinstance(flag, str) and flag.strip() in {"ml-outlier", "invalid-date"} for flag in flag_list)
 
 
-def _row_state_for_item(item: Any, row_match: bool) -> str:
+def _row_state_for_item(item: StatementItemPayload, row_match: bool) -> str:
     """Return the semantic statement row state.
 
     Args:
@@ -307,14 +308,14 @@ def _append_excel_rows(
     *,
     header_labels: list[tuple[str, str]],
     excel_headers: list[str],
-    rows_by_header: list[dict[str, Any]],
-    right_rows_by_header: list[dict[str, Any]],
+    rows_by_header: StatementRowsByHeader,
+    right_rows_by_header: StatementRowsByHeader,
     row_comparisons: list[list[Any]],
     row_matches: list[bool],
     item_types: list[str],
-    items: list[Any],
+    items: list[StatementItemPayload],
     item_number_header: str | None,
-    matched_invoice_to_statement_item: dict[str, Any],
+    matched_invoice_to_statement_item: MatchedInvoiceMap,
     item_status_map: dict[str, bool],
     statement_col_count: int,
     statement_end_col: int,
@@ -410,14 +411,14 @@ def _append_excel_rows(
 def build_statement_excel_payload(
     *,
     display_headers: list[str],
-    rows_by_header: list[dict[str, Any]],
-    right_rows_by_header: list[dict[str, Any]],
+    rows_by_header: StatementRowsByHeader,
+    right_rows_by_header: StatementRowsByHeader,
     row_comparisons: list[list[Any]],
     row_matches: list[bool],
     item_types: list[str],
-    items: list[Any],
+    items: list[StatementItemPayload],
     item_number_header: str | None,
-    matched_invoice_to_statement_item: dict[str, Any],
+    matched_invoice_to_statement_item: MatchedInvoiceMap,
     item_status_map: dict[str, bool],
     record: dict[str, Any],
     statement_id: str,

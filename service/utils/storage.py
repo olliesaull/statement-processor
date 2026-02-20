@@ -1,12 +1,10 @@
 """Storage helpers for statement files and assets."""
 
-import io
 import json
 from pathlib import Path
 from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
-from werkzeug.datastructures import FileStorage
 
 from config import S3_BUCKET_NAME, s3_client
 from logger import logger
@@ -78,7 +76,7 @@ class StatementJSONNotFoundError(Exception):
     """Raised when the structured JSON for a statement is not yet available."""
 
 
-def fetch_json_statement(tenant_id: str, contact_id: str, bucket: str, json_key: str) -> tuple[dict[str, Any], FileStorage]:
+def fetch_json_statement(tenant_id: str, bucket: str, json_key: str) -> dict[str, Any]:
     """Download and return the JSON statement from S3.
 
     Raises:
@@ -94,8 +92,4 @@ def fetch_json_statement(tenant_id: str, contact_id: str, bucket: str, json_key:
 
     obj = s3_client.get_object(Bucket=bucket, Key=json_key)
     json_bytes = obj["Body"].read()
-    data = json.loads(json_bytes.decode("utf-8"))
-
-    filename = json_key.rsplit("/", 1)[-1]
-    fs = FileStorage(stream=io.BytesIO(json_bytes), filename=filename)
-    return data, fs
+    return json.loads(json_bytes.decode("utf-8"))

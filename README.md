@@ -287,7 +287,7 @@
   - Sort key: `ContactID`
 - **Concept**
   - Stores per‑tenant, per‑contact mapping config under the `config` attribute.
-  - Config shape is flexible; the service reads a flattened or nested `statement_items` mapping (`service/utils/statement_view.py:get_items_template_from_config`).
+  - Config shape is flattened at the root (for example `number`, `total`, `date_format`, `decimal_separator`, `thousands_separator`); nested legacy `statement_items` mappings are no longer read.
 - **Writers**
   - Config UI save/load: `service/core/get_contact_config.py`.
   - Raw header persistence during extraction: `lambda_functions/textraction_lambda/core/transform.py:_persist_raw_headers` (via `core/get_contact_config.py:set_contact_config`).
@@ -377,6 +377,10 @@
   - Logic: `validate_references_roundtrip(...)` compares extracted references against PDF text (pdfplumber) and raises `ItemCountDisagreementError` on mismatch, but the call is wrapped in `try/except` in `run_textraction`, so failures only log warnings and do not block output (`lambda_functions/textraction_lambda/core/validation/validate_item_count.py`, `lambda_functions/textraction_lambda/core/textract_statement.py`).
   - Why it exists: provides a safety check while preserving pipeline availability when PDFs are noisy or scanned.
   - Example: If the PDF is image‑only (no extractable text), validation is skipped to avoid false mismatches.
+
+## Xero Matching Logic
+
+- Payment-looking references are excluded from substring matching
 
 ## Playwright Regression Fixture: Test Statements Ltd (Demo Company UK)
 

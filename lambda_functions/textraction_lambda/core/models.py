@@ -3,6 +3,7 @@ Pydantic models used across the Lambda.
 
 These are small, focused schemas that:
 - Validate/normalize the StepFunctions -> Lambda event payload (`TextractionEvent`)
+- Provide a typed representation of contact mapping config (`ContactConfig`)
 - Provide a typed representation of extracted statement data (`StatementItem`, `SupplierStatement`)
 """
 
@@ -30,6 +31,31 @@ class TextractionEvent(BaseModel):
     pdf_key: str = Field(alias="pdfKey")
     json_key: str = Field(alias="jsonKey")
     pdf_bucket: str | None = Field(default=None, alias="pdfBucket")
+
+
+class ContactConfig(BaseModel):
+    """Contact mapping config used by table extraction and persisted in DynamoDB."""
+
+    model_config = ConfigDict(extra="allow")
+
+    date: str = ""
+    due_date: str = ""
+    number: str = ""
+    total: list[str] = Field(default_factory=list)
+    date_format: str = ""
+    decimal_separator: str = "."
+    thousands_separator: str = ","
+    raw: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("total", mode="before")
+    @classmethod
+    def _coerce_total(cls, value: Any) -> list[str]:
+        """Normalize configured total headers into a trimmed string list."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise TypeError("total must be a list")
+        return [str(item).strip() for item in value if str(item).strip()]
 
 
 class StatementItem(BaseModel):

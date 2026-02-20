@@ -7,45 +7,9 @@ from dataclasses import dataclass
 
 import pytest
 
+from core.models import ContactConfig
 from utils.formatting import format_money
 from utils.statement_view import _format_statement_value, get_date_format_from_config, get_number_separators_from_config
-
-
-@dataclass(frozen=True)
-class ContactConfig:
-    """
-    Represents contact formatting config inputs for view helper tests.
-
-    This test-only model mirrors the config shape used by the statement view helpers.
-
-    Attributes:
-        date_format: Moment-style date format string.
-        decimal_separator: Decimal separator character.
-        thousands_separator: Thousands separator character.
-    """
-
-    date_format: str | None = None
-    decimal_separator: str | None = None
-    thousands_separator: str | None = None
-
-    def as_dict(self) -> dict[str, str]:
-        """
-        Build a config dict compatible with view helpers.
-
-        Args:
-            None.
-
-        Returns:
-            Config dict with only configured fields.
-        """
-        payload: dict[str, str] = {}
-        if self.date_format is not None:
-            payload["date_format"] = self.date_format
-        if self.decimal_separator is not None:
-            payload["decimal_separator"] = self.decimal_separator
-        if self.thousands_separator is not None:
-            payload["thousands_separator"] = self.thousands_separator
-        return payload
 
 
 @dataclass(frozen=True)
@@ -158,13 +122,13 @@ _DATE_FORMAT_CASES = [
 
 @pytest.mark.parametrize("case", _DATE_TEMPLATE_CASES, ids=[case.name for case in _DATE_TEMPLATE_CASES])
 def test_date_format_from_config_returns_template(case: DateTemplateCase) -> None:
-    result = get_date_format_from_config(case.contact_config.as_dict())
+    result = get_date_format_from_config(case.contact_config)
     assert result == case.expected
 
 
 @pytest.mark.parametrize("case", _DATE_FORMAT_CASES, ids=[case.name for case in _DATE_FORMAT_CASES])
 def test_date_formatting(case: DateFormatCase) -> None:
-    date_fmt = get_date_format_from_config(case.contact_config.as_dict()) if case.contact_config else None
+    date_fmt = get_date_format_from_config(case.contact_config) if case.contact_config else None
     result = _format_statement_value(case.raw_value, "date", date_fmt, ".", ",")
     assert result == case.expected
 
@@ -197,7 +161,7 @@ _FORMAT_MONEY_CASES = [
 
 @pytest.mark.parametrize("case", _NUMBER_FORMAT_CASES, ids=[case.name for case in _NUMBER_FORMAT_CASES])
 def test_number_formatting_with_config(case: NumberFormatCase) -> None:
-    dec_sep, thou_sep = get_number_separators_from_config(case.contact_config.as_dict())
+    dec_sep, thou_sep = get_number_separators_from_config(case.contact_config)
     result = format_money(case.raw_value, decimal_separator=dec_sep, thousands_separator=thou_sep)
     assert result == case.expected
 

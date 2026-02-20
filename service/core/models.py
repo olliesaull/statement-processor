@@ -3,13 +3,14 @@ Shared models for statement processing.
 
 These models provide:
 - A typed representation of extracted statement items (`StatementItem`)
+- A typed representation of contact mapping config (`ContactConfig`)
 - A comparison payload for statement vs. Xero values (`CellComparison`)
 """
 
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Number = int | float | str
 
@@ -70,6 +71,31 @@ class StatementItem(BaseModel):
                 coerced[label] = _coerce_val(entry.get("value"))
             return coerced
         return {}
+
+
+class ContactConfig(BaseModel):
+    """Contact-specific mapping config persisted for statement extraction and rendering."""
+
+    model_config = ConfigDict(extra="allow")
+
+    date: str = ""
+    due_date: str = ""
+    number: str = ""
+    total: list[str] = Field(default_factory=list)
+    date_format: str = ""
+    decimal_separator: str = "."
+    thousands_separator: str = ","
+    raw: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("total", mode="before")
+    @classmethod
+    def _coerce_total(cls, value: Any) -> list[str]:
+        """Normalize configured total headers into a trimmed string list."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise TypeError("total must be a list")
+        return [str(item).strip() for item in value if str(item).strip()]
 
 
 @dataclass(frozen=True)

@@ -23,7 +23,8 @@ from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
-from core.models import StatementItem
+from core.models import ContactConfig, StatementItem
+from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, PaymentNumberMap, StatementItemPayload, StatementRowsByHeader, StatementRowViewModel, XeroDocumentPayload
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
 from sync import check_load_required, sync_data
@@ -169,19 +170,14 @@ def _normalize_thousands_separator(value: str | None) -> str:
     return DEFAULT_THOUSANDS_SEPARATOR
 
 
-def _build_config_rows(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_config_rows(cfg: ContactConfig) -> list[dict[str, Any]]:
     """Build table rows for canonical fields using existing config values."""
-    # Flatten mapping sources: nested 'statement_items' + root-level keys.
-    nested = cfg.get("statement_items") if isinstance(cfg, dict) else None
-    nested = nested if isinstance(nested, dict) else {}
     flat: dict[str, Any] = {}
-    flat.update(nested)
     allowed_keys = set(StatementItem.model_fields.keys())
     disallowed = {"raw", "statement_item_id"}
-    if isinstance(cfg, dict):
-        for k, v in cfg.items():
-            if k in allowed_keys and k not in disallowed:
-                flat[k] = v
+    for key, value in cfg.model_dump().items():
+        if key in allowed_keys and key not in disallowed:
+            flat[key] = value
 
     flat.pop("reference", None)
     flat.pop("item_type", None)
@@ -198,7 +194,7 @@ def _build_config_rows(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         val = flat.get(f)
         if f == "total":
-            values = [str(v) for v in val] if isinstance(val, list) else ([str(val)] if isinstance(val, str) else [""])
+            values = [str(v) for v in val] if isinstance(val, list) else [""]
             rows.append({"field": f, "values": values or [""], "is_multi": True})
         else:
             values = [str(val)] if isinstance(val, str) else [""]
@@ -221,13 +217,13 @@ def _load_config_context(tenant_id: str | None, contact_lookup: dict[str, str], 
     try:
         cfg = get_contact_config(tenant_id, selected_contact_id)
         updates["mapping_rows"] = _build_config_rows(cfg)
-        updates["decimal_separator"] = _normalize_decimal_separator(str(cfg.get("decimal_separator", "")))
-        updates["thousands_separator"] = _normalize_thousands_separator(str(cfg.get("thousands_separator", "")))
-        updates["date_format"] = str(cfg.get("date_format") or "") if isinstance(cfg, dict) else ""
-        logger.info("Config loaded", tenant_id=tenant_id, contact_id=selected_contact_id, keys=len(cfg) if isinstance(cfg, dict) else 0)
+        updates["decimal_separator"] = _normalize_decimal_separator(cfg.decimal_separator)
+        updates["thousands_separator"] = _normalize_thousands_separator(cfg.thousands_separator)
+        updates["date_format"] = cfg.date_format or ""
+        logger.info("Config loaded", tenant_id=tenant_id, contact_id=selected_contact_id, keys=len(cfg.model_dump()))
         return updates
     except KeyError:
-        updates["mapping_rows"] = _build_config_rows({})
+        updates["mapping_rows"] = _build_config_rows(ContactConfig())
         updates["decimal_separator"] = DEFAULT_DECIMAL_SEPARATOR
         updates["thousands_separator"] = DEFAULT_THOUSANDS_SEPARATOR
         updates["date_format"] = ""
@@ -252,7 +248,7 @@ def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
         try:
             existing = get_contact_config(tenant_id, selected_contact_id)
         except KeyError:
-            existing = {}
+            existing = ContactConfig()
         posted_fields = [f for f in form.getlist("fields[]") if f]
 
         selected_decimal_separator = _normalize_decimal_separator(form.get("decimal_separator"))
@@ -260,8 +256,8 @@ def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
         selected_date_format = (form.get("date_format") or "").strip()
 
         # Preserve any root keys not shown in the mapping editor.
-        # Explicitly drop legacy 'statement_items' (we no longer store nested mappings).
-        preserved = {k: v for k, v in existing.items() if k not in [*posted_fields, "statement_items"] and k not in {"reference", "item_type"}}
+        existing_payload = existing.model_dump()
+        preserved = {k: v for k, v in existing_payload.items() if k not in posted_fields and k not in {"reference", "item_type"}}
 
         new_map: dict[str, Any] = {}
         for f in posted_fields:
@@ -271,7 +267,9 @@ def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
             else:
                 val = form.get(f"map[{f}]")
                 new_map[f] = (val or "").strip()
-        combined = {**preserved, **new_map, "date_format": selected_date_format, "decimal_separator": selected_decimal_separator, "thousands_separator": selected_thousands_separator}
+        combined = ContactConfig.model_validate(
+            {**preserved, **new_map, "date_format": selected_date_format, "decimal_separator": selected_decimal_separator, "thousands_separator": selected_thousands_separator}
+        )
 
         updates["decimal_separator"] = selected_decimal_separator
         updates["thousands_separator"] = selected_thousands_separator
@@ -290,7 +288,7 @@ def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
             updates["mapping_rows"] = _build_config_rows(combined)
         else:
             set_contact_config(tenant_id, selected_contact_id, combined)
-            logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name, config=combined)
+            logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name, config=combined.model_dump())
             updates["message"] = "Config updated successfully."
             updates["mapping_rows"] = _build_config_rows(combined)
     except Exception as exc:
@@ -690,9 +688,9 @@ def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: A
     return None
 
 
-def _build_match_by_item_id(matched_invoice_to_statement_item: dict[str, Any]) -> dict[str, dict[str, str]]:
+def _build_match_by_item_id(matched_invoice_to_statement_item: MatchedInvoiceMap) -> MatchByItemId:
     """Return a map of statement_item_id to matched document type/source."""
-    match_by_item_id: dict[str, dict[str, str]] = {}
+    match_by_item_id: MatchByItemId = {}
     for match in matched_invoice_to_statement_item.values():
         stmt_item = match.get("statement_item") if isinstance(match, dict) else None
         doc = match.get("invoice") if isinstance(match, dict) else None
@@ -709,7 +707,7 @@ def _build_match_by_item_id(matched_invoice_to_statement_item: dict[str, Any]) -
     return match_by_item_id
 
 
-def _build_payment_number_map(invoices: list[dict[str, Any]], payments: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def _build_payment_number_map(invoices: list[XeroDocumentPayload], payments: list[XeroDocumentPayload]) -> PaymentNumberMap:
     """Build a map of invoice number -> payment rows for payment inference."""
     invoice_number_by_id: dict[str, str] = {}
     for inv in invoices:
@@ -718,7 +716,7 @@ def _build_payment_number_map(invoices: list[dict[str, Any]], payments: list[dic
         if inv_id and inv_number:
             invoice_number_by_id[str(inv_id)] = inv_number
 
-    payment_number_map: dict[str, list[dict[str, Any]]] = {}
+    payment_number_map: PaymentNumberMap = {}
     for payment in payments:
         if not isinstance(payment, dict):
             continue
@@ -734,14 +732,14 @@ def _build_payment_number_map(invoices: list[dict[str, Any]], payments: list[dic
 
 def _classify_statement_items(
     *,
-    items: list[Any],
-    rows_by_header: list[dict[str, Any]],
+    items: list[StatementItemPayload],
+    rows_by_header: StatementRowsByHeader,
     item_number_header: str | None,
-    contact_config: dict[str, Any],
-    matched_invoice_to_statement_item: dict[str, Any],
+    contact_config: ContactConfig,
+    matched_invoice_to_statement_item: MatchedInvoiceMap,
     matched_numbers: set[str],
-    match_by_item_id: dict[str, dict[str, str]],
-    payment_number_map: dict[str, list[dict[str, Any]]],
+    match_by_item_id: MatchByItemId,
+    payment_number_map: PaymentNumberMap,
     statement_id: str,
 ) -> tuple[list[str], dict[str, str]]:
     """Classify statement items in-place and return item types + updates."""
@@ -810,7 +808,7 @@ def _persist_classification_updates(*, data: dict[str, Any], statement_id: str, 
     logger.info("Persisted statement item types to DynamoDB", statement_id=statement_id, updated=len(classification_updates))
 
 
-def _build_row_matches(rows_by_header: list[dict[str, Any]], item_number_header: str | None, matched_invoice_to_statement_item: dict[str, Any], row_comparisons: list[list[Any]]) -> list[bool]:
+def _build_row_matches(rows_by_header: StatementRowsByHeader, item_number_header: str | None, matched_invoice_to_statement_item: MatchedInvoiceMap, row_comparisons: list[list[Any]]) -> list[bool]:
     """Return the per-row match status for coloring and export."""
     if item_number_header:
         row_matches: list[bool] = []
@@ -826,14 +824,14 @@ def _build_row_matches(rows_by_header: list[dict[str, Any]], item_number_header:
 def _build_statement_excel_response(
     *,
     display_headers: list[str],
-    rows_by_header: list[dict[str, Any]],
-    right_rows_by_header: list[dict[str, Any]],
+    rows_by_header: StatementRowsByHeader,
+    right_rows_by_header: StatementRowsByHeader,
     row_comparisons: list[list[Any]],
     row_matches: list[bool],
     item_types: list[str],
-    items: list[Any],
+    items: list[StatementItemPayload],
     item_number_header: str | None,
-    matched_invoice_to_statement_item: dict[str, Any],
+    matched_invoice_to_statement_item: MatchedInvoiceMap,
     item_status_map: dict[str, bool],
     record: dict[str, Any],
     statement_id: str,
@@ -883,7 +881,7 @@ def _build_statement_excel_response(
     return response
 
 
-def _item_status(item: Any, item_status_map: dict[str, bool]) -> tuple[str | None, bool]:
+def _item_status(item: StatementItemPayload, item_status_map: dict[str, bool]) -> tuple[str | None, bool]:
     """Return the statement item ID and completion status."""
     statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
     if statement_item_id:
@@ -891,7 +889,7 @@ def _item_status(item: Any, item_status_map: dict[str, bool]) -> tuple[str | Non
     return None, False
 
 
-def _item_flags(item: Any) -> list[str]:
+def _item_flags(item: StatementItemPayload) -> list[str]:
     """Return normalized, unique flags for a statement item."""
     if not isinstance(item, dict):
         return []
@@ -913,23 +911,19 @@ def _item_flags(item: Any) -> list[str]:
 
 def _build_statement_rows(
     *,
-    rows_by_header: list[dict[str, Any]],
-    right_rows_by_header: list[dict[str, Any]],
-    display_headers: list[str],
+    rows_by_header: StatementRowsByHeader,
     row_comparisons: list[list[Any]],
     row_matches: list[bool],
-    items: list[Any],
+    items: list[StatementItemPayload],
     item_types: list[str],
     item_status_map: dict[str, bool],
     item_number_header: str | None,
-    matched_invoice_to_statement_item: dict[str, Any],
-) -> list[dict[str, Any]]:
+    matched_invoice_to_statement_item: MatchedInvoiceMap,
+) -> list[StatementRowViewModel]:
     """Build the rows displayed in the statement detail UI.
 
     Args:
         rows_by_header: Statement rows keyed by header names.
-        right_rows_by_header: Xero rows keyed by header names.
-        display_headers: Ordered list of display headers.
         row_comparisons: Per-cell comparison results.
         row_matches: Per-row match flags.
         items: Statement item payloads.
@@ -941,12 +935,11 @@ def _build_statement_rows(
     Returns:
         List of row dicts for the statement detail table.
     """
-    statement_rows: list[dict[str, Any]] = []
+    statement_rows: list[StatementRowViewModel] = []
     for idx, left_row in enumerate(rows_by_header):
         item = items[idx] if idx < len(items) else {}
         statement_item_id, is_item_completed = _item_status(item, item_status_map)
 
-        right_row_dict = right_rows_by_header[idx] if idx < len(right_rows_by_header) else {}
         flags = _item_flags(item)
 
         # Build Xero links by extracting IDs from matched data
@@ -956,8 +949,6 @@ def _build_statement_rows(
         statement_rows.append(
             {
                 "statement_item_id": statement_item_id,
-                "left_values": [left_row.get(h, "") for h in display_headers],
-                "right_values": [right_row_dict.get(h, "") for h in display_headers],
                 "cell_comparisons": row_comparisons[idx] if idx < len(row_comparisons) else [],
                 "matches": row_matches[idx] if idx < len(row_matches) else False,
                 "is_completed": is_item_completed,
@@ -992,9 +983,10 @@ def statement(statement_id: str):
 
     raw_contact_name = record.get("ContactName")
     contact_name = str(raw_contact_name).strip() if raw_contact_name is not None else ""
-    page_heading = contact_name or f"Statement {statement_id}"
+    page_heading = contact_name or f"Statement {statement_id}"  # TODO: Could page heading include statement filename instead of statement_id? StatementID is useless for customer
 
     if request.method == "POST":
+        # TODO: This function forces the entire page to re-render when an event occurs (hide/show payments, mark complete/incomplete, etc) - that is slow for large statements
         response = _handle_statement_post_actions(tenant_id=tenant_id, statement_id=statement_id, form=request.form, items_view=items_view, show_payments=show_payments)
         if response is not None:
             return response
@@ -1012,7 +1004,7 @@ def statement(statement_id: str):
         "is_completed": is_completed,
     }
     try:
-        data, _ = fetch_json_statement(tenant_id=tenant_id, contact_id=contact_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
+        data = fetch_json_statement(tenant_id=tenant_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
     except StatementJSONNotFoundError:
         logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
         return render_template(
@@ -1020,19 +1012,21 @@ def statement(statement_id: str):
         )
 
     # 1) Parse display configuration and left-side rows
-    items = data.get("statement_items", []) or []
-    contact_config = get_contact_config(tenant_id, contact_id)
+    items: list[StatementItemPayload] = data.get("statement_items", []) or []
+    contact_config: ContactConfig = get_contact_config(tenant_id, contact_id)
     decimal_sep, thousands_sep = get_number_separators_from_config(contact_config)
     display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, contact_config)
 
     # 2) Fetch Xero documents and classify each statement item
-    invoices = get_invoices_by_contact(contact_id) or []
-    credit_notes = get_credit_notes_by_contact(contact_id) or []
-    payments = get_payments_by_contact(contact_id) or []
+    invoices: list[XeroDocumentPayload] = get_invoices_by_contact(contact_id) or []
+    credit_notes: list[XeroDocumentPayload] = get_credit_notes_by_contact(contact_id) or []
+    payments: list[XeroDocumentPayload] = get_payments_by_contact(contact_id) or []
     logger.info("Fetched Xero documents", statement_id=statement_id, contact_id=contact_id, invoices=len(invoices), credit_notes=len(credit_notes), payments=len(payments))
 
     docs_for_matching = invoices + credit_notes
-    matched_invoice_to_statement_item = match_invoices_to_statement_items(items=items, rows_by_header=rows_by_header, item_number_header=item_number_header, invoices=docs_for_matching)
+    matched_invoice_to_statement_item: MatchedInvoiceMap = match_invoices_to_statement_items(
+        items=items, rows_by_header=rows_by_header, item_number_header=item_number_header, invoices=docs_for_matching
+    )
 
     matched_numbers: set[str] = {key for key in matched_invoice_to_statement_item if isinstance(key, str)}
     match_by_item_id = _build_match_by_item_id(matched_invoice_to_statement_item)
@@ -1093,8 +1087,6 @@ def statement(statement_id: str):
 
     statement_rows = _build_statement_rows(
         rows_by_header=rows_by_header,
-        right_rows_by_header=right_rows_by_header,
-        display_headers=display_headers,
         row_comparisons=row_comparisons,
         row_matches=row_matches,
         items=items,
@@ -1253,7 +1245,7 @@ def configs():
 
     context.update(
         {
-            "example_rows": _build_config_rows(EXAMPLE_CONFIG),
+            "example_rows": _build_config_rows(ContactConfig.model_validate(EXAMPLE_CONFIG)),
             "example_date_format": str(EXAMPLE_CONFIG.get("date_format") or ""),
             "example_decimal_separator": EXAMPLE_CONFIG.get("decimal_separator", DEFAULT_DECIMAL_SEPARATOR),
             "example_thousands_separator": EXAMPLE_CONFIG.get("thousands_separator", DEFAULT_THOUSANDS_SEPARATOR),

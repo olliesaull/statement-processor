@@ -19,7 +19,7 @@ from uuid import uuid4
 from core.date_utils import parse_with_format
 from core.extraction import TableOnPage
 from core.get_contact_config import get_contact_config, set_contact_config
-from core.models import StatementItem, SupplierStatement
+from core.models import ContactConfig, StatementItem, SupplierStatement
 from logger import logger
 
 
@@ -142,21 +142,9 @@ def _load_contact_mapping(tenant_id: str, contact_id: str) -> tuple[dict[str, An
     - total_candidates: header labels that should be interpreted as totals
     - date_format: required parsing format for dates
     """
-    contact_cfg: dict[str, Any] = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
-
-    template_date_format: str | None = None
-    if isinstance(contact_cfg, dict):
-        si = contact_cfg.get("statement_items")
-        if isinstance(si, dict):
-            items_template = deepcopy(si)
-        elif isinstance(si, list) and si:
-            items_template = deepcopy(si[0]) if isinstance(si[0], dict) else {}
-        else:
-            items_template = deepcopy(contact_cfg)
-    else:
-        items_template = {}
-
-    template_date_format = items_template.get("date_format") if isinstance(items_template, dict) else None
+    contact_cfg = get_contact_config(tenant_id=tenant_id, contact_id=contact_id)
+    template_date_format = contact_cfg.date_format or None
+    items_template = deepcopy(contact_cfg.model_dump())
 
     items_template.pop("date_format", None)
     items_template.pop("decimal_separator", None)
@@ -164,11 +152,7 @@ def _load_contact_mapping(tenant_id: str, contact_id: str) -> tuple[dict[str, An
 
     simple_map: dict[str, str] = {}
     raw_map: dict[str, str] = {}
-    date_format = None
-    if isinstance(contact_cfg, dict):
-        date_format = contact_cfg.get("date_format")
-        if not date_format:
-            date_format = template_date_format
+    date_format = contact_cfg.date_format or template_date_format
     if not date_format:
         raise ValueError("date_format must be configured for this contact")
 
@@ -183,8 +167,6 @@ def _load_contact_mapping(tenant_id: str, contact_id: str) -> tuple[dict[str, An
     total_cfg = items_template.get("total")
     if isinstance(total_cfg, list):
         total_candidates = [str(x).strip() for x in total_cfg if isinstance(x, str) and x.strip()]
-    elif isinstance(total_cfg, str) and total_cfg.strip():
-        total_candidates = [total_cfg.strip()]
 
     return items_template, simple_map, raw_map, total_candidates, date_format
 
@@ -225,15 +207,14 @@ def _prepare_header_context(
 def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: list[str]) -> None:
     """Persist newly-seen raw headers to contact config for future mapping."""
     try:
-        cfg_existing: dict[str, Any] = {}
+        cfg_existing = ContactConfig()
         try:
             cfg_existing = get_contact_config(tenant_id, contact_id)
         except Exception:  # pylint: disable=broad-exception-caught
-            cfg_existing = {}
+            cfg_existing = ContactConfig()
 
         updated = False
-        raw_val = cfg_existing.get("raw")
-        root_raw: dict[str, Any] = dict(raw_val) if isinstance(raw_val, dict) else {}
+        root_raw: dict[str, str] = dict(cfg_existing.raw)
         for h in header_row:
             hh = str(h or "").strip()
             if not hh:
@@ -243,8 +224,7 @@ def _persist_raw_headers(tenant_id: str, contact_id: str, header_row: list[str])
                 root_raw[kl] = kl
                 updated = True
         if updated:
-            new_cfg = dict(cfg_existing)
-            new_cfg["raw"] = root_raw
+            new_cfg = cfg_existing.model_copy(update={"raw": root_raw})
             set_contact_config(tenant_id, contact_id, new_cfg)
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.info("[table_to_json] failed to persist raw headers", error=e)

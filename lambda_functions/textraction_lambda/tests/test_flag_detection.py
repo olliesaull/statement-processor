@@ -5,6 +5,7 @@ Unit tests for statement flag attachment.
 import pytest
 
 import core.transform as transform
+from core.models import ContactConfig
 
 
 # region Flag detection
@@ -19,7 +20,7 @@ def test_table_to_json_attaches_invalid_date_flags(monkeypatch: pytest.MonkeyPat
     Returns:
         None.
     """
-    contact_cfg = {"date_format": "DD/MM/YYYY", "statement_items": {"date": "Date", "number": "Number"}}
+    contact_cfg = ContactConfig(date_format="DD/MM/YYYY", date="Date", number="Number", total=[])
 
     # The transform layer normally reads/writes contact config via DynamoDB.
     # We stub those calls so the test is offline and deterministic.

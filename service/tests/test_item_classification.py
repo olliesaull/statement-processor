@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from core.item_classification import guess_statement_item_type
+from core.models import ContactConfig
 
 
 @dataclass(frozen=True)
@@ -29,11 +30,8 @@ class ClassificationCase:
     name: str
     raw_row: dict[str, Any]
     total_entries: Any
-    contact_config: dict[str, Any] | None
+    contact_config: ContactConfig | None
     expected: str
-
-
-CONTACT_CONFIG_CUSTOM_LABELS: dict[str, Any] = {"statement_items": {"total": {"debit": ["Charges"], "credit": ["Payments"]}}}
 
 
 # region Amount-based hints
@@ -74,8 +72,8 @@ _LABEL_VARIATION_CASES = [
     ClassificationCase(name="debit value with commas", raw_row={}, total_entries={"Debit": "1,234.50"}, contact_config=None, expected="invoice"),
     # Debit keys in raw rows should provide a fallback hint.
     ClassificationCase(name="raw row debit key", raw_row={"Debit": "100"}, total_entries={}, contact_config=None, expected="invoice"),
-    # Contact-configured labels should map to debit/credit hints.
-    ClassificationCase(name="contact config custom debit label", raw_row={"Description": "Monthly"}, total_entries={"Charges": "75"}, contact_config=CONTACT_CONFIG_CUSTOM_LABELS, expected="invoice"),
+    # Contact config `total` is list-based and should still participate in hinting.
+    ClassificationCase(name="contact config list debit label", raw_row={"Description": "Monthly"}, total_entries={"Debit": "75"}, contact_config=ContactConfig(total=["Debit"]), expected="invoice"),
 ]
 
 

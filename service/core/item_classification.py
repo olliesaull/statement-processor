@@ -15,6 +15,7 @@ from collections.abc import Iterable, Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from core.models import ContactConfig
 from logger import logger
 
 _DEBIT_HINTS: tuple[str, ...] = ("debit", "dr")
@@ -90,25 +91,9 @@ def _has_amount(value: Any) -> bool:
     return dec is not None and dec != 0
 
 
-def _extract_total_template(contact_config: dict[str, Any] | None) -> Any:
-    """Locate the `total` configuration template in the contact config payload."""
-    if not isinstance(contact_config, dict):
-        return None
-    statement_items = contact_config.get("statement_items")
-    if isinstance(statement_items, dict):
-        source = statement_items
-    elif isinstance(statement_items, list) and statement_items and isinstance(statement_items[0], dict):
-        source = statement_items[0]
-    else:
-        source = contact_config
-    if not isinstance(source, dict):
-        return None
-    return source.get("total")
-
-
-def _collect_config_amount_labels(contact_config: dict[str, Any] | None) -> tuple[set[str], set[str]]:
+def _collect_config_amount_labels(contact_config: ContactConfig | None) -> tuple[set[str], set[str]]:
     """Collect normalized debit/credit labels from contact config."""
-    total_cfg = _extract_total_template(contact_config)
+    total_cfg = contact_config.total if contact_config else []
     debit_norms: set[str] = set()
     credit_norms: set[str] = set()
 
@@ -122,22 +107,8 @@ def _collect_config_amount_labels(contact_config: dict[str, Any] | None) -> tupl
             if bucket == "credit" or _is_credit_norm(norm):
                 credit_norms.add(norm)
 
-    if isinstance(total_cfg, dict):
-        for key, value in total_cfg.items():
-            key_norm = _normalize_label(key)
-            if key_norm.startswith("debit") or key_norm in {"dr"}:
-                bucket = "debit"
-            elif key_norm.startswith("credit") or key_norm in {"cr"}:
-                bucket = "credit"
-            else:
-                bucket = None
-            labels = _flatten_labels(value)
-            if not labels:
-                labels = [key]
-            _record(labels, bucket)
-    else:
-        labels = _flatten_labels(total_cfg)
-        _record(labels, None)
+    labels = _flatten_labels(total_cfg)
+    _record(labels, None)
 
     return debit_norms, credit_norms
 
@@ -216,7 +187,7 @@ def _scan_inverse_amounts(inverse_raw: dict[str, tuple[str, Any]], norms: set[st
     return False, []
 
 
-def _evaluate_amount_hint(raw_row: dict[str, Any], total_entries: Any, contact_config: dict[str, Any] | None) -> tuple[str | None, bool, bool, list[str], list[str]]:
+def _evaluate_amount_hint(raw_row: dict[str, Any], total_entries: Any, contact_config: ContactConfig | None) -> tuple[str | None, bool, bool, list[str], list[str]]:
     """
     Infer debit/credit signals and return a type hint plus evidence details.
 
@@ -342,7 +313,7 @@ def _choose_best_type(candidate_types: set[str], joined_text: str, tokens: list[
     return best_type, best_score, type_details
 
 
-def guess_statement_item_type(raw_row: dict[str, Any], total_entries: dict[str, Any] | None = None, contact_config: dict[str, Any] | None = None) -> str:
+def guess_statement_item_type(raw_row: dict[str, Any], total_entries: dict[str, Any] | None = None, contact_config: ContactConfig | None = None) -> str:
     """Heuristically classify a row as ``invoice``, ``credit_note``, or ``payment``."""
     amount_hint, debit_has_value, credit_has_value, debit_labels, credit_labels = _evaluate_amount_hint(raw_row or {}, total_entries, contact_config)
 
