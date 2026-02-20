@@ -10,7 +10,7 @@ This module supports:
 import calendar
 import re
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from datetime import date, datetime
 from functools import lru_cache
 from typing import Any
@@ -44,15 +44,7 @@ def parse_with_format(value: Any, template: str | None) -> datetime | None:
         return None
 
     prepared = _prepare_template(template)
-    (
-        regex,
-        group_order,
-        _,  # tokens
-        has_textual_month,
-        numeric_month,
-        numeric_day,
-        uses_ordinal,
-    ) = prepared
+    regex, group_order, _ = prepared  # tokens
     match = regex.match(s)
     if not match:
         return None
@@ -64,14 +56,6 @@ def parse_with_format(value: Any, template: str | None) -> datetime | None:
     year = components["year"]
     month = components["month"]
     day = components["day"]
-
-    if not has_textual_month and numeric_month and numeric_day and not uses_ordinal:
-        # Historically we rejected dates where day/month were both <= 12 to avoid
-        # ambiguity. In practice the configured template explicitly encodes the
-        # expected order (e.g., DD/MM/YY), so honour the template instead of
-        # forcing users to switch to a longer format.
-        # We keep the branch to document intent but no longer raise.
-        pass
 
     try:
         dt = datetime(year, month, day)
@@ -255,12 +239,7 @@ def _prepare_template(template: str):
     group_order: list[tuple[str, str]] = []
     pattern = _tokens_to_regex(tokens, normalized, group_order, Counter())
     regex = re.compile(f"^{pattern}$", re.IGNORECASE)
-    flat_tokens = list(_iter_tokens(tokens))
-    has_textual_month = any(t in {"MMM", "MMMM"} for t in flat_tokens)
-    numeric_month = any(t in {"M", "MM"} for t in flat_tokens)
-    numeric_day = any(t in {"D", "DD"} for t in flat_tokens)
-    uses_ordinal = any(t == "Do" for t in flat_tokens)
-    return (regex, tuple(group_order), tokens, has_textual_month, numeric_month, numeric_day, uses_ordinal)
+    return (regex, tuple(group_order), tokens)
 
 
 def _tokens_to_regex(tokens: Sequence, template: str, group_order: list[tuple[str, str]], counts: Counter) -> str:
@@ -284,15 +263,6 @@ def _tokens_to_regex(tokens: Sequence, template: str, group_order: list[tuple[st
             inner = _tokens_to_regex(value, template, group_order, counts)
             parts.append(f"(?:{inner})?")
     return "".join(parts)
-
-
-def _iter_tokens(tokens: Sequence) -> Iterable[str]:
-    """Yield token names used in a nested token structure."""
-    for kind, value in tokens:
-        if kind == "token" and value in TOKEN_REGEX:
-            yield value
-        elif kind == "optional":
-            yield from _iter_tokens(value)
 
 
 def _tokenize(template: str) -> tuple:

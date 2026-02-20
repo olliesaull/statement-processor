@@ -395,13 +395,10 @@ def get_contacts(tenant_id: str | None = None) -> list[dict[str, Any]]:
 
 
 def _coerce_invoice_list(payload: Any) -> list[dict[str, Any]]:
-    """Normalize cached invoice payload (list or legacy dict) to a sorted list."""
-    if isinstance(payload, list):
-        invoices = [inv for inv in payload if isinstance(inv, dict)]
-    elif isinstance(payload, dict):
-        invoices = [inv for inv in payload.values() if isinstance(inv, dict)]
-    else:
+    """Normalize cached invoice payload (list only) to a sorted list."""
+    if not isinstance(payload, list):
         return []
+    invoices = [inv for inv in payload if isinstance(inv, dict)]
 
     invoices.sort(key=lambda inv: str(inv.get("number") or "").casefold())
     return invoices

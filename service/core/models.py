@@ -45,7 +45,7 @@ class StatementItem(BaseModel):
     @field_validator("total", mode="before")
     @classmethod
     def _coerce_total(cls, v: Any) -> dict[str, Number]:
-        """Normalize `total` into a `{label: value}` mapping regardless of input shape."""
+        """Normalize `total` into a `{label: value}` mapping from dict input."""
 
         def _coerce_val(val: Any) -> Number:
             return cls._coerce_number(val)
@@ -59,16 +59,6 @@ class StatementItem(BaseModel):
                 if not label:
                     continue
                 coerced[label] = _coerce_val(value)
-            return coerced
-        if isinstance(v, list):
-            coerced: dict[str, Number] = {}
-            for entry in v:
-                if not isinstance(entry, dict):
-                    continue
-                label = str(entry.get("label") or "").strip()
-                if not label:
-                    continue
-                coerced[label] = _coerce_val(entry.get("value"))
             return coerced
         return {}
 

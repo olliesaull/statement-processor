@@ -113,18 +113,13 @@ def _collect_config_amount_labels(contact_config: ContactConfig | None) -> tuple
     return debit_norms, credit_norms
 
 
-def _iter_total_entries(total_entries: Any) -> Iterable[tuple[str, Any]]:
-    """Yield (label, value) pairs from dict or list-style total data."""
-    if isinstance(total_entries, dict):
-        for label, value in total_entries.items():
-            if isinstance(label, str):
-                yield label, value
-    elif isinstance(total_entries, list):
-        for item in total_entries:
-            if isinstance(item, dict):
-                label = item.get("label") or item.get("header") or item.get("name")
-                if isinstance(label, str):
-                    yield label, item.get("value")
+def _iter_total_entries(total_entries: dict[str, Any] | None) -> Iterable[tuple[str, Any]]:
+    """Yield (label, value) pairs from dict-style total data."""
+    if not isinstance(total_entries, dict):
+        return
+    for label, value in total_entries.items():
+        if isinstance(label, str):
+            yield label, value
 
 
 def _extend_amount_norms(raw_row: dict[str, Any], debit_norms: set[str], credit_norms: set[str]) -> None:
@@ -153,7 +148,7 @@ def _classify_amount_label(label: str, debit_norms: set[str], credit_norms: set[
     return None
 
 
-def _scan_total_entries(total_entries: Any, debit_norms: set[str], credit_norms: set[str]) -> tuple[bool, bool, list[str], list[str]]:
+def _scan_total_entries(total_entries: dict[str, Any] | None, debit_norms: set[str], credit_norms: set[str]) -> tuple[bool, bool, list[str], list[str]]:
     """Inspect total entries and return amount evidence."""
     debit_has_value = False
     credit_has_value = False
@@ -187,7 +182,7 @@ def _scan_inverse_amounts(inverse_raw: dict[str, tuple[str, Any]], norms: set[st
     return False, []
 
 
-def _evaluate_amount_hint(raw_row: dict[str, Any], total_entries: Any, contact_config: ContactConfig | None) -> tuple[str | None, bool, bool, list[str], list[str]]:
+def _evaluate_amount_hint(raw_row: dict[str, Any], total_entries: dict[str, Any] | None, contact_config: ContactConfig | None) -> tuple[str | None, bool, bool, list[str], list[str]]:
     """
     Infer debit/credit signals and return a type hint plus evidence details.
 

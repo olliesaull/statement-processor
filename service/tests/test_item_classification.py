@@ -29,7 +29,7 @@ class ClassificationCase:
 
     name: str
     raw_row: dict[str, Any]
-    total_entries: Any
+    total_entries: dict[str, object] | None
     contact_config: ContactConfig | None
     expected: str
 
@@ -64,8 +64,6 @@ def test_amount_hints(case: ClassificationCase) -> None:
 
 # region Label/format variations
 _LABEL_VARIATION_CASES = [
-    # List-style totals should still be parsed for credit defaults.
-    ClassificationCase(name="list totals credit label", raw_row={}, total_entries=[{"label": "CR", "value": "50"}], contact_config=None, expected="payment"),
     # Parenthetical credit values should count as amounts.
     ClassificationCase(name="parenthetical credit value", raw_row={}, total_entries={"Credit": "(10.00)"}, contact_config=None, expected="payment"),
     # Comma-separated debit values should still parse as amounts.

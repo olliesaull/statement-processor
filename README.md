@@ -281,6 +281,7 @@
   "FlagDetails": {"ml-outlier": {"issues": ["keyword-number"], "details": [], "source": "anomaly_detection"}}
 }
 ```
+- `statement_item.total` is now treated as a dict-only `{label: value}` mapping in both service and textraction code paths; legacy list-style totals are no longer supported.
 
 **TenantContactsConfigTable** (`cdk/stacks/statement_processor.py`)
 - **Keys**
