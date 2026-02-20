@@ -5,7 +5,7 @@ This handler:
 - Validates the StepFunctions payload with Pydantic
 - Normalizes identifiers and resolves the source bucket
 - Delegates to `core.textract_statement.run_textraction`
-- Returns a structured response for downstream state handling
+- Returns a compact response for downstream state handling
 """
 
 from typing import Any
@@ -44,8 +44,31 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # py
     try:
         result = run_textraction(job_id=job_id, bucket=pdf_bucket, pdf_key=pdf_key, json_key=json_key, tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id)
         logger.info("Textraction complete", job_id=job_id, tenant_id=tenant_id, statement_id=statement_id, json_key=json_key)
-        # Return a structured success payload so the state machine can persist the JSON key/job tracking (for logging + associating textraction with this execution).
-        return {"status": "ok", "jobId": job_id, "jsonKey": json_key, "result": result}
+
+        statement_payload = result.get("statement") if isinstance(result, dict) else None
+        if isinstance(statement_payload, dict):
+            statement_items = statement_payload.get("statement_items")
+            item_count = len(statement_items) if isinstance(statement_items, list) else 0
+            earliest_item_date = statement_payload.get("earliest_item_date")
+            latest_item_date = statement_payload.get("latest_item_date")
+        else:
+            item_count = 0
+            earliest_item_date = None
+            latest_item_date = None
+
+        # Keep Step Functions state payload intentionally small. Full statement output is persisted to S3.
+        return {
+            "status": "ok",
+            "jobId": job_id,
+            "statementId": statement_id,
+            "tenantId": tenant_id,
+            "contactId": contact_id,
+            "jsonKey": json_key,
+            "filename": result.get("filename") if isinstance(result, dict) else None,
+            "itemCount": item_count,
+            "earliestItemDate": earliest_item_date,
+            "latestItemDate": latest_item_date,
+        }
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Textraction lambda failed", job_id=job_id, tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
-        return {"status": "error", "message": str(exc)}  # Mark StepFunction execution as failed.
+        return {"status": "error", "jobId": job_id, "statementId": statement_id, "jsonKey": json_key, "message": str(exc)}
