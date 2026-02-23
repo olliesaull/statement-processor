@@ -4,8 +4,6 @@ from aws_cdk import (
     RemovalPolicy,
     Stack,
 )
-from aws_cdk import aws_apprunner as apprunner
-from aws_cdk import aws_apprunner_alpha as apprunner_alpha
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_dynamodb as dynamodb
@@ -19,7 +17,6 @@ from aws_cdk import aws_sns as sns
 from aws_cdk import aws_sns_subscriptions as subs
 from aws_cdk import aws_stepfunctions as sfn
 from aws_cdk import aws_stepfunctions_tasks as tasks
-from aws_cdk.aws_ecr_assets import DockerImageAsset
 from aws_cdk.aws_lambda import (
     Handler,
     Runtime,
@@ -39,7 +36,7 @@ class StatementProcessorStack(Stack):
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
         S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
-        APP_RUNNER_SERVICE_NAME = f"statement-processor-{stage}"
+        WEB_LAMBDA_FUNCTION_NAME = f"statement-processor-web-{stage}"
         VALKEY_SERVERLESS_CACHE_NAME = f"statement-processor-valkey-{stage}"
 
         NOTIFICATION_EMAILS = ["ollie@dotelastic.com", "james@dotelastic.com"]
@@ -49,14 +46,11 @@ class StatementProcessorStack(Stack):
         # SSM Parameter Store Parameter ARNs, using wildcards to satisfy ssm:GetParametersByPath
         parameter_arns = [f"arn:aws:ssm:eu-west-1:{env.account}:parameter/StatementProcessor/*"]
 
-        # Create a policy statement to grant SSM Parameter Store access
+        # Create a policy statement to grant SSM Parameter Store access and SecureString decryption permission
         parameter_policy = iam.PolicyStatement(
-            actions=["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
+            actions=["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "kms:Decrypt"],
             resources=parameter_arns
         )
-
-        # Grant SecureString decryption permission
-        parameter_policy.add_actions("kms:Decrypt")
 
         #endregion ---------- ParameterStore ----------
 
@@ -312,14 +306,41 @@ class StatementProcessorStack(Stack):
 
         #endregion ---------- StepFunctions ----------
 
-        #region ---------- AppRunner ----------
+        #region ---------- WebLambda ----------
 
-        statement_processor_instance_role = iam.Role(
+        web_lambda_log_group = logs.LogGroup(
             self,
-            "Statement Processor App Runner Instance Role",
-            assumed_by=iam.ServicePrincipal("tasks.apprunner.amazonaws.com"),
+            "StatementProcessorWebLambdaLogGroup",
+            retention=log_retention,
+            removal_policy=RemovalPolicy.DESTROY if not is_production else RemovalPolicy.RETAIN,
         )
-        statement_processor_instance_role.add_to_policy(
+
+        web_lambda = _lambda.DockerImageFunction(
+            self,
+            "StatementProcessorWebLambda",
+            function_name=WEB_LAMBDA_FUNCTION_NAME,
+            description="Statement processor web app served through Lambda Function URL",
+            code=_lambda.DockerImageCode.from_image_asset(directory="../service"),
+            memory_size=1024,
+            timeout=Duration.seconds(30),
+            log_group=web_lambda_log_group,
+            environment={
+                "STAGE": "prod" if is_production else "dev",
+                "DOMAIN_NAME": domain_name,
+                "POWERTOOLS_SERVICE_NAME": "StatementProcessor",
+                "LOG_LEVEL": "DEBUG",
+                "MAX_UPLOAD_MB": "6",
+                "S3_BUCKET_NAME": S3_BUCKET_NAME,
+                "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
+                "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
+                "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
+                "TEXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
+                "XERO_CLIENT_ID_PATH": "/StatementProcessor/XERO_CLIENT_ID",
+                "XERO_CLIENT_SECRET_PATH": "/StatementProcessor/XERO_CLIENT_SECRET",
+            },
+        )
+
+        web_lambda.add_to_role_policy(
             iam.PolicyStatement(
                 actions=[
                     "cloudwatch:PutMetricData",
@@ -327,109 +348,68 @@ class StatementProcessorStack(Stack):
                     "textract:GetDocumentAnalysis",
                     "states:StartExecution",
                 ],
-                resources=["*"]
+                resources=["*"],
             )
         )
+        web_lambda.add_to_role_policy(parameter_policy)
 
-        tenant_statements_table.grant_read_write_data(statement_processor_instance_role)
-        tenant_contacts_config_table.grant_read_write_data(statement_processor_instance_role)
-        tenant_data_table.grant_read_write_data(statement_processor_instance_role)
-        s3_bucket.grant_read_write(statement_processor_instance_role)
+        tenant_statements_table.grant_read_write_data(web_lambda)
+        tenant_contacts_config_table.grant_read_write_data(web_lambda)
+        tenant_data_table.grant_read_write_data(web_lambda)
+        s3_bucket.grant_read_write(web_lambda)
 
-        auto_scaling_configuration = apprunner_alpha.AutoScalingConfiguration(
-            self,
-            "AutoScalingConfiguration",
-            auto_scaling_configuration_name="SingleInsance",
-            max_concurrency=200,
-            max_size=1,
-        )
+        web_lambda.add_function_url(auth_type=_lambda.FunctionUrlAuthType.NONE)
 
-        apprunner_asset = DockerImageAsset(self, "AppRunnerImage", directory="../service/")
-        web = apprunner_alpha.Service(
-            self,
-            "Statement Processor Website",
-            instance_role=statement_processor_instance_role,
-            memory=apprunner_alpha.Memory.ONE_GB,
-            cpu=apprunner_alpha.Cpu.QUARTER_VCPU,
-            service_name=APP_RUNNER_SERVICE_NAME,
-            auto_scaling_configuration=auto_scaling_configuration,
-            source=apprunner_alpha.Source.from_asset(
-                asset=apprunner_asset,
-                image_configuration=apprunner_alpha.ImageConfiguration(
-                    port=8080,
-                    environment_variables={
-                        "STAGE": "prod" if is_production else "dev",
-                        "DOMAIN_NAME": domain_name,
-                        "POWERTOOLS_SERVICE_NAME": "StatementProcessor",
-                        "LOG_LEVEL": "DEBUG",
-                        "MAX_UPLOAD_MB": "10",
-                        "S3_BUCKET_NAME": S3_BUCKET_NAME,
-                        "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
-                        "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
-                        "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
-                        "TEXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
-                        "XERO_CLIENT_ID_PATH": "/StatementProcessor/XERO_CLIENT_ID",
-                        "XERO_CLIENT_SECRET_PATH": "/StatementProcessor/XERO_CLIENT_SECRET"
-                    },
-                )
-            ),
-        )
-
-        web.add_to_role_policy(parameter_policy)
-
-        #endregion ---------- AppRunner ----------
+        #endregion ---------- WebLambda ----------
 
         # region ---------- CloudWatch ----------
-        # Use the actual App Runner–managed log group:
-        # /aws/apprunner/{service-name}/{service-id}/application
 
-        cfn_service: apprunner.CfnService = web.node.default_child  # type: ignore[assignment]
-        service_id = cfn_service.attr_service_id
-        service_name = APP_RUNNER_SERVICE_NAME
-
-        app_logs_group = logs.LogGroup.from_log_group_name(
+        lambda_error_topic = sns.Topic(
             self,
-            "StatementProcessorAppRunnerApplicationLogs",
-            log_group_name=f"/aws/apprunner/{service_name}/{service_id}/application",
-        )
-
-        error_metric_filter = logs.MetricFilter(
-            self,
-            "StatementProcessorAppRunnerErrorMetricFilter",
-            log_group=app_logs_group,
-            filter_pattern=logs.FilterPattern.literal("ERROR"),
-            metric_namespace="StatementProcessorAppRunner/ApplicationLogs",
-            metric_name="ErrorCount",
-            default_value=0,
-        )
-        # Ensure the filter is created after the service
-        error_metric_filter.node.add_dependency(cfn_service)
-
-        error_metric = cloudwatch.Metric(
-            namespace="StatementProcessorAppRunner/ApplicationLogs",
-            metric_name="ErrorCount",
-            statistic="Sum",
-            period=Duration.minutes(1),
-        )
-
-        error_alarm = cloudwatch.Alarm(
-            self,
-            "StatementProcessorAppRunnerErrorAlarm",
-            metric=error_metric,
-            threshold=1,
-            evaluation_periods=1,
-            datapoints_to_alarm=1,
-            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
-        )
-
-        topic = sns.Topic(
-            self,
-            "StatementProcessorAppRunnerErrorTopic",
-            display_name=f"Statement Processor {stage} App Errors",
+            "StatementProcessorLambdaErrorTopic",
+            display_name=f"Statement Processor {stage} Lambda Errors",
         )
         for email in NOTIFICATION_EMAILS:
-            topic.add_subscription(subs.EmailSubscription(email))
-        error_alarm.add_alarm_action(cw_actions.SnsAction(topic))
+            lambda_error_topic.add_subscription(subs.EmailSubscription(email))
+
+        lambda_alarm_targets: list[tuple[str, logs.ILogGroup]] = [
+            ("StatementProcessorWebLambda", web_lambda_log_group),
+            ("TextractionLambda", textraction_log_group),
+        ]
+
+        for lambda_name, lambda_log_group in lambda_alarm_targets:
+            metric_name = f"{lambda_name}ErrorCount"
+            metric_namespace = "StatementProcessor/LambdaApplicationLogs"
+
+            logs.MetricFilter(
+                self,
+                f"{lambda_name}ErrorMetricFilter",
+                log_group=lambda_log_group,
+                filter_pattern=logs.FilterPattern.any_term("ERROR", "Task timed out", "Process exited before completing request"),
+                metric_namespace=metric_namespace,
+                metric_name=metric_name,
+                metric_value="1",
+                default_value=0,
+            )
+
+            error_metric = cloudwatch.Metric(
+                namespace=metric_namespace,
+                metric_name=metric_name,
+                statistic="Sum",
+                period=Duration.minutes(1),
+            )
+
+            error_alarm = cloudwatch.Alarm(
+                self,
+                f"{lambda_name}ErrorAlarm",
+                alarm_name=f"{lambda_name}ErrorAlarm-{stage}",
+                metric=error_metric,
+                threshold=1,
+                evaluation_periods=1,
+                datapoints_to_alarm=1,
+                comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            )
+            error_alarm.add_alarm_action(cw_actions.SnsAction(lambda_error_topic))
 
         # endregion ---------- CloudWatch ----------
