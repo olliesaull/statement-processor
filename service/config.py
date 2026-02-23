@@ -19,6 +19,11 @@ AWS_REGION: str | None = os.getenv("AWS_REGION")
 S3_BUCKET_NAME: str | None = os.getenv("S3_BUCKET_NAME")
 STAGE: str | None = os.getenv("STAGE")
 TEXTRACTION_STATE_MACHINE_ARN: str | None = os.getenv("TEXTRACTION_STATE_MACHINE_ARN")
+# Valkey configuration used by both Flask-Session and Flask-Caching.
+VALKEY_URL: str = os.getenv("VALKEY_URL", "redis://127.0.0.1:6379")
+VALKEY_DB: int = int(os.getenv("VALKEY_DB", "0"))
+VALKEY_CACHE_KEY_PREFIX: str = os.getenv("VALKEY_CACHE_KEY_PREFIX", "statement_processor:")
+VALKEY_CACHE_DEFAULT_TIMEOUT: int = int(os.getenv("VALKEY_CACHE_DEFAULT_TIMEOUT", "0"))
 # Ignoring Bandit suggestion as tempfile.gettempdir returns /tmp anyways (B108:hardcoded_tmp_directory)
 LOCAL_DATA_DIR: str = "./tmp/data" if STAGE in {"dev", "local"} else "/tmp/data"  # nosec B108
 
