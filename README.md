@@ -104,6 +104,15 @@
 ```
 
 ## Major constructs and resources (from `cdk/stacks/statement_processor.py`)
+- **Networking**
+  - `StatementProcessorPrivateVpc` (`private_vpc`): private VPC created with isolated subnets only (`PRIVATE_ISOLATED`), `nat_gateways=0`, and `create_internet_gateway=False` so cache resources stay off public networking by default.
+  - `StatementProcessorValkeySecurityGroup` (`valkey_security_group`): security group attached to the serverless cache endpoint.
+- **ElastiCache**
+  - `StatementProcessorValkeyServerlessCache` (`valkey_serverless_cache`): ElastiCache Serverless cache with `engine="valkey"` and stage-specific name `statement-processor-valkey-{stage}`. It is deployed into the isolated VPC subnets and uses the dedicated security group above.
+  - CloudFormation outputs exported by the stack for discovery:
+    - `StatementProcessorPrivateVpcId`
+    - `StatementProcessorValkeyEndpointAddress`
+    - `StatementProcessorValkeyEndpointPort`
 - **DynamoDB tables**
   - `TenantStatementsTable` (`tenant_statements_table`): statement‑level records; GSIs `TenantIDCompletedIndex` and `TenantIDStatementItemIDIndex` support filtering by completion status and per‑item lookups (see inline comments).
   - `TenantContactsConfigTable` (`tenant_contacts_config_table`): shared table wired into both App Runner and the Textraction Lambda via env vars and IAM grants, so it acts as shared per‑tenant configuration/state (details of contents TODO (needs verification)).
