@@ -104,15 +104,6 @@
 ```
 
 ## Major constructs and resources (from `cdk/stacks/statement_processor.py`)
-- **Networking**
-  - `StatementProcessorPrivateVpc` (`private_vpc`): private VPC created with isolated subnets only (`PRIVATE_ISOLATED`), `nat_gateways=0`, and `create_internet_gateway=False` so cache resources stay off public networking by default.
-  - `StatementProcessorValkeySecurityGroup` (`valkey_security_group`): security group attached to the serverless cache endpoint.
-- **ElastiCache**
-  - `StatementProcessorValkeyServerlessCache` (`valkey_serverless_cache`): ElastiCache Serverless cache with `engine="valkey"` and stage-specific name `statement-processor-valkey-{stage}`. It is deployed into the isolated VPC subnets and uses the dedicated security group above.
-  - CloudFormation outputs exported by the stack for discovery:
-    - `StatementProcessorPrivateVpcId`
-    - `StatementProcessorValkeyEndpointAddress`
-    - `StatementProcessorValkeyEndpointPort`
 - **DynamoDB tables**
   - `TenantStatementsTable` (`tenant_statements_table`): statement‑level records; GSIs `TenantIDCompletedIndex` and `TenantIDStatementItemIDIndex` support filtering by completion status and per‑item lookups (see inline comments).
   - `TenantContactsConfigTable` (`tenant_contacts_config_table`): shared table wired into both App Runner and the Textraction Lambda via env vars and IAM grants, so it acts as shared per‑tenant configuration/state (details of contents TODO (needs verification)).
@@ -157,7 +148,7 @@
   - Templates and UI assets: `service/templates/` (Jinja2 views) and `service/static/` (static assets).
   - Configuration + AWS clients: `service/config.py` (env/SSM loading, boto3 clients/resources).
   - Logging: `service/logger.py` (structured logger used across modules).
-  - Caching/session wiring: `service/cache_provider.py` and session/cache backend selection in `service/app.py` (Flask‑Session + Flask-Caching, configurable between local in-process and Valkey/Redis).
+  - Caching/session wiring: `service/cache_provider.py` and session config in `service/app.py` (Flask‑Session + SimpleCache).
 
 - **Main modules/packages**
   - `service/core/`: domain models and mapping logic (e.g. `contact_config_metadata.py`, `get_contact_config.py`, `item_classification.py`, `models.py`).
@@ -184,24 +175,6 @@
   - When `STAGE` is `dev` or `local`, the base path is `./tmp/data` (relative to the current working directory, typically `service/`), so tenant files land under `service/tmp/data/<tenant_id>/...`.
   - For any other stage (including prod), the base path is `/tmp/data` on the host filesystem.
   - If a local dataset is missing, `service/xero_repository.py:load_local_dataset` downloads from S3 and stores it under the same base path.
-
-- **Session/cache backend configuration** (`service/config.py`, `service/app.py`)
-  - Valkey is the only supported runtime backend for both Flask sessions and Flask-Caching.
-  - Backend settings are loaded from environment variables:
-    - `VALKEY_URL`: base Redis/Valkey URL (for example `redis://127.0.0.1:6379` locally, `rediss://...` for TLS endpoints in AWS).
-    - `VALKEY_DB`: single Redis DB index shared by Flask-Session and Flask-Caching (default `0`).
-    - `VALKEY_CACHE_KEY_PREFIX`: key prefix used by Flask-Caching keys (default `statement_processor:`).
-    - `VALKEY_CACHE_DEFAULT_TIMEOUT`: default timeout passed to Flask-Caching (default `0` so tenant-status cache keys are non-expiring unless explicitly changed).
-  - Session initialization:
-    - `SESSION_TYPE` is set to `redis`.
-    - `SESSION_REDIS` is built with `redis.from_url(VALKEY_URL, db=VALKEY_DB)`.
-    - `SESSION_PERMANENT=False` and `SESSION_USE_SIGNER=True` remain enabled.
-  - Cache initialization:
-    - Flask-Caching is initialized with `CACHE_TYPE=RedisCache`, `CACHE_REDIS_URL=VALKEY_URL`, and `CACHE_REDIS_DB=VALKEY_DB`.
-    - Tenant status keys written through `service/cache_provider.py` and `service/utils/tenant_status.py` therefore live in the same DB as session keys, separated by key names/prefixes.
-  - Local Valkey config compatibility:
-    - For the default shared DB setup (`VALKEY_DB=0`), `service/valkey.conf` can stay at `databases 1`.
-    - If a non-zero `VALKEY_DB` is used, `service/valkey.conf` must expose enough DBs (`databases N`, zero-based indexing).
 
 - **Key routes/endpoints and purpose** (all in `service/app.py`)
   - **Core UI**

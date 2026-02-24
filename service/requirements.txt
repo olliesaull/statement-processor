@@ -19,4 +19,3 @@ pandas
 pydantic
 dotenv
 openpyxl
-redis

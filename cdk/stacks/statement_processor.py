@@ -7,8 +7,6 @@ from aws_cdk import (
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_dynamodb as dynamodb
-from aws_cdk import aws_ec2 as ec2
-from aws_cdk import aws_elasticache as elasticache
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as _lambda
 from aws_cdk import aws_logs as logs
@@ -37,7 +35,6 @@ class StatementProcessorStack(Stack):
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
         S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
         WEB_LAMBDA_FUNCTION_NAME = f"statement-processor-web-{stage}"
-        VALKEY_SERVERLESS_CACHE_NAME = f"statement-processor-valkey-{stage}"
 
         NOTIFICATION_EMAILS = ["ollie@dotelastic.com", "james@dotelastic.com"]
 
@@ -53,49 +50,6 @@ class StatementProcessorStack(Stack):
         )
 
         #endregion ---------- ParameterStore ----------
-
-        #region ---------- VPC ----------
-
-        private_vpc = ec2.Vpc(
-            self,
-            "StatementProcessorPrivateVpc",
-            vpc_name=f"statement-processor-private-vpc-{stage}",
-            max_azs=3,
-            nat_gateways=0,
-            create_internet_gateway=False,
-            subnet_configuration=[
-                ec2.SubnetConfiguration(
-                    name="PrivateIsolated",
-                    subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
-                    cidr_mask=24,
-                )
-            ],
-        )
-
-        #endregion ---------- VPC ----------
-
-        #region ---------- ElastiCache ----------
-
-        valkey_security_group = ec2.SecurityGroup(
-            self,
-            "StatementProcessorValkeySecurityGroup",
-            vpc=private_vpc,
-            description="Security group for Statement Processor serverless Valkey",
-            allow_all_outbound=True,
-        )
-
-        valkey_serverless_cache = elasticache.CfnServerlessCache(
-            self,
-            "StatementProcessorValkeyServerlessCache",
-            engine="valkey",
-            serverless_cache_name=VALKEY_SERVERLESS_CACHE_NAME,
-            description=f"Statement Processor {stage} serverless Valkey cache",
-            subnet_ids=[subnet.subnet_id for subnet in private_vpc.isolated_subnets],
-            security_group_ids=[valkey_security_group.security_group_id],
-        )
-        valkey_serverless_cache.apply_removal_policy(RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY)
-
-        #endregion ---------- ElastiCache ----------
 
         #region ---------- DynamoDB ----------
 
@@ -358,6 +312,7 @@ class StatementProcessorStack(Stack):
         tenant_data_table.grant_read_write_data(web_lambda)
         s3_bucket.grant_read_write(web_lambda)
 
+        # TODO: Does Function URL Auth Type need updating?
         web_lambda.add_function_url(auth_type=_lambda.FunctionUrlAuthType.NONE)
 
         #endregion ---------- WebLambda ----------

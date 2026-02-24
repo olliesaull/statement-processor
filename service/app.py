@@ -9,7 +9,6 @@ from datetime import date, datetime
 from io import BytesIO
 from typing import Any
 
-import redis
 import requests
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
@@ -20,7 +19,7 @@ from flask_wtf.csrf import CSRFProtect
 from werkzeug.datastructures import FileStorage
 
 import cache_provider
-from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE, VALKEY_CACHE_DEFAULT_TIMEOUT, VALKEY_CACHE_KEY_PREFIX, VALKEY_DB, VALKEY_URL
+from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
@@ -71,19 +70,14 @@ MAX_UPLOAD_MB = os.getenv("MAX_UPLOAD_MB", "10")
 MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB) * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
-app.config.update(SESSION_TYPE="redis", SESSION_REDIS=redis.from_url(VALKEY_URL, db=VALKEY_DB), SESSION_PERMANENT=False, SESSION_USE_SIGNER=True)
+os.makedirs(app.instance_path, exist_ok=True)
+session_dir = os.path.join(app.instance_path, "flask_session")
+os.makedirs(session_dir, exist_ok=True)
+app.config.update(SESSION_TYPE="filesystem", SESSION_FILE_DIR=session_dir, SESSION_PERMANENT=False, SESSION_USE_SIGNER=True)
 Session(app)
 
-cache_config = {
-    "CACHE_TYPE": "RedisCache",
-    "CACHE_REDIS_URL": VALKEY_URL,
-    "CACHE_REDIS_DB": VALKEY_DB,
-    "CACHE_KEY_PREFIX": VALKEY_CACHE_KEY_PREFIX,
-    "CACHE_DEFAULT_TIMEOUT": VALKEY_CACHE_DEFAULT_TIMEOUT,
-}
-cache = Cache(app, config=cache_config)
+cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 0})
 cache_provider.set_cache(cache)
-logger.info("Configured Valkey session/cache backends", valkey_url=VALKEY_URL, valkey_db=VALKEY_DB, cache_key_prefix=VALKEY_CACHE_KEY_PREFIX)
 
 
 # Mirror selected config values in Flask app config for convenience
@@ -374,7 +368,12 @@ def tenant_management():
 
     active_tenant = next((t for t in tenants if t.get("tenantId") == active_tenant_id), None)
     logger.info(
-        "Rendering tenant_management page", active_tenant_id=active_tenant_id, tenants=len(tenants), has_message=bool(message), has_error=bool(error), authenticated=bool(session.get("access_token"))
+        "Rendering tenant_management page",
+        active_tenant_id=active_tenant_id,
+        tenants=len(tenants),
+        has_message=bool(message),
+        has_error=bool(error),
+        authenticated=bool(session.get("xero_oauth2_token")),
     )
 
     return render_template("tenant_management.html", tenants=tenants, active_tenant_id=active_tenant_id, active_tenant=active_tenant, message=message, error=error)
@@ -1179,7 +1178,8 @@ def disconnect_tenant():
         return redirect(management_url)
 
     connection_id = tenant.get("connectionId")
-    access_token = session.get("access_token")
+    oauth_token = session.get("xero_oauth2_token")
+    access_token = oauth_token.get("access_token") if isinstance(oauth_token, dict) else None
     logger.info("Tenant disconnect submitted", tenant_id=tenant_id, has_connection=bool(connection_id))
 
     if connection_id and access_token:
@@ -1330,7 +1330,6 @@ def callback():  # pylint: disable=too-many-return-statements
 
     save_xero_oauth2_token(tokens)
     access_token = tokens.get("access_token")
-    session["access_token"] = access_token
 
     conn_res = requests.get("https://api.xero.com/connections", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
 
