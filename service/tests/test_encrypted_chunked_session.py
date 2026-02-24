@@ -144,3 +144,199 @@ def test_expired_cookie_is_rejected_by_ttl() -> None:
     assert response.get_json() == {"payload": None}
     headers = _set_cookie_headers(response)
     assert any(header.startswith("session=;") for header in headers)
+
+
+def test_empty_session_clears_all_cookies() -> None:
+    """Test that clearing session removes all cookie chunks."""
+    harness = _build_test_harness(chunk_size=70, max_chunks=50)
+    client: FlaskClient = harness.app.test_client()
+    long_payload = "z" * 1200
+    client.get("/session/set", query_string={"value": long_payload})
+
+    assert client.get_cookie("session") is not None
+    assert client.get_cookie("session.1") is not None
+
+    response = client.get("/session/clear")
+    headers = _set_cookie_headers(response)
+    assert any(header.startswith("session=;") for header in headers)
+    assert any(header.startswith("session.1=;") for header in headers)
+
+
+def test_invalid_cookie_version_invalidates_session() -> None:
+    """Test that tampering with cookie version invalidates session."""
+    harness = _build_test_harness()
+    client: FlaskClient = harness.app.test_client()
+    client.get("/session/set", query_string={"value": "test-value"})
+    # Tamper with version
+    raw_cookie = client.get_cookie("session")
+    assert raw_cookie is not None
+    parts = raw_cookie.value.split(".", 2)
+    tampered_cookie = f"v2.{parts[1]}.{parts[2]}"
+    client.set_cookie("session", tampered_cookie)
+    response = client.get("/session/get")
+    assert response.get_json() == {"payload": None}
+    headers = _set_cookie_headers(response)
+    assert any(header.startswith("session=;") for header in headers)
+
+
+def test_invalid_chunk_count_invalidates_session() -> None:
+    """Test that non-numeric chunk count invalidates session."""
+    harness = _build_test_harness()
+    client: FlaskClient = harness.app.test_client()
+    client.get("/session/set", query_string={"value": "test-value"})
+
+    # Tamper with chunk count to non-numeric value
+    raw_cookie = client.get_cookie("session")
+    assert raw_cookie is not None
+    parts = raw_cookie.value.split(".", 2)
+    tampered_cookie = f"{parts[0]}.abc.{parts[2]}"
+    client.set_cookie("session", tampered_cookie)
+
+    response = client.get("/session/get")
+    assert response.get_json() == {"payload": None}
+    headers = _set_cookie_headers(response)
+    assert any(header.startswith("session=;") for header in headers)
+
+
+def test_chunk_count_exceeds_max_invalidates_session() -> None:
+    """Test that chunk count exceeding max_chunks invalidates session."""
+    harness = _build_test_harness(max_chunks=3)
+    client: FlaskClient = harness.app.test_client()
+    client.get("/session/set", query_string={"value": "test-value"})
+
+    # Tamper with chunk count to exceed max_chunks
+    raw_cookie = client.get_cookie("session")
+    assert raw_cookie is not None
+    parts = raw_cookie.value.split(".", 2)
+    tampered_cookie = f"{parts[0]}.999.{parts[2]}"
+    client.set_cookie("session", tampered_cookie)
+
+    response = client.get("/session/get")
+    assert response.get_json() == {"payload": None}
+    headers = _set_cookie_headers(response)
+    assert any(header.startswith("session=;") for header in headers)
+
+
+def test_malformed_primary_cookie_invalidates_session() -> None:
+    """Test that malformed cookie structure invalidates session."""
+    harness = _build_test_harness()
+    client: FlaskClient = harness.app.test_client()
+
+    # Set malformed cookie without proper structure
+    client.set_cookie("session", "malformed-cookie-value")
+
+    response = client.get("/session/get")
+    assert response.get_json() == {"payload": None}
+    headers = _set_cookie_headers(response)
+    assert any(header.startswith("session=;") for header in headers)
+
+
+def test_session_with_multiple_keys() -> None:
+    """Test that sessions with multiple keys are preserved correctly."""
+    harness = _build_test_harness()
+    client: FlaskClient = harness.app.test_client()
+
+    # Manually set multiple session keys
+    with client.session_transaction() as sess:
+        sess["user_id"] = "user123"
+        sess["username"] = "testuser"
+        sess["roles"] = ["admin", "editor"]
+        sess["preferences"] = {"theme": "dark", "language": "en"}
+
+    # Verify all keys are preserved
+    with client.session_transaction() as sess:
+        assert sess["user_id"] == "user123"
+        assert sess["username"] == "testuser"
+        assert sess["roles"] == ["admin", "editor"]
+        assert sess["preferences"] == {"theme": "dark", "language": "en"}
+
+
+def test_invalid_sibling_cookie_name_is_cleaned_up() -> None:
+    """Test that invalid sibling cookie names are cleaned up."""
+    harness = _build_test_harness()
+    client: FlaskClient = harness.app.test_client()
+    client.get("/session/set", query_string={"value": "test-value"})
+
+    # Add invalid sibling cookie with non-numeric suffix
+    client.set_cookie("session.abc", "invalid-sibling")
+
+    # Trigger save_session which should clean up invalid siblings
+    response = client.get("/session/set", query_string={"value": "updated-value"})
+    headers = _set_cookie_headers(response)
+
+    # Invalid sibling should be deleted
+    assert any(header.startswith("session.abc=;") for header in headers)
+
+
+def test_no_primary_cookie_returns_empty_session() -> None:
+    """Test that missing primary cookie returns empty session."""
+    harness = _build_test_harness()
+    client: FlaskClient = harness.app.test_client()
+
+    # Request without any session cookie
+    response = client.get("/session/get")
+    assert response.get_json() == {"payload": None}
+
+    # No Set-Cookie headers should be present for empty unmodified session
+    headers = _set_cookie_headers(response)
+    assert len(headers) == 0
+
+
+def test_constructor_rejects_invalid_ttl() -> None:
+    """Test that constructor validates TTL parameter."""
+    try:
+        EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), ttl_seconds=0)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "ttl_seconds must be greater than zero" in str(e)
+
+    try:
+        EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), ttl_seconds=-100)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "ttl_seconds must be greater than zero" in str(e)
+
+
+def test_constructor_rejects_invalid_chunk_size() -> None:
+    """Test that constructor validates chunk_size parameter."""
+    try:
+        EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), chunk_size=0)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "chunk_size must be greater than zero" in str(e)
+
+    try:
+        EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), chunk_size=-100)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "chunk_size must be greater than zero" in str(e)
+
+
+def test_constructor_rejects_invalid_max_chunks() -> None:
+    """Test that constructor validates max_chunks parameter."""
+    try:
+        EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), max_chunks=0)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "max_chunks must be greater than zero" in str(e)
+
+    try:
+        EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), max_chunks=-100)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "max_chunks must be greater than zero" in str(e)
+
+
+def test_constructor_rejects_empty_fernet_key() -> None:
+    """Test that constructor validates fernet_key parameter."""
+    try:
+        EncryptedChunkedSessionInterface(fernet_key="")
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "non-empty Fernet key is required" in str(e)
+
+    try:
+        EncryptedChunkedSessionInterface(fernet_key="   ")
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "non-empty Fernet key is required" in str(e)
