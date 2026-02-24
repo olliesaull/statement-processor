@@ -28,7 +28,7 @@ class StatementProcessorStack(Stack):
 
         stage = stage.lower()
         is_production: bool = stage == "prod"
-        log_retention=logs.RetentionDays.THREE_MONTHS if is_production else logs.RetentionDays.ONE_WEEK
+        log_retention = logs.RetentionDays.THREE_MONTHS if is_production else logs.RetentionDays.ONE_WEEK
 
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
@@ -38,23 +38,21 @@ class StatementProcessorStack(Stack):
 
         NOTIFICATION_EMAILS = ["ollie@dotelastic.com", "james@dotelastic.com"]
 
-        #region ---------- ParameterStore ----------
+        # region ---------- ParameterStore ----------
 
         # SSM Parameter Store Parameter ARNs, using wildcards to satisfy ssm:GetParametersByPath
         parameter_arns = [f"arn:aws:ssm:eu-west-1:{env.account}:parameter/StatementProcessor/*"]
 
         # Create a policy statement to grant SSM Parameter Store access and SecureString decryption permission
-        parameter_policy = iam.PolicyStatement(
-            actions=["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "kms:Decrypt"],
-            resources=parameter_arns
-        )
+        parameter_policy = iam.PolicyStatement(actions=["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "kms:Decrypt"], resources=parameter_arns)
 
-        #endregion ---------- ParameterStore ----------
+        # endregion ---------- ParameterStore ----------
 
-        #region ---------- DynamoDB ----------
+        # region ---------- DynamoDB ----------
 
         tenant_statements_table = dynamodb.Table(
-            self, TENANT_STATEMENTS_TABLE_NAME,
+            self,
+            TENANT_STATEMENTS_TABLE_NAME,
             table_name=TENANT_STATEMENTS_TABLE_NAME,
             partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="StatementID", type=dynamodb.AttributeType.STRING),
@@ -77,7 +75,8 @@ class StatementProcessorStack(Stack):
         )
 
         tenant_contacts_config_table = dynamodb.Table(
-            self, TENANT_CONTACTS_CONFIG_TABLE_NAME,
+            self,
+            TENANT_CONTACTS_CONFIG_TABLE_NAME,
             table_name=TENANT_CONTACTS_CONFIG_TABLE_NAME,
             partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="ContactID", type=dynamodb.AttributeType.STRING),
@@ -86,19 +85,21 @@ class StatementProcessorStack(Stack):
         )
 
         tenant_data_table = dynamodb.Table(
-            self, TENANT_DATA_TABLE_NAME,
+            self,
+            TENANT_DATA_TABLE_NAME,
             table_name=TENANT_DATA_TABLE_NAME,
             partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
 
-        #endregion ---------- DynamoDB ----------
+        # endregion ---------- DynamoDB ----------
 
-        #region ---------- S3 ----------
+        # region ---------- S3 ----------
 
         s3_bucket = s3.Bucket(
-            self, S3_BUCKET_NAME,
+            self,
+            S3_BUCKET_NAME,
             bucket_name=S3_BUCKET_NAME,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
@@ -115,9 +116,9 @@ class StatementProcessorStack(Stack):
             )
         )
 
-        #endregion ---------- S3 ----------
+        # endregion ---------- S3 ----------
 
-        #region ---------- Lambda ----------
+        # region ---------- Lambda ----------
 
         textraction_log_group = logs.LogGroup(
             self,
@@ -128,8 +129,8 @@ class StatementProcessorStack(Stack):
 
         textraction_lambda_image = _lambda.EcrImageCode.from_asset_image(directory="../lambda_functions/textraction_lambda")
 
-        textraction_lambda =  _lambda.Function(
-            self, 
+        textraction_lambda = _lambda.Function(
+            self,
             "TextractionLambda",
             description="Perform statement textraction using Textract and PDF Plumber",
             code=textraction_lambda_image,
@@ -159,9 +160,9 @@ class StatementProcessorStack(Stack):
         tenant_data_table.grant_read_write_data(textraction_lambda)
         s3_bucket.grant_read_write(textraction_lambda)
 
-        #endregion ---------- Lambda ----------
+        # endregion ---------- Lambda ----------
 
-        #region ---------- StepFunctions ----------
+        # region ---------- StepFunctions ----------
 
         start_textract = tasks.CallAwsService(
             self,
@@ -258,9 +259,9 @@ class StatementProcessorStack(Stack):
 
         textraction_lambda.grant_invoke(state_machine.role)
 
-        #endregion ---------- StepFunctions ----------
+        # endregion ---------- StepFunctions ----------
 
-        #region ---------- WebLambda ----------
+        # region ---------- WebLambda ----------
 
         web_lambda_log_group = logs.LogGroup(
             self,
@@ -315,7 +316,7 @@ class StatementProcessorStack(Stack):
         # TODO: Does Function URL Auth Type need updating?
         web_lambda.add_function_url(auth_type=_lambda.FunctionUrlAuthType.NONE)
 
-        #endregion ---------- WebLambda ----------
+        # endregion ---------- WebLambda ----------
 
         # region ---------- CloudWatch ----------
 

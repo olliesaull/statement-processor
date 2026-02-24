@@ -31,12 +31,16 @@ c.setFont("Helvetica", 11)
 c.drawString(72, height - 170, "Statement Period: August 2025")
 
 table = Table(data, colWidths=[80, 120, 180, 60, 60, 70])
-table.setStyle(TableStyle([
-    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-    ("ALIGN", (3, 1), (-1, -1), "RIGHT"),
-    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-]))
+table.setStyle(
+    TableStyle(
+        [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+            ("ALIGN", (3, 1), (-1, -1), "RIGHT"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ]
+    )
+)
 table_width, table_height = table.wrapOn(c, width, height)
 table_x = (width - table_width) / 2
 table.drawOn(c, table_x, height - 230 - table_height)

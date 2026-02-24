@@ -29,6 +29,7 @@ Notes:
 
 import json
 import os
+import re
 import secrets
 import sys
 import urllib.parse
@@ -36,7 +37,6 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
-import re
 
 import boto3
 import requests
@@ -58,7 +58,11 @@ from config import (  # type: ignore
     AWS_PROFILE,
     AWS_REGION,
     S3_BUCKET_NAME,
+)
+from config import (
     CLIENT_ID as CONFIG_XERO_CLIENT_ID,
+)
+from config import (
     CLIENT_SECRET as CONFIG_XERO_CLIENT_SECRET,
 )
 from core.get_contact_config import get_contact_config  # type: ignore
@@ -70,8 +74,8 @@ from xero_python.accounting import (  # type: ignore
     CreditNotes,
     Invoice,
     Invoices,
-    LineItem,
     LineAmountTypes,
+    LineItem,
 )
 from xero_python.accounting import (
     Contact as XeroContact,
@@ -139,8 +143,19 @@ SKIP_NUMBER = os.getenv("XERO_SKIP_NUMBER", "").strip().lower() in {"1", "true",
 AUTH_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
 SCOPES = [
-    "offline_access", "openid", "profile", "email", "accounting.transactions", "accounting.reports.read", "accounting.journals.read",
-    "accounting.settings", "accounting.contacts", "accounting.attachments", "assets", "projects", "files.read",
+    "offline_access",
+    "openid",
+    "profile",
+    "email",
+    "accounting.transactions",
+    "accounting.reports.read",
+    "accounting.journals.read",
+    "accounting.settings",
+    "accounting.contacts",
+    "accounting.attachments",
+    "assets",
+    "projects",
+    "files.read",
 ]
 
 ALLOWED_TOKEN_KEYS = {
@@ -157,6 +172,7 @@ ALLOWED_TOKEN_KEYS = {
 # ---------------------
 # Utilities
 # ---------------------
+
 
 def die(msg: str, code: int = 1):
     print(f"ERROR: {msg}", file=sys.stderr)
@@ -272,24 +288,37 @@ def parse_date_tokenized(value: str, template: Optional[str]) -> Optional[date]:
     # Last resort: loose parse "D Mon YYYY" or "D Month YYYY" with English months
     try:
         import re
+
         m = re.match(r"\s*(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\s*$", value)
         if m:
             d = int(m.group(1))
             mon = m.group(2).strip().lower()
             y = int(m.group(3))
             months = {
-                "jan": 1, "january": 1,
-                "feb": 2, "february": 2,
-                "mar": 3, "march": 3,
-                "apr": 4, "april": 4,
+                "jan": 1,
+                "january": 1,
+                "feb": 2,
+                "february": 2,
+                "mar": 3,
+                "march": 3,
+                "apr": 4,
+                "april": 4,
                 "may": 5,
-                "jun": 6, "june": 6,
-                "jul": 7, "july": 7,
-                "aug": 8, "august": 8,
-                "sep": 9, "sept": 9, "september": 9,
-                "oct": 10, "october": 10,
-                "nov": 11, "november": 11,
-                "dec": 12, "december": 12,
+                "jun": 6,
+                "june": 6,
+                "jul": 7,
+                "july": 7,
+                "aug": 8,
+                "august": 8,
+                "sep": 9,
+                "sept": 9,
+                "september": 9,
+                "oct": 10,
+                "october": 10,
+                "nov": 11,
+                "november": 11,
+                "dec": 12,
+                "december": 12,
             }
             mm = months.get(mon)
             if mm:
@@ -390,6 +419,7 @@ def bootstrap_auth() -> None:
     if "?" not in redirected:
         die("That does not look like a valid redirect URL containing a code.")
     from urllib.parse import parse_qs, urlparse
+
     q = parse_qs(urlparse(redirected).query)
     code = (q.get("code") or [None])[0]
     if not code:
@@ -422,7 +452,7 @@ def discover_account_code(api: AccountingApi, tenant_id: str, for_expense: bool)
         else:
             where = 'Type=="REVENUE" && Status=="ACTIVE"'
         accounts = api.get_accounts(tenant_id, where=where)
-        for acc in (accounts.accounts or []):
+        for acc in accounts.accounts or []:
             code = getattr(acc, "code", None)
             if code:
                 return code
@@ -630,6 +660,7 @@ def _extract_document_number(value: Any) -> Optional[str]:
         return None
     return match.group(1).replace(" ", "")
 
+
 # reference and numbers are derived from config; pick_identifiers removed
 
 
@@ -648,9 +679,11 @@ def _get_from_raw(it: Dict[str, Any], header: str) -> Optional[str]:
             vs = str(v or "").strip()
             if vs:
                 return vs
+
     # normalized fallback: ignore spaces/underscores/punctuation
     def _norm(s: str) -> str:
         return "".join(ch for ch in (s or "").lower().strip() if ch.isalnum())
+
     hnorm = _norm(header)
     for k, v in raw.items():
         if not isinstance(k, str):
@@ -708,11 +741,12 @@ def extract_date_from_raw(it: Dict[str, Any], items_template: Dict[str, Any], ca
       2) items_template['raw'] mapping where raw-key looks like the canonical field or a close synonym.
       3) Directly scan the row's raw keys for a close synonym.
     """
+
     def _norm(s: str) -> str:
         return "".join(ch for ch in (s or "").lower().strip() if ch.isalnum())
 
     def _synonyms(cf: str) -> list[str]:
-        cf = (_norm(cf) or "")
+        cf = _norm(cf) or ""
         if cf in ("duedate", "due"):
             return ["duedate", "due", "datedue"]
         if cf in ("date", "transactiondate"):
@@ -876,7 +910,9 @@ def ensure_not_exists(
             # DRAFT/SUBMITTED -> DELETED, AUTHORISED/PAID -> VOIDED
             # Xero won't delete paid/authorised with allocations; catch errors.
             try:
-                from xero_python.accounting import Invoice as _Inv, Invoices as _Invs
+                from xero_python.accounting import Invoice as _Inv
+                from xero_python.accounting import Invoices as _Invs
+
                 target_status = "DELETED" if st in {"DRAFT", "SUBMITTED"} else "VOIDED"
                 payload = _Invs(invoices=[_Inv(status=target_status)])
                 api.update_invoice(tenant_id, inv_id, payload)
@@ -892,7 +928,9 @@ def ensure_not_exists(
             if not cn_id:
                 return False
             try:
-                from xero_python.accounting import CreditNote as _Cn, CreditNotes as _Cns
+                from xero_python.accounting import CreditNote as _Cn
+                from xero_python.accounting import CreditNotes as _Cns
+
                 target_status = "DELETED" if st in {"DRAFT", "SUBMITTED"} else "VOIDED"
                 payload = _Cns(credit_notes=[_Cn(status=target_status)])
                 api.update_credit_note(tenant_id, cn_id, payload)
@@ -920,7 +958,19 @@ def ensure_not_exists(
         return True
 
 
-def create_invoice(api: AccountingApi, tenant_id: str, contact_id: str, it: Dict[str, Any], amt: Decimal, dt: Optional[date], due_dt: Optional[date], invoice_number: Optional[str], reference: Optional[str], expense: bool, account_code: Optional[str]) -> str:
+def create_invoice(
+    api: AccountingApi,
+    tenant_id: str,
+    contact_id: str,
+    it: Dict[str, Any],
+    amt: Decimal,
+    dt: Optional[date],
+    due_dt: Optional[date],
+    invoice_number: Optional[str],
+    reference: Optional[str],
+    expense: bool,
+    account_code: Optional[str],
+) -> str:
     line = LineItem(
         description=build_line_description(it) or f"Statement item {reference}",
         quantity=1.0,
@@ -946,7 +996,19 @@ def create_invoice(api: AccountingApi, tenant_id: str, contact_id: str, it: Dict
     return getattr(created, "invoice_id", "") or ""
 
 
-def create_credit_note(api: AccountingApi, tenant_id: str, contact_id: str, it: Dict[str, Any], amt: Decimal, dt: Optional[date], due_dt: Optional[date], credit_note_number: Optional[str], reference: Optional[str], expense: bool, account_code: Optional[str]) -> str:
+def create_credit_note(
+    api: AccountingApi,
+    tenant_id: str,
+    contact_id: str,
+    it: Dict[str, Any],
+    amt: Decimal,
+    dt: Optional[date],
+    due_dt: Optional[date],
+    credit_note_number: Optional[str],
+    reference: Optional[str],
+    expense: bool,
+    account_code: Optional[str],
+) -> str:
     line = LineItem(
         description=build_line_description(it) or f"Statement item {reference}",
         quantity=1.0,
@@ -1044,7 +1106,7 @@ def main():
             continue
 
         # Dates from canonical item fields using statement_date_format, with config fallback
-        fmt = (it.get("statement_date_format") or stmt_date_fmt)
+        fmt = it.get("statement_date_format") or stmt_date_fmt
         dt_str = str((it.get("date") or "")).strip()
         dt = parse_date_tokenized(dt_str, fmt)
         if not dt:
@@ -1061,9 +1123,7 @@ def main():
         inv_no = extract_invoice_number(it, items_template) or None
 
         # Log parsed values right before attempting to create in Xero
-        print(
-            f"Row {idx}: parsed -> date={dt}, due_date={due_dt}, number={inv_no}, reference={ref_value}, amount={amt}, doc_type={doc_type}, entry_kind={entry_kind}"
-        )
+        print(f"Row {idx}: parsed -> date={dt}, due_date={due_dt}, number={inv_no}, reference={ref_value}, amount={amt}, doc_type={doc_type}, entry_kind={entry_kind}")
 
         try:
             if not ensure_not_exists(

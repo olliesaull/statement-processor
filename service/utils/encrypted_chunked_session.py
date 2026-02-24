@@ -1,6 +1,51 @@
-"""Encrypted chunked cookie session interface for Flask."""
+"""
+Encrypted chunked cookie session interface for Flask.
 
+A Flask SessionInterface implementation that transparently splits encrypted,
+compressed session data across multiple browser cookies, working around the 4 KB
+per-cookie limit imposed by all major browsers (RFC 6265).
+
+Motivation
+----------
+The default Flask session (SecureCookieSessionInterface) encodes the entire
+session payload into a single signed cookie. Once that cookie exceeds ~4 KB the
+browser silently drops it, which typically manifests as users being logged out
+or losing session state without explanation.
+
+A common trigger is storing large OAuth tokens (e.g. Xero, Google, Salesforce)
+directly in the session. A Xero auth token is typically ~4 KB uncompressed and
+~2 KB compressed, which already consumes half the cookie budget before any other
+session data is stored.
+
+Design Overview
+---------------
+1. The whole session dict is serialised to JSON, compressed with zlib, then
+   encrypted with Fernet (AES-128-CBC + HMAC-SHA256).
+2. The resulting ciphertext string is split into chunk_size-sized slices.
+3. Slices are stored in sequentially named cookies:
+   - session      ← chunk 0 (always present when a session exists)
+   - session.1    ← chunk 1
+   - session.2    ← chunk 2
+   - ...
+4. On the next request all cookies are reassembled in order, decrypted, and
+   deserialised back into an EncryptedChunkedSession object.
+
+Security Properties
+-------------------
+* Single MAC covers the whole payload. Because we encrypt *then* split (rather
+  than splitting then encrypting each chunk separately), Fernet's HMAC-SHA256
+  authentication tag covers the complete session. A missing, reordered, or
+  tampered chunk will cause InvalidToken to be raised during reassembly.
+* Fernet provides authenticated encryption. Clients cannot read or forge
+  session data without the server-side secret key.
+* Compression is applied before encryption, which is safe here because the
+  server controls both compression and encryption and no chosen-plaintext oracle
+  is exposed to clients (contrast with CRIME/BREACH attacks on TLS).
+"""
+
+import logging
 import time
+import zlib
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -9,6 +54,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from flask import Flask, Request, Response
 from flask import request as flask_request
 from flask.sessions import SecureCookieSession, SessionInterface, TaggedJSONSerializer
+
+logger = logging.getLogger(__name__)
 
 
 class EncryptedChunkedSession(SecureCookieSession):
@@ -39,10 +86,15 @@ class EncryptedChunkedSession(SecureCookieSession):
 
 class EncryptedChunkedSessionInterface(SessionInterface):
     """
-    Stores Flask session state in encrypted, chunked browser cookies.
+    Stores Flask session state in encrypted, compressed, chunked browser cookies.
 
     This interface belongs to the service auth/session layer and replaces
     server-side session stores for Lambda-friendly stateless deployments.
+
+    The session payload is JSON-serialised, zlib-compressed (level 9), then
+    Fernet-encrypted before being split into cookie-sized chunks. Compression
+    typically reduces OAuth tokens from ~4KB to ~2KB, significantly reducing
+    the number of cookies required.
 
     Attributes:
         serializer: JSON serializer for Flask session payloads.
@@ -57,7 +109,7 @@ class EncryptedChunkedSessionInterface(SessionInterface):
         Args:
             fernet_key: Fernet key used for encryption and decryption.
             ttl_seconds: Session TTL applied both to Fernet decrypt checks and cookie max-age.
-            chunk_size: Max payload chars per cookie chunk.
+            chunk_size: Max payload chars per cookie chunk (conservative headroom under 4096-byte limit).
             max_chunks: Upper bound for chunk count to cap header growth.
             time_provider: Optional UNIX-time provider for deterministic tests.
 
@@ -84,9 +136,9 @@ class EncryptedChunkedSessionInterface(SessionInterface):
         self._time_provider = time_provider or (lambda: int(time.time()))
         self._cookie_format_version = "v1"
 
-    def open_session(self, app: Flask, request: Request) -> EncryptedChunkedSession:
+    def open_session(self, app: Flask, request: Request) -> EncryptedChunkedSession:  # pylint: disable=too-many-return-statements
         """
-        Load, reassemble, decrypt, and deserialize session cookies.
+        Load, reassemble, decrypt, decompress, and deserialize session cookies.
 
         Args:
             app: Flask application instance.
@@ -102,26 +154,36 @@ class EncryptedChunkedSessionInterface(SessionInterface):
 
         encrypted_payload = self._extract_encrypted_payload(cookie_name, primary_cookie_value, request)
         if encrypted_payload is None:
+            logger.warning("EncryptedChunkedSession: failed to extract encrypted payload from cookies (possible tampering or malformed cookie structure)")
             return self.session_class(needs_cleanup=True)
 
         try:
-            plaintext = self._fernet.decrypt_at_time(encrypted_payload.encode("utf-8"), ttl=self._ttl_seconds, current_time=self._time_provider())
+            # Decrypt the reassembled ciphertext
+            compressed_plaintext = self._fernet.decrypt_at_time(encrypted_payload.encode("utf-8"), ttl=self._ttl_seconds, current_time=self._time_provider())
+            # Decompress the plaintext
+            plaintext = zlib.decompress(compressed_plaintext)
         except InvalidToken:
+            logger.warning("EncryptedChunkedSession: failed to decrypt session cookies (possible tampering, key rotation, or expired session)")
+            return self.session_class(needs_cleanup=True)
+        except zlib.error:
+            logger.warning("EncryptedChunkedSession: failed to decompress session data (possible corruption)")
             return self.session_class(needs_cleanup=True)
 
         try:
             session_data = self.serializer.loads(plaintext.decode("utf-8"))
         except (UnicodeDecodeError, TypeError, ValueError):
+            logger.warning("EncryptedChunkedSession: failed to deserialize session data (possible corruption)")
             return self.session_class(needs_cleanup=True)
 
         if not isinstance(session_data, dict):
+            logger.warning("EncryptedChunkedSession: session data is not a dict (possible corruption)")
             return self.session_class(needs_cleanup=True)
 
         return self.session_class(session_data)
 
     def save_session(self, app: Flask, session: EncryptedChunkedSession, response: Response) -> None:
         """
-        Encrypt and persist the session payload back into cookie chunks.
+        Compress, encrypt, and persist the session payload back into cookie chunks.
 
         Args:
             app: Flask application instance.
@@ -131,29 +193,42 @@ class EncryptedChunkedSessionInterface(SessionInterface):
         Returns:
             None.
         """
+        # Always clean up invalid cookies first
         if getattr(session, "needs_cleanup", False):
             self._delete_cookie_family(app, response)
 
+        # Empty session → delete all cookies
         if not session:
             if session.modified or getattr(session, "needs_cleanup", False):
                 self._delete_cookie_family(app, response)
             return
 
+        # Session unchanged → skip write to avoid unnecessary cookie churn
+        if not self.should_set_cookie(app, session):
+            return
+
+        # Serialize, compress, encrypt, and chunk the session payload
         serialized_payload = self.serializer.dumps(dict(session))
-        encrypted_payload = self._fernet.encrypt(serialized_payload.encode("utf-8")).decode("utf-8")
+        compressed_payload = zlib.compress(serialized_payload.encode("utf-8"), level=9)
+        encrypted_payload = self._fernet.encrypt(compressed_payload).decode("utf-8")
         chunks = self._split_payload_into_chunks(encrypted_payload)
         chunk_count = len(chunks)
 
         if chunk_count > self._max_chunks:
             # Oversized sessions break requests due to header limits, so we fail closed and clear.
-            app.logger.warning("Session payload exceeded maximum chunk count (chunk_count=%s, max_chunks=%s)", chunk_count, self._max_chunks)
+            logger.warning("EncryptedChunkedSession: session payload exceeded maximum chunk count (chunk_count=%d, max_chunks=%d); clearing session", chunk_count, self._max_chunks)
             self._delete_cookie_family(app, response)
             return
 
+        # Delete stale overflow cookies from previously larger sessions
         self._delete_stale_sibling_cookies(app, response, current_chunk_count=chunk_count)
+
+        # Write the primary cookie with version and chunk count metadata
         primary_cookie_name = self.get_cookie_name(app)
         primary_cookie_value = f"{self._cookie_format_version}.{chunk_count}.{chunks[0]}"
         self._set_cookie(response, primary_cookie_name, primary_cookie_value, app)
+
+        # Write overflow cookies
         for index, chunk in enumerate(chunks[1:], start=1):
             self._set_cookie(response, f"{primary_cookie_name}.{index}", chunk, app)
 
@@ -169,6 +244,46 @@ class EncryptedChunkedSessionInterface(SessionInterface):
             Fernet instance.
         """
         return Fernet(fernet_key.strip().encode("utf-8"))
+
+    def _cookie_name(self, index: int) -> str:
+        """
+        Return the cookie name for chunk at given index.
+
+        The naming convention is:
+        - index 0  →  "session"
+        - index 1  →  "session.1"
+        - index 2  →  "session.2"
+
+        Args:
+            index: Zero-based chunk index (must be >= 0).
+
+        Returns:
+            Cookie name for the given chunk index.
+        """
+        base_name = self.get_cookie_name(None)  # Use Flask's default "session"
+        return base_name if index == 0 else f"{base_name}.{index}"
+
+    def _build_cookie_kwargs(self, app: Flask) -> dict[str, Any]:
+        """
+        Return a dict of cookie attributes shared by all chunk cookies.
+
+        Centralizes the extraction of cookie settings from the Flask app config
+        so that set_cookie and delete_cookie operations use identical attributes,
+        avoiding mismatches that would leave orphaned cookies behind.
+
+        Args:
+            app: The current Flask application.
+
+        Returns:
+            Keyword arguments suitable for passing to Response.set_cookie or Response.delete_cookie.
+        """
+        return {
+            "domain": self.get_cookie_domain(app),
+            "path": self.get_cookie_path(app),
+            "secure": self.get_cookie_secure(app),
+            "httponly": self.get_cookie_httponly(app),
+            "samesite": self.get_cookie_samesite(app),
+        }
 
     def _extract_encrypted_payload(self, cookie_name: str, primary_cookie_value: str, request_obj: Request) -> str | None:
         """
@@ -234,17 +349,8 @@ class EncryptedChunkedSessionInterface(SessionInterface):
             None.
         """
         expires = datetime.now(UTC) + timedelta(seconds=self._ttl_seconds)
-        response.set_cookie(
-            key=cookie_name,
-            value=value,
-            max_age=self._ttl_seconds,
-            expires=expires,
-            path=self.get_cookie_path(app),
-            domain=self.get_cookie_domain(app),
-            secure=self.get_cookie_secure(app),
-            httponly=self.get_cookie_httponly(app),
-            samesite=self.get_cookie_samesite(app),
-        )
+        cookie_kwargs = self._build_cookie_kwargs(app)
+        response.set_cookie(key=cookie_name, value=value, max_age=self._ttl_seconds, expires=expires, **cookie_kwargs)
 
     def _delete_stale_sibling_cookies(self, app: Flask, response: Response, current_chunk_count: int) -> None:
         """
@@ -300,7 +406,8 @@ class EncryptedChunkedSessionInterface(SessionInterface):
         Returns:
             None.
         """
-        response.delete_cookie(key=cookie_name, path=self.get_cookie_path(app), domain=self.get_cookie_domain(app))
+        cookie_kwargs = self._build_cookie_kwargs(app)
+        response.delete_cookie(key=cookie_name, **cookie_kwargs)
 
     @staticmethod
     def _iter_sibling_cookie_names(base_cookie_name: str, cookie_names: Iterable[str]) -> set[str]:

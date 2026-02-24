@@ -3,25 +3,15 @@
 
 import argparse
 import sys
-from botocore.exceptions import ClientError
+
 import boto3
+from botocore.exceptions import ClientError
 
 CONFIG = {
-    "statement_meta": {
-        "supplier_name": "",
-        "statement_date": {
-            "value": "",
-            "format": "DD/MM/YY"
-        },
-        "currency": "",
-        "source_filename": ""
-    },
+    "statement_meta": {"supplier_name": "", "statement_date": {"value": "", "format": "DD/MM/YY"}, "currency": "", "source_filename": ""},
     "statement_items": [
         {
-            "transaction_date": {
-                "value": "date",
-                "format": "DD/MM/YY"
-            },
+            "transaction_date": {"value": "date", "format": "DD/MM/YY"},
             "customer_account_number": "",
             "branch_store_shop": "",
             "document_type": "description",
@@ -33,18 +23,11 @@ CONFIG = {
             "customer_reference": "reference",
             "supplier_reference": "activity",
             "allocated_to": "",
-            "raw": {
-                "date": "date",
-                "activity": "activity",
-                "reference": "reference",
-                "due date": "due date",
-                "invoice amount": "invoice amount",
-                "payments": "payments",
-                "balance zar": "balance zar"
-            }
+            "raw": {"date": "date", "activity": "activity", "reference": "reference", "due date": "due date", "invoice amount": "invoice amount", "payments": "payments", "balance zar": "balance zar"},
         }
-    ]
+    ],
 }
+
 
 def main():
     parser = argparse.ArgumentParser(description="Put config map into DynamoDB item.")
@@ -53,8 +36,7 @@ def main():
     parser.add_argument("--table", required=True, help="DynamoDB table name.")
     parser.add_argument("--tenant-id", required=True, help="TenantID (partition key).")
     parser.add_argument("--contact-id", required=True, help="ContactID (sort key).")
-    parser.add_argument("--overwrite", action="store_true",
-                        help="Overwrite if item exists (default: write only if absent).")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite if item exists (default: write only if absent).")
     args = parser.parse_args()
 
     session = boto3.Session(profile_name=args.profile, region_name=args.region)
@@ -68,9 +50,7 @@ def main():
 
     kwargs = {"Item": item}
     if not args.overwrite:
-        kwargs["ConditionExpression"] = (
-            "attribute_not_exists(TenantID) AND attribute_not_exists(ContactID)"
-        )
+        kwargs["ConditionExpression"] = "attribute_not_exists(TenantID) AND attribute_not_exists(ContactID)"
 
     try:
         table.put_item(**kwargs)
@@ -81,6 +61,7 @@ def main():
             sys.exit(1)
         print(f"❌ DynamoDB error: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

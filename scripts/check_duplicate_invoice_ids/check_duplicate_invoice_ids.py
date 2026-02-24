@@ -15,7 +15,6 @@ import os
 import sys
 from collections import Counter
 
-
 # Resolve default path relative to repository root (parent of the top-level scripts directory)
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_PATH = os.path.join(

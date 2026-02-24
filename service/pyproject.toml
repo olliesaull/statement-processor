@@ -72,16 +72,19 @@ py-version = "3.13"
 
 [tool.pylint.messages_control]
 disable = [
+    "E0401",  # Unable to import (often false positives in complex setups)
+    "C0103",  # Invalid name (allow short variable names in context)
+    "C0302",  # Too many lines in module
+    "R0902",  # Too many instance attributes
     "R0903",  # Too few public methods
+    "R0904",  # Too many public methods
     "R0913",  # Too many arguments
     "R0914",  # Too many local variables
     "R0915",  # Too many statements
+    "R0917",  # Too many positional arguments
+    "W0511",  # TODO/FIXME comments
     "W0613",  # Unused argument
     "W0718",  # Catching too general exception
-    "C0302",  # Too many lines in module
-    "R0902",  # Too many instance attributes
-    "R0904",  # Too many public methods
-    "W0511",  # TODO/FIXME comments
 ]
 
 [tool.pylint.format]
@@ -98,3 +101,4 @@ max-attributes = 15
 max-branches = 15
 max-locals = 20
 max-statements = 60
+max-returns = 10

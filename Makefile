@@ -9,7 +9,6 @@
 PY_EXCLUDES := -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/__pycache__/*'
 
 # Pylint/mypy settings mirrored from numerint/environments.
-PYLINT_DISABLE := E0401,R0902,C0302,W0511,R0914,R0903,C0103,R0917,R0913
 # Use one pylint process so lint works reliably across local and sandbox environments (agents).
 PYLINT_JOBS ?= 1
 PY_FIND := find . -type f -name '*.py' ! -name 'test*' $(PY_EXCLUDES)
@@ -62,7 +61,7 @@ format:
 # Linting for the current directory.
 lint:
 	@echo "🔍 Running pylint in the current directory..."
-	@bash -c "source venv/bin/activate && $(PY_FIND) | xargs pylint --jobs=$(PYLINT_JOBS) --disable=$(PYLINT_DISABLE) 2>/dev/null || true"
+	@bash -c "source venv/bin/activate && $(PY_FIND) | xargs pylint --jobs=$(PYLINT_JOBS) 2>/dev/null || true"
 
 # Mypy checks for the current directory.
 type-check:

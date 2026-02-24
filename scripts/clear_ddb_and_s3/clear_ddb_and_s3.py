@@ -29,9 +29,7 @@ def parse_args() -> argparse.Namespace:
     root_dir = Path(__file__).resolve().parents[2]
     default_env = root_dir / "service" / ".env"
 
-    parser = argparse.ArgumentParser(
-        description="Delete all objects from an S3 bucket and all items from DynamoDB tables."
-    )
+    parser = argparse.ArgumentParser(description="Delete all objects from an S3 bucket and all items from DynamoDB tables.")
     parser.add_argument(
         "--env-file",
         type=Path,
@@ -176,11 +174,7 @@ def main() -> None:
         ("TENANT_STATEMENTS_TABLE_NAME", os.getenv("TENANT_STATEMENTS_TABLE_NAME")),
         ("TENANT_DATA_TABLE_NAME", os.getenv("TENANT_DATA_TABLE_NAME")),
     ]
-    missing = [
-        name
-        for name, value in [("S3_BUCKET_NAME", bucket_name), *table_env_values]
-        if not value
-    ]
+    missing = [name for name, value in [("S3_BUCKET_NAME", bucket_name), *table_env_values] if not value]
     if missing:
         print(f"Missing required environment variables in {args.env_file}: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
@@ -188,10 +182,7 @@ def main() -> None:
     table_names = [value for _, value in table_env_values if value is not None]
 
     session = build_session()
-    resources_summary = (
-        f"S3 bucket: {bucket_name}\n"
-        f"DynamoDB tables: {', '.join(table_names)}"
-    )
+    resources_summary = f"S3 bucket: {bucket_name}\nDynamoDB tables: {', '.join(table_names)}"
     print(resources_summary)
     confirm("Proceed with deleting all data from these resources?", args.yes)
 
