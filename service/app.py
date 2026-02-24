@@ -13,11 +13,9 @@ import requests
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
-from flask_caching import Cache
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.datastructures import FileStorage
 
-import cache_provider
 from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, SESSION_FERNET_KEY, STAGE
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
@@ -74,7 +72,6 @@ _session_cookie_secure = (os.getenv("SESSION_COOKIE_SECURE") or "true").strip().
 _session_ttl_seconds = int(os.getenv("SESSION_TTL_SECONDS", "900"))
 _session_chunk_size = int(os.getenv("SESSION_COOKIE_CHUNK_SIZE", "3700"))
 _session_max_chunks = int(os.getenv("SESSION_COOKIE_MAX_CHUNKS", "8"))
-_cache_default_timeout_seconds = int(os.getenv("CACHE_DEFAULT_TIMEOUT_SECONDS", "30"))
 app.config.update(
     SESSION_COOKIE_SECURE=_session_cookie_secure,
     SESSION_COOKIE_HTTPONLY=True,
@@ -83,9 +80,6 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(seconds=_session_ttl_seconds),
 )
 app.session_interface = EncryptedChunkedSessionInterface(fernet_key=SESSION_FERNET_KEY, ttl_seconds=_session_ttl_seconds, chunk_size=_session_chunk_size, max_chunks=_session_max_chunks)
-
-cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": _cache_default_timeout_seconds})
-cache_provider.set_cache(cache)
 
 
 # Mirror selected config values in Flask app config for convenience
@@ -308,7 +302,7 @@ def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
 @app.route("/api/tenant-statuses", methods=["GET"])
 @xero_token_required
 def tenant_status():
-    """Return tenant sync statuses and refresh cached status values."""
+    """Return tenant sync statuses from DynamoDB."""
     tenant_records = session.get("xero_tenants", []) or []
     tenant_ids = [t.get("tenantId") for t in tenant_records if isinstance(t, dict)]
     try:
@@ -316,11 +310,6 @@ def tenant_status():
     except Exception as exc:
         logger.exception("Failed to load tenant sync status", tenant_ids=tenant_ids, error=exc)
         return jsonify({"error": "Unable to determine sync status"}), 500
-
-    # Cache statuses so polling endpoints can respond quickly.
-    for tenant_id, status in tenant_statuses.items():
-        if tenant_id:
-            cache_provider.set_tenant_status_cache(tenant_id, str(status))
 
     return jsonify(tenant_statuses), 200
 

@@ -66,7 +66,6 @@
 │       └── requirements.txt
 └── service/
     ├── app.py
-    ├── cache_provider.py
     ├── config.py
     ├── Dockerfile
     ├── logger.py
@@ -148,9 +147,8 @@
   - Templates and UI assets: `service/templates/` (Jinja2 views) and `service/static/` (static assets).
   - Configuration + AWS clients: `service/config.py` (env/SSM loading, boto3 clients/resources).
   - Logging: `service/logger.py` (structured logger used across modules).
-  - Caching/session wiring: `service/cache_provider.py` and encrypted chunked cookie session config in `service/app.py` (custom Flask `SessionInterface`, no Flask-Session/Redis/ElastiCache dependency).
-    - Tenant sync-status in-process cache uses `flask-caching` `SimpleCache` with a short default TTL (`CACHE_DEFAULT_TIMEOUT_SECONDS`, default `30`) and explicit write timeout (`TENANT_STATUS_CACHE_TIMEOUT_SECONDS`, default `30`).
-    - Tenant status authority remains DynamoDB (`TenantData` table); cache is a performance optimization and can be cold/empty/stale between Lambda execution environments.
+  - Session/auth wiring: encrypted chunked cookie session config in `service/app.py` (custom Flask `SessionInterface`, no Flask-Session/Redis/ElastiCache dependency).
+    - Tenant sync-status checks are read directly from DynamoDB via `service/utils/tenant_status.py` for consistent cross-instance behavior.
 
 - **Main modules/packages**
   - `service/core/`: domain models and mapping logic (e.g. `contact_config_metadata.py`, `get_contact_config.py`, `item_classification.py`, `models.py`).
@@ -199,7 +197,7 @@
       - Statement table CSS (`service/static/assets/css/main.css`) consumes those variables for both normal and completed rows.
       - Excel export (`service/utils/statement_excel_export.py`) builds fills from the same palette (`_build_excel_state_fills`) and applies normal vs completed variants per row based on statement item completion status.
   - **Tenant APIs**
-    - `/api/tenant-statuses` (GET): returns tenant sync statuses (cached) for polling UI.
+    - `/api/tenant-statuses` (GET): returns tenant sync statuses for polling UI.
     - `/api/tenants/<tenant_id>/sync` (POST): triggers background Xero sync for a tenant.
     - **Auth behavior for API routes**: When `@xero_token_required` protects a `/api/...` endpoint and the session token is missing or expired, the decorator returns `401` JSON (`{"error": "auth_required"}`) instead of redirecting. The frontend polling/sync code (`service/static/assets/js/main.js`) treats either a 401 response or a redirected login response as a signal to navigate to `/login`, so passive actions still force a full re-login.
   - **Auth**

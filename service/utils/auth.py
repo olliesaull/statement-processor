@@ -15,7 +15,7 @@ from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 from config import CLIENT_ID, CLIENT_SECRET
 from logger import logger
 from tenant_data_repository import TenantStatus
-from utils.tenant_status import get_cached_tenant_status
+from utils.tenant_status import get_tenant_status
 
 SCOPES = [
     "offline_access",
@@ -321,7 +321,7 @@ def active_tenant_required(
 def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
     """Redirect away from routes while the active tenant is still loading.
     This stores a message in the session when blocking a request.
-    This checks the in-process cache first and falls back to DynamoDB for safety.
+    This checks DynamoDB for the tenant status.
 
     Args:
         f: Route handler to wrap.
@@ -336,7 +336,7 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
             return redirect(url_for("cookies"))
         tenant_id = session.get("xero_tenant_id")
         if tenant_id:
-            status = get_cached_tenant_status(tenant_id)
+            status = get_tenant_status(tenant_id)
             if status == TenantStatus.LOADING:
                 logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id)
                 session["tenant_error"] = "Please wait for the initial load to finish before navigating away."

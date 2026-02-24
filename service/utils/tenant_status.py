@@ -1,6 +1,5 @@
 """Tenant status helpers."""
 
-import cache_provider
 from logger import logger
 from tenant_data_repository import TenantDataRepository, TenantStatus
 
@@ -20,24 +19,13 @@ def _parse_tenant_status_value(status: object, tenant_id: str) -> TenantStatus |
     return None
 
 
-def get_cached_tenant_status(tenant_id: str) -> TenantStatus | None:
-    """Retrieve tenant status from cache, falling back to DynamoDB if missing."""
+def get_tenant_status(tenant_id: str) -> TenantStatus | None:
+    """Retrieve tenant status directly from DynamoDB."""
     if not tenant_id:
         return None
-
-    cache_instance = cache_provider.get_cache()
-    cached_value = cache_instance.get(f"{tenant_id}_status") if cache_instance else None
-    if cached_value:
-        try:
-            return TenantStatus(cached_value)
-        except ValueError:
-            return None
 
     record = TenantDataRepository.get_item(tenant_id)
     if not record:
         return None
 
-    status_enum = _parse_tenant_status_value(record.get("TenantStatus"), tenant_id)
-    if status_enum is not None:
-        cache_provider.set_tenant_status_cache(tenant_id, status_enum)
-    return status_enum
+    return _parse_tenant_status_value(record.get("TenantStatus"), tenant_id)

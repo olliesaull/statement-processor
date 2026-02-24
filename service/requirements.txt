@@ -7,7 +7,6 @@ mypy_boto3_stepfunctions
 
 # Web app
 flask
-flask-caching
 Authlib
 requests
 xero-python

@@ -5,7 +5,7 @@ This module:
 - fetches contacts, invoices, payments, and credit notes from Xero
 - merges incremental results with cached data
 - writes datasets locally and uploads them to S3
-- updates tenant sync status in DynamoDB and cache
+- updates tenant sync status in DynamoDB
 """
 
 import json
@@ -19,7 +19,6 @@ from typing import Any
 from botocore.exceptions import ClientError
 from xero_python.accounting import AccountingApi
 
-import cache_provider
 from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, s3_client, tenant_data_table
 from logger import logger
 from tenant_data_repository import TenantDataRepository, TenantStatus
@@ -207,7 +206,7 @@ def check_load_required(tenant_id: str) -> bool:
 
 
 def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantStatus.FREE, last_sync_time: int | None = None) -> bool:
-    """Persist the tenant's status in DynamoDB and cache."""
+    """Persist the tenant's status in DynamoDB."""
     if not tenant_id:
         logger.error("Missing TenantID while marking sync state")
         return False
@@ -222,7 +221,6 @@ def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantSta
 
         tenant_data_table.update_item(Key={"TenantID": tenant_id}, UpdateExpression=update_expression, ExpressionAttributeValues=expression_values)
         logger.info("Updated tenant sync state", tenant_id=tenant_id, tenant_status=tenant_status, last_sync_time=last_sync_time)
-        cache_provider.set_tenant_status_cache(tenant_id, tenant_status)
         return True
     except ClientError:
         logger.exception("Failed to update tenant sync state", tenant_id=tenant_id)
