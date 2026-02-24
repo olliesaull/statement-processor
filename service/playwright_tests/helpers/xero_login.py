@@ -14,7 +14,7 @@ from playwright_tests.helpers.logging import log_step
 LOGIN_TIMEOUT_MS = 180 * 1000
 XERO_EMAIL_ENV_NAMES = ("PLAYWRIGHT_XERO_EMAIL", "XERO_EMAIL")
 XERO_PASSWORD_ENV_NAMES = ("PLAYWRIGHT_XERO_PASSWORD", "XERO_PASSWORD")
-STORAGE_STATE_PATH = Path(__file__).resolve().parents[2] / "instance" / "xero_storage_state.json"
+STORAGE_STATE_PATH = Path(__file__).resolve().parents[2] / "xero_storage_state.json"
 
 
 @dataclass(frozen=True)

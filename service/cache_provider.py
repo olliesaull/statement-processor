@@ -1,10 +1,13 @@
 """Shared cache accessors used by the statement processor service."""
 
+import os
+
 from flask_caching import Cache
 
 from logger import logger
 
 _STATUS_SUFFIX = "_status"
+_TENANT_STATUS_CACHE_TIMEOUT_SECONDS = int(os.getenv("TENANT_STATUS_CACHE_TIMEOUT_SECONDS", "30"))
 
 
 _CACHE_STATE: dict[str, Cache | None] = {"cache": None}
@@ -21,10 +24,10 @@ def get_cache() -> Cache | None:
 
 
 def set_tenant_status_cache(tenant_id: str, status_value: str) -> None:
-    """Write the tenant status to cache if a cache is configured."""
+    """Write tenant status to cache with a short explicit timeout."""
     cache_instance = get_cache()
     if not tenant_id or cache_instance is None:
         return
 
-    cache_instance.set(f"{tenant_id}{_STATUS_SUFFIX}", status_value)
-    logger.info("Updated Cache", tenant_id=tenant_id, tenant_status=status_value)
+    cache_instance.set(f"{tenant_id}{_STATUS_SUFFIX}", str(status_value), timeout=_TENANT_STATUS_CACHE_TIMEOUT_SECONDS)
+    logger.info("Updated Cache", tenant_id=tenant_id, tenant_status=status_value, timeout_seconds=_TENANT_STATUS_CACHE_TIMEOUT_SECONDS)

@@ -148,7 +148,9 @@
   - Templates and UI assets: `service/templates/` (Jinja2 views) and `service/static/` (static assets).
   - Configuration + AWS clients: `service/config.py` (env/SSM loading, boto3 clients/resources).
   - Logging: `service/logger.py` (structured logger used across modules).
-  - Caching/session wiring: `service/cache_provider.py` and session config in `service/app.py` (Flask‑Session + SimpleCache).
+  - Caching/session wiring: `service/cache_provider.py` and encrypted chunked cookie session config in `service/app.py` (custom Flask `SessionInterface`, no Flask-Session/Redis/ElastiCache dependency).
+    - Tenant sync-status in-process cache uses `flask-caching` `SimpleCache` with a short default TTL (`CACHE_DEFAULT_TIMEOUT_SECONDS`, default `30`) and explicit write timeout (`TENANT_STATUS_CACHE_TIMEOUT_SECONDS`, default `30`).
+    - Tenant status authority remains DynamoDB (`TenantData` table); cache is a performance optimization and can be cold/empty/stale between Lambda execution environments.
 
 - **Main modules/packages**
   - `service/core/`: domain models and mapping logic (e.g. `contact_config_metadata.py`, `get_contact_config.py`, `item_classification.py`, `models.py`).
@@ -208,6 +210,14 @@
     - `/tenants/disconnect` (POST): disconnect tenant from Xero.
     - **Cookie consent gate**: Protected routes and `/login` require the browser cookie `cookie_consent=true`. If consent is missing, UI routes redirect to `/cookies`; API routes return `401` JSON with `{"error": "cookie_consent_required", "redirect": "/cookies"}`.
     - **Session-state UI cookie**: Authenticated UI responses set `session_is_set=true` (short-lived helper cookie) so frontend JavaScript can toggle the final navbar item between `Login` and `Logout` without template-time session checks.
+    - **Encrypted chunked auth-session cookies**:
+      - Backend/session store is `service/utils/encrypted_chunked_session.py`, a custom Flask `SessionInterface` that keeps session state entirely in browser cookies (stateless server runtime).
+      - Session payload is serialized with Flask `TaggedJSONSerializer`, encrypted/authenticated with Fernet, and split into sibling cookies when needed (`session`, `session.1`, `session.2`, ...).
+      - Primary cookie format is `v1.<chunk_count>.<chunk0>`; sibling cookies carry overflow chunks.
+      - `SESSION_TTL_SECONDS` (default `900`) is enforced in two places: cookie `Max-Age` and Fernet decrypt-time TTL validation. Expired payloads are rejected server-side even if the browser still sends a stale cookie.
+      - Cookie controls are configured in `service/app.py`: `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_HTTPONLY=True`, `SESSION_COOKIE_SAMESITE='Lax'`, and `SESSION_REFRESH_EACH_REQUEST=True` for rolling expiry behavior.
+      - Fernet key is loaded from SSM at import time via `service/config.py:SESSION_FERNET_KEY`, using the parameter path env var `SESSION_FERNET_KEY_PATH` (same pattern as Xero client secrets).
+      - Invalid/missing/tampered chunk sets and oversized payloads fail closed: session opens empty and cookie family is cleared on response, preventing partial/unsafe recovery.
   - **Misc**
     - `/.well-known/<path>` (GET): returns 204 for DevTools probes.
 

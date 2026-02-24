@@ -5,7 +5,7 @@ import os
 import secrets
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Any
 
@@ -14,12 +14,11 @@ from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from flask_caching import Cache
-from flask_session import Session
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.datastructures import FileStorage
 
 import cache_provider
-from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, STAGE
+from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, SESSION_FERNET_KEY, STAGE
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
@@ -52,6 +51,7 @@ from utils.dynamo import (
     set_all_statement_items_completed,
     set_statement_item_completed,
 )
+from utils.encrypted_chunked_session import EncryptedChunkedSessionInterface
 from utils.statement_excel_export import build_statement_excel_payload
 from utils.statement_rows import format_item_type_label as _format_item_type_label
 from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
@@ -70,13 +70,21 @@ MAX_UPLOAD_MB = os.getenv("MAX_UPLOAD_MB", "10")
 MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB) * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
-os.makedirs(app.instance_path, exist_ok=True)
-session_dir = os.path.join(app.instance_path, "flask_session")
-os.makedirs(session_dir, exist_ok=True)
-app.config.update(SESSION_TYPE="filesystem", SESSION_FILE_DIR=session_dir, SESSION_PERMANENT=False, SESSION_USE_SIGNER=True)
-Session(app)
+_session_cookie_secure = (os.getenv("SESSION_COOKIE_SECURE") or "true").strip().lower() in {"1", "true", "yes", "on"}
+_session_ttl_seconds = int(os.getenv("SESSION_TTL_SECONDS", "900"))
+_session_chunk_size = int(os.getenv("SESSION_COOKIE_CHUNK_SIZE", "3700"))
+_session_max_chunks = int(os.getenv("SESSION_COOKIE_MAX_CHUNKS", "8"))
+_cache_default_timeout_seconds = int(os.getenv("CACHE_DEFAULT_TIMEOUT_SECONDS", "30"))
+app.config.update(
+    SESSION_COOKIE_SECURE=_session_cookie_secure,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_REFRESH_EACH_REQUEST=True,
+    PERMANENT_SESSION_LIFETIME=timedelta(seconds=_session_ttl_seconds),
+)
+app.session_interface = EncryptedChunkedSessionInterface(fernet_key=SESSION_FERNET_KEY, ttl_seconds=_session_ttl_seconds, chunk_size=_session_chunk_size, max_chunks=_session_max_chunks)
 
-cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 0})
+cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": _cache_default_timeout_seconds})
 cache_provider.set_cache(cache)
 
 
@@ -1339,9 +1347,7 @@ def callback():  # pylint: disable=too-many-return-statements
         logger.error("No Xero connections found for this user.", error_code=400)
         return "No Xero connections found for this user.", 400
 
-    tenants = [
-        {"tenantId": conn.get("tenantId"), "tenantName": conn.get("tenantName"), "tenantType": conn.get("tenantType"), "connectionId": conn.get("id")} for conn in connections if conn.get("tenantId")
-    ]
+    tenants = [{"tenantId": conn.get("tenantId"), "tenantName": conn.get("tenantName"), "connectionId": conn.get("id")} for conn in connections if conn.get("tenantId")]
 
     current = session.get("xero_tenant_id")
     tenant_ids = [t["tenantId"] for t in tenants]

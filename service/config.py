@@ -39,3 +39,4 @@ tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME)
 # Required Xero credentials are resolved on import.
 CLIENT_ID = get_parameter(os.environ.get("XERO_CLIENT_ID_PATH"), decrypt=True)
 CLIENT_SECRET = get_parameter(os.environ.get("XERO_CLIENT_SECRET_PATH"), decrypt=True)
+SESSION_FERNET_KEY = get_parameter(os.environ.get("SESSION_FERNET_KEY_PATH"), decrypt=True)

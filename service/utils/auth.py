@@ -5,7 +5,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from flask import Response, jsonify, make_response, redirect, request, session, url_for
+from flask import Response, current_app, jsonify, make_response, redirect, request, session, url_for
 from werkzeug.exceptions import HTTPException
 from xero_python.accounting import AccountingApi
 from xero_python.api_client import ApiClient  # type: ignore
@@ -143,7 +143,8 @@ def set_session_is_set_cookie(response: Response) -> Response:
     Returns:
         The same response with the session state cookie set.
     """
-    response.set_cookie(key=SESSION_IS_SET_COOKIE_NAME, value="true", max_age=SESSION_IS_SET_COOKIE_MAX_AGE_SECONDS, path="/", samesite="Lax", secure=request.is_secure)
+    secure = bool(current_app.config.get("SESSION_COOKIE_SECURE", True))
+    response.set_cookie(key=SESSION_IS_SET_COOKIE_NAME, value="true", max_age=SESSION_IS_SET_COOKIE_MAX_AGE_SECONDS, path="/", samesite="Lax", secure=secure)
     return response
 
 

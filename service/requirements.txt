@@ -8,11 +8,11 @@ mypy_boto3_stepfunctions
 # Web app
 flask
 flask-caching
-Flask-Session
 Authlib
 requests
 xero-python
 Flask-WTF
+cryptography
 
 # Other
 pandas
