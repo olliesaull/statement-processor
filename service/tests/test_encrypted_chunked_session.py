@@ -286,13 +286,13 @@ def test_constructor_rejects_invalid_ttl() -> None:
     """Test that constructor validates TTL parameter."""
     try:
         EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), ttl_seconds=0)
-        assert False, "Should have raised ValueError"
+        raise AssertionError("Should have raised ValueError")
     except ValueError as e:
         assert "ttl_seconds must be greater than zero" in str(e)
 
     try:
         EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), ttl_seconds=-100)
-        assert False, "Should have raised ValueError"
+        raise AssertionError("Should have raised ValueError")
     except ValueError as e:
         assert "ttl_seconds must be greater than zero" in str(e)
 
@@ -301,13 +301,13 @@ def test_constructor_rejects_invalid_chunk_size() -> None:
     """Test that constructor validates chunk_size parameter."""
     try:
         EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), chunk_size=0)
-        assert False, "Should have raised ValueError"
+        raise AssertionError("Should have raised ValueError")
     except ValueError as e:
         assert "chunk_size must be greater than zero" in str(e)
 
     try:
         EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), chunk_size=-100)
-        assert False, "Should have raised ValueError"
+        raise AssertionError("Should have raised ValueError")
     except ValueError as e:
         assert "chunk_size must be greater than zero" in str(e)
 
@@ -316,13 +316,13 @@ def test_constructor_rejects_invalid_max_chunks() -> None:
     """Test that constructor validates max_chunks parameter."""
     try:
         EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), max_chunks=0)
-        assert False, "Should have raised ValueError"
+        raise AssertionError("Should have raised ValueError")
     except ValueError as e:
         assert "max_chunks must be greater than zero" in str(e)
 
     try:
         EncryptedChunkedSessionInterface(fernet_key=Fernet.generate_key().decode("utf-8"), max_chunks=-100)
-        assert False, "Should have raised ValueError"
+        raise AssertionError("Should have raised ValueError")
     except ValueError as e:
         assert "max_chunks must be greater than zero" in str(e)
 
@@ -331,12 +331,12 @@ def test_constructor_rejects_empty_fernet_key() -> None:
     """Test that constructor validates fernet_key parameter."""
     try:
         EncryptedChunkedSessionInterface(fernet_key="")
-        assert False, "Should have raised ValueError"
+        raise AssertionError("Should have raised ValueError")
     except ValueError as e:
         assert "non-empty Fernet key is required" in str(e)
 
     try:
         EncryptedChunkedSessionInterface(fernet_key="   ")
-        assert False, "Should have raised ValueError"
+        raise AssertionError("Should have raised ValueError")
     except ValueError as e:
         assert "non-empty Fernet key is required" in str(e)

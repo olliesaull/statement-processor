@@ -65,7 +65,7 @@ tests/
 
 ## Running tests
 
-From `/home/ollie/statement-processor/service`:
+From `service/`:
 
 - All tests: `python3.13 -m pytest -vv -s --tb=long tests/test_item_classification.py --headed`
 - Specific test: `python3.13 -m pytest -vv -s --tb=long tests/test_item_classification.py::test_amount_hint_debit_only_returns_invoice --headed`

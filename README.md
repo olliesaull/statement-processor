@@ -430,7 +430,7 @@ This script backs up and restores **contact configs + statement PDFs** for a sin
 
 ### Example usage
 ```bash
-cd /home/ollie/statement-processor
+cd statement-processor
 
 # Backup one tenant
 export TENANT_ID=<tenant-id>
@@ -455,10 +455,10 @@ This fixture locks the end-to-end statement rendering logic against a known PDF 
 
 ### Setup (after resets or when bootstrapping)
 1) Generate the PDF fixture:
-   - `python3.13 /home/ollie/statement-processor/scripts/generate_example_pdf/create_test_pdf.py`
+   - `python3.13 scripts/generate_example_pdf/create_test_pdf.py`
 2) Copy the generated PDF to the Playwright fixtures folder:
-   - Source: `/home/ollie/statement-processor/scripts/generate_example_pdf/test_pdf.pdf`
-   - Destination: `/home/ollie/statement-processor/service/playwright_tests/statements/test_statements_ltd.pdf`
+   - Source: `scripts/generate_example_pdf/test_pdf.pdf`
+   - Destination: `service/playwright_tests/statements/test_statements_ltd.pdf`
 3) Upload the PDF via the UI:
    - Log in to the app and switch to tenant **Demo Company (UK)**.
    - Upload `test_statements_ltd.pdf` for contact **Test Statements Ltd**.
@@ -468,11 +468,11 @@ This fixture locks the end-to-end statement rendering logic against a known PDF 
    - Total columns: `debit`, `credit`
    - Date format: `YYYY-MM-DD`
 5) Populate Xero from the extracted statement JSON:
-   - Run `python3.13 /home/ollie/statement-processor/scripts/populate_xero/populate_xero.py`.
+   - Run `python3.13 scripts/populate_xero/populate_xero.py`.
    - The script defaults to Demo Company (UK) and the Test Statements Ltd statement/contact IDs; override as needed with `TENANT_ID`, `STATEMENT_ID`, and `CONTACT_ID` env vars.
 6) Capture the Excel baseline:
    - From the statement detail page, click “Download Excel”.
-   - Save it as `/home/ollie/statement-processor/service/playwright_tests/fixtures/expected/test_statements_ltd.xlsx`.
+   - Save it as `service/playwright_tests/fixtures/expected/test_statements_ltd.xlsx`.
 
 ### Notes
 - The population script intentionally skips “no match”, “balance forward”, and invalid date rows so the UI shows both matched and unmatched cases.
