@@ -4,6 +4,9 @@ from aws_cdk import (
     RemovalPolicy,
     Stack,
 )
+from aws_cdk import aws_certificatemanager as acm
+from aws_cdk import aws_cloudfront as cloudfront
+from aws_cdk import aws_cloudfront_origins as origins
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_dynamodb as dynamodb
@@ -35,6 +38,10 @@ class StatementProcessorStack(Stack):
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
         S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
         WEB_LAMBDA_FUNCTION_NAME = f"statement-processor-web-{stage}"
+        CLOUDFRONT_ALIASES = ["cloudcathode.com", "www.cloudcathode.com"]
+        CLOUDFRONT_CERTIFICATE_ARN = "arn:aws:acm:us-east-1:747310139457:certificate/1e702711-0bd2-4806-b60d-c7ec45b93eac"
+        CLOUDFRONT_CACHE_POLICY_ID = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+        CLOUDFRONT_ORIGIN_REQUEST_POLICY_ID = "27f26a87-73c7-4734-9f02-b10dbda0774c"
 
         NOTIFICATION_EMAILS = ["ollie@dotelastic.com", "james@dotelastic.com"]
 
@@ -276,7 +283,7 @@ class StatementProcessorStack(Stack):
             function_name=WEB_LAMBDA_FUNCTION_NAME,
             description="Statement processor web app served through Lambda Function URL",
             code=_lambda.DockerImageCode.from_image_asset(directory="../service"),
-            memory_size=1024,
+            memory_size=1768,
             timeout=Duration.seconds(30),
             log_group=web_lambda_log_group,
             environment={
@@ -316,12 +323,42 @@ class StatementProcessorStack(Stack):
         tenant_data_table.grant_read_write_data(web_lambda)
         s3_bucket.grant_read_write(web_lambda)
 
-        # TODO: Does Function URL Auth Type need updating?
-        web_lambda.add_function_url(auth_type=_lambda.FunctionUrlAuthType.NONE)
+        web_function_url = web_lambda.add_function_url(auth_type=_lambda.FunctionUrlAuthType.AWS_IAM)
+
+        cloudfront_cache_policy = cloudfront.CachePolicy.from_cache_policy_id(self, "StatementProcessorCloudFrontCachePolicy", CLOUDFRONT_CACHE_POLICY_ID)
+        cloudfront_origin_request_policy = cloudfront.OriginRequestPolicy.from_origin_request_policy_id(
+            self, "StatementProcessorCloudFrontOriginRequestPolicy", CLOUDFRONT_ORIGIN_REQUEST_POLICY_ID
+        )
+        cloudfront_default_behavior = cloudfront.BehaviorOptions(
+            origin=origins.FunctionUrlOrigin.with_origin_access_control(web_function_url),
+            viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+            allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
+            compress=True,
+            cache_policy=cloudfront_cache_policy,
+            origin_request_policy=cloudfront_origin_request_policy,
+        )
+
+        cloudfront_distribution_props: dict[str, object] = {
+            "default_behavior": cloudfront_default_behavior,
+            "price_class": cloudfront.PriceClass.PRICE_CLASS_ALL,
+            "http_version": cloudfront.HttpVersion.HTTP2_AND_3,
+            "enable_ipv6": True,
+            "minimum_protocol_version": cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+            "comment": f"Statement Processor {stage} distribution",
+        }
+        if is_production:
+            cloudfront_certificate = acm.Certificate.from_certificate_arn(self, "StatementProcessorCloudFrontCertificate", CLOUDFRONT_CERTIFICATE_ARN)
+            cloudfront_distribution_props["certificate"] = cloudfront_certificate
+            cloudfront_distribution_props["domain_names"] = CLOUDFRONT_ALIASES
+
+        cloudfront_distribution = cloudfront.Distribution(self, "StatementProcessorDistribution", **cloudfront_distribution_props)
+
+        # New Function URL permissions require lambda:InvokeFunction in addition to lambda:InvokeFunctionUrl.
         web_lambda.add_permission(
-            "StatementProcessorWebLambdaInvokeFunctionPermission",
-            principal=iam.AnyPrincipal(),
+            "StatementProcessorWebLambdaInvokeFunctionFromCloudFrontPermission",
+            principal=iam.ServicePrincipal("cloudfront.amazonaws.com"),
             action="lambda:InvokeFunction",
+            source_arn=cloudfront_distribution.distribution_arn,
         )
 
         # endregion ---------- WebLambda ----------
