@@ -16,7 +16,7 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, ses
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.datastructures import FileStorage
 
-from config import CLIENT_ID, CLIENT_SECRET, S3_BUCKET_NAME, SESSION_FERNET_KEY, STAGE
+from config import CLIENT_ID, CLIENT_SECRET, FLASK_SECRET_KEY, S3_BUCKET_NAME, SESSION_FERNET_KEY
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
@@ -59,7 +59,7 @@ from utils.workflows import start_textraction_state_machine
 from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(16))
+app.secret_key = FLASK_SECRET_KEY
 
 # Enable CSRF protection globally
 csrf = CSRFProtect(app)
@@ -87,13 +87,7 @@ app.config["CLIENT_ID"] = CLIENT_ID
 app.config["CLIENT_SECRET"] = CLIENT_SECRET
 
 XERO_OIDC_METADATA_URL = os.getenv("XERO_OIDC_METADATA_URL", "https://identity.xero.com/.well-known/openid-configuration")
-
-if STAGE == "prod":
-    REDIRECT_URI = "https://cloudcathode.com/callback"
-elif STAGE == "dev":
-    REDIRECT_URI = "https://s7mznicnms.eu-west-1.awsapprunner.com/callback"
-else:
-    REDIRECT_URI = "http://localhost:8080/callback"
+REDIRECT_URI = os.getenv("XERO_REDIRECT_URI")
 
 oauth = OAuth(app)
 oauth.register(
@@ -1269,8 +1263,8 @@ def login():
         logger.info("Login blocked; cookie consent missing")
         return redirect(url_for("cookies"))
 
-    if not CLIENT_ID or not CLIENT_SECRET:
-        return "Missing XERO_CLIENT_ID or XERO_CLIENT_SECRET env vars", 500
+    if not CLIENT_ID or not CLIENT_SECRET or not REDIRECT_URI:
+        return "Missing XERO_CLIENT_ID, XERO_CLIENT_SECRET, or XERO_REDIRECT_URI env vars", 500
 
     # OIDC nonce ties the auth response to this browser session.
     nonce = secrets.token_urlsafe(24)

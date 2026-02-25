@@ -292,6 +292,9 @@ class StatementProcessorStack(Stack):
                 "TEXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
                 "XERO_CLIENT_ID_PATH": "/StatementProcessor/XERO_CLIENT_ID",
                 "XERO_CLIENT_SECRET_PATH": "/StatementProcessor/XERO_CLIENT_SECRET",
+                "SESSION_FERNET_KEY_PATH": "/StatementProcessor/SESSION_FERNET_KEY",
+                "FLASK_SECRET_KEY_PATH": "/StatementProcessor/FLASK_SECRET_KEY",
+                "XERO_REDIRECT_URI": "https://cloudcathode.com/callback",
             },
         )
 
@@ -315,6 +318,11 @@ class StatementProcessorStack(Stack):
 
         # TODO: Does Function URL Auth Type need updating?
         web_lambda.add_function_url(auth_type=_lambda.FunctionUrlAuthType.NONE)
+        web_lambda.add_permission(
+            "StatementProcessorWebLambdaInvokeFunctionPermission",
+            principal=iam.AnyPrincipal(),
+            action="lambda:InvokeFunction",
+        )
 
         # endregion ---------- WebLambda ----------
 

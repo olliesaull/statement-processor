@@ -215,6 +215,8 @@
       - `SESSION_TTL_SECONDS` (default `900`) is enforced in two places: cookie `Max-Age` and Fernet decrypt-time TTL validation. Expired payloads are rejected server-side even if the browser still sends a stale cookie.
       - Cookie controls are configured in `service/app.py`: `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_HTTPONLY=True`, `SESSION_COOKIE_SAMESITE='Lax'`, and `SESSION_REFRESH_EACH_REQUEST=True` for rolling expiry behavior.
       - Fernet key is loaded from SSM at import time via `service/config.py:SESSION_FERNET_KEY`, using the parameter path env var `SESSION_FERNET_KEY_PATH` (same pattern as Xero client secrets).
+      - `service/config.py` resolves all required secure values (Xero client ID/secret, Fernet key, Flask secret key) with one `get_parameters` call on the shared prefix, then maps specific keys by path.
+      - Flask app secret key is loaded from SSM at import time via `service/config.py:FLASK_SECRET_KEY`, using `FLASK_SECRET_KEY_PATH`; this avoids per-cold-start random secrets that would invalidate existing cookies.
       - Invalid/missing/tampered chunk sets and oversized payloads fail closed: session opens empty and cookie family is cleared on response, preventing partial/unsafe recovery.
   - **Misc**
     - `/.well-known/<path>` (GET): returns 204 for DevTools probes.
