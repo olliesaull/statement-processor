@@ -9,7 +9,6 @@ from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Any
 
-import requests
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
@@ -24,7 +23,6 @@ from core.models import ContactConfig, StatementItem
 from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, PaymentNumberMap, StatementItemPayload, StatementRowsByHeader, StatementRowViewModel, XeroDocumentPayload
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
-from sync import check_load_required, sync_data
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import (
     active_tenant_required,
@@ -50,13 +48,11 @@ from utils.dynamo import (
     set_statement_item_completed,
 )
 from utils.encrypted_chunked_session import EncryptedChunkedSessionInterface
-from utils.statement_excel_export import build_statement_excel_payload
 from utils.statement_rows import format_item_type_label as _format_item_type_label
 from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
 from utils.statement_view import build_right_rows, build_row_comparisons, get_date_format_from_config, get_number_separators_from_config, match_invoices_to_statement_items, prepare_display_mappings
 from utils.storage import StatementJSONNotFoundError, fetch_json_statement, is_allowed_pdf, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
 from utils.workflows import start_textraction_state_machine
-from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
@@ -126,11 +122,34 @@ def _inject_statement_row_palette_css() -> dict[str, Any]:
     return {"statement_row_css_variables": STATEMENT_ROW_CSS_VARIABLES}
 
 
+def _sync_functions() -> tuple[Any, Any]:
+    """Import sync helpers only when sync-related routes are used.
+
+    This keeps public pages from paying Xero SDK import cost during cold start.
+    """
+    from sync import check_load_required, sync_data  # pylint: disable=import-outside-toplevel
+
+    return check_load_required, sync_data
+
+
+def _xero_repository_functions() -> tuple[Any, Any, Any, Any]:
+    """Import Xero data access helpers only for Xero-backed pages."""
+    from xero_repository import (  # pylint: disable=import-outside-toplevel
+        get_contacts,
+        get_credit_notes_by_contact,
+        get_invoices_by_contact,
+        get_payments_by_contact,
+    )
+
+    return get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
+
+
 def _trigger_initial_sync_if_required(tenant_id: str | None) -> None:
     """Kick off an initial load if the tenant has no cached data yet."""
     if not tenant_id:
         return
 
+    check_load_required, sync_data = _sync_functions()
     if check_load_required(tenant_id):
         oauth_token = session.get("xero_oauth2_token")
         if not oauth_token:
@@ -330,6 +349,7 @@ def trigger_tenant_sync(tenant_id: str):
 
     try:
         # Fire-and-forget: sync runs in the background.
+        _, sync_data = _sync_functions()
         _executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token)  # TODO: Perhaps worth checking if there is row in DDB/files in S3
         logger.info("Manual tenant sync triggered", tenant_id=tenant_id)
         return jsonify({"started": True}), 202
@@ -378,6 +398,7 @@ def ignore_favicon():
 
 def _get_active_contacts_for_upload() -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Return active contacts and a name -> ID lookup for the upload form."""
+    get_contacts, _, _, _ = _xero_repository_functions()
     contacts_raw = get_contacts()
     contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
     contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
@@ -853,6 +874,8 @@ def _build_statement_excel_response(
     Returns:
         Flask response containing the XLSX export.
     """
+    from utils.statement_excel_export import build_statement_excel_payload  # pylint: disable=import-outside-toplevel
+
     # Pylint's duplicate-code check compares raw argument forwarding blocks.
     # This explicit mapping is intentional so the route wrapper stays easy to audit.
     # pylint: disable=duplicate-code
@@ -1014,6 +1037,7 @@ def statement(statement_id: str):
     display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, contact_config)
 
     # 2) Fetch Xero documents and classify each statement item
+    _, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact = _xero_repository_functions()
     invoices: list[XeroDocumentPayload] = get_invoices_by_contact(contact_id) or []
     credit_notes: list[XeroDocumentPayload] = get_credit_notes_by_contact(contact_id) or []
     payments: list[XeroDocumentPayload] = get_payments_by_contact(contact_id) or []
@@ -1174,6 +1198,8 @@ def disconnect_tenant():
     logger.info("Tenant disconnect submitted", tenant_id=tenant_id, has_connection=bool(connection_id))
 
     if connection_id and access_token:
+        import requests  # pylint: disable=import-outside-toplevel
+
         try:
             resp = requests.delete(f"https://api.xero.com/connections/{connection_id}", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
             if resp.status_code not in (200, 204):
@@ -1209,6 +1235,7 @@ def configs():
     """Render and update the contact mapping configuration UI."""
     tenant_id = session.get("xero_tenant_id")
 
+    get_contacts, _, _, _ = _xero_repository_functions()
     contacts_raw = get_contacts()
     contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
     contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
@@ -1321,6 +1348,8 @@ def callback():  # pylint: disable=too-many-return-statements
 
     save_xero_oauth2_token(tokens)
     access_token = tokens.get("access_token")
+
+    import requests  # pylint: disable=import-outside-toplevel
 
     conn_res = requests.get("https://api.xero.com/connections", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
 

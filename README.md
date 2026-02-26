@@ -111,6 +111,7 @@
   - `dexero-statement-processor-{stage}` (`s3_bucket`): shared object store referenced by both App Runner and the Textraction Lambda; includes an explicit bucket policy to allow Textract to read statement PDFs.
 - **Lambda**
   - `TextractionLambda` (`textraction_lambda`): container‑image Lambda built from `lambda_functions/textraction_lambda` to perform statement extraction; invoked by the Step Functions state machine (`ProcessStatement` task).
+  - `TextractionLambda` and `StatementProcessorWebLambda` are explicitly configured for `arm64`, and their Docker image assets are built as `linux/arm64` to avoid architecture mismatches and improve cold-start efficiency on Graviton.
   - `TextractionLambdaLogGroup` (`textraction_log_group`): explicit log group with stage‑dependent retention (3 months in prod, 1 week otherwise).
 - **Step Functions**
   - `TextractionStateMachine` (`state_machine`): orchestrates `StartTextractDocumentAnalysis` → `WaitForTextract` → `GetTextractStatus` → `ProcessStatement`, with success/failure handling for Textract job status.
@@ -118,7 +119,7 @@
   - `Statement Processor Website` (`web`): App Runner service built from `service/` (`AppRunnerImage`) to run the Flask service; uses an instance role to access DynamoDB, S3, Textract, and Step Functions.
 - **IAM roles and policies**
   - `Statement Processor App Runner Instance Role` (`statement_processor_instance_role`): grants App Runner access to CloudWatch metrics, Textract, and Step Functions; table and S3 permissions are added via grants.
-  - `parameter_policy`: allows App Runner to read `/StatementProcessor/*` from SSM Parameter Store and decrypt SecureStrings (KMS), used via `web.add_to_role_policy(...)`.
+  - Web Lambda runtime no longer requires `ssm:GetParameter`/`kms:Decrypt` for Xero/session secrets; `cdk/deploy_stack.sh` reads SSM secure parameters before deploy and passes them into CDK as deploy-time environment variables for Lambda. This removes per-cold-start SSM/KMS network calls from the Flask service startup path.
   - Textract permissions added to both Lambda and state machine roles to allow `StartDocumentAnalysis` and `GetDocumentAnalysis`.
 - **CloudWatch + SNS**
   - `StatementProcessorAppRunnerErrorMetricFilter` + `StatementProcessorAppRunnerErrorAlarm`: parses App Runner application logs for `ERROR` and raises an alarm.
@@ -145,7 +146,7 @@
 - **App structure**
   - Main application: `service/app.py` (Flask app factory, route handlers, template rendering, orchestration).
   - Templates and UI assets: `service/templates/` (Jinja2 views) and `service/static/` (static assets).
-  - Configuration + AWS clients: `service/config.py` (env/SSM loading, boto3 clients/resources).
+  - Configuration + AWS clients: `service/config.py` (environment-variable loading, boto3 clients/resources).
   - Logging: `service/logger.py` (structured logger used across modules).
   - Session/auth wiring: encrypted chunked cookie session config in `service/app.py` (custom Flask `SessionInterface`, no Flask-Session/Redis/ElastiCache dependency).
     - Tenant sync-status checks are read directly from DynamoDB via `service/utils/tenant_status.py` for consistent cross-instance behavior.
@@ -214,9 +215,9 @@
       - Primary cookie format is `v1.<chunk_count>.<chunk0>`; sibling cookies carry overflow chunks.
       - `SESSION_TTL_SECONDS` (default `900`) is enforced in two places: cookie `Max-Age` and Fernet decrypt-time TTL validation. Expired payloads are rejected server-side even if the browser still sends a stale cookie.
       - Cookie controls are configured in `service/app.py`: `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_HTTPONLY=True`, `SESSION_COOKIE_SAMESITE='Lax'`, and `SESSION_REFRESH_EACH_REQUEST=True` for rolling expiry behavior.
-      - Fernet key is loaded from SSM at import time via `service/config.py:SESSION_FERNET_KEY`, using the parameter path env var `SESSION_FERNET_KEY_PATH` (same pattern as Xero client secrets).
-      - `service/config.py` resolves all required secure values (Xero client ID/secret, Fernet key, Flask secret key) with one `get_parameters` call on the shared prefix, then maps specific keys by path.
-      - Flask app secret key is loaded from SSM at import time via `service/config.py:FLASK_SECRET_KEY`, using `FLASK_SECRET_KEY_PATH`; this avoids per-cold-start random secrets that would invalidate existing cookies.
+      - Required auth/session secrets (`XERO_CLIENT_ID`, `XERO_CLIENT_SECRET`, `SESSION_FERNET_KEY`, `FLASK_SECRET_KEY`) are now read directly from environment variables in `service/config.py`.
+      - In AWS, `cdk/deploy_stack.sh` resolves those values from SSM secure parameters at deployment and passes them into CDK for Lambda environment injection. This keeps deployment-time secret sourcing while reducing cold-start latency by removing runtime secret fetches.
+      - Flask app secret key remains stable across cold starts because it is provided as a fixed environment value rather than generated at runtime.
       - Invalid/missing/tampered chunk sets and oversized payloads fail closed: session opens empty and cookie family is cleared on response, preventing partial/unsafe recovery.
   - **Misc**
     - `/.well-known/<path>` (GET): returns 204 for DevTools probes.

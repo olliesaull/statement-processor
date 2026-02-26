@@ -2,15 +2,13 @@
 Configuration module for Statement Processor.
 
 This module loads environment variables, initializes AWS clients/resources,
-and fetches required SSM parameters at import time.
+and resolves required application secrets from environment variables.
 """
 
 import os
 
 import boto3
-from aws_lambda_powertools.utilities.parameters import get_parameter
 from dotenv import load_dotenv
-from mypy_boto3_stepfunctions import SFNClient
 
 load_dotenv()
 
@@ -29,15 +27,15 @@ TENANT_DATA_TABLE_NAME: str | None = os.getenv("TENANT_DATA_TABLE_NAME")
 session = boto3.session.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION) if STAGE == "dev" else boto3.session.Session()  # Use the default session (e.g., in AppRunner)
 
 s3_client = session.client("s3")
-stepfunctions_client: SFNClient = session.client("stepfunctions")
+stepfunctions_client = session.client("stepfunctions")
 
 ddb = session.resource("dynamodb")
 tenant_statements_table = ddb.Table(TENANT_STATEMENTS_TABLE_NAME)
 tenant_contacts_config_table = ddb.Table(TENANT_CONTACTS_CONFIG_TABLE_NAME)
 tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME)
 
-# Required Xero credentials are resolved on import.
-CLIENT_ID = get_parameter(os.environ.get("XERO_CLIENT_ID_PATH"), decrypt=True)
-CLIENT_SECRET = get_parameter(os.environ.get("XERO_CLIENT_SECRET_PATH"), decrypt=True)
-SESSION_FERNET_KEY = get_parameter(os.environ.get("SESSION_FERNET_KEY_PATH"), decrypt=True)
-FLASK_SECRET_KEY = get_parameter(os.environ.get("FLASK_SECRET_KEY_PATH"), decrypt=True)
+# Required credentials are resolved on import from direct environment variables.
+CLIENT_ID: str | None = os.getenv("XERO_CLIENT_ID")
+CLIENT_SECRET: str | None = os.getenv("XERO_CLIENT_SECRET")
+SESSION_FERNET_KEY: str | None = os.getenv("SESSION_FERNET_KEY")
+FLASK_SECRET_KEY: str | None = os.getenv("FLASK_SECRET_KEY")

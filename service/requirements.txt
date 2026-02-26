@@ -1,8 +1,6 @@
 # AWS
 boto3
-boto3-stubs[essential]
 aws_lambda_powertools
-mypy_boto3_stepfunctions
 
 # Web app
 flask

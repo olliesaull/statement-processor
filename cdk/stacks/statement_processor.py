@@ -1,3 +1,5 @@
+import os
+
 import aws_cdk as cdk
 from aws_cdk import (
     Duration,
@@ -10,6 +12,7 @@ from aws_cdk import aws_cloudfront_origins as origins
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_dynamodb as dynamodb
+from aws_cdk import aws_ecr_assets as ecr_assets
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as _lambda
 from aws_cdk import aws_logs as logs
@@ -37,6 +40,7 @@ class StatementProcessorStack(Stack):
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
         S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
+        STATIC_ASSETS_BUCKET_NAME = f"dexero-statement-processor-{stage}-assets"
         WEB_LAMBDA_FUNCTION_NAME = f"statement-processor-web-{stage}"
         CLOUDFRONT_ALIASES = ["cloudcathode.com", "www.cloudcathode.com"]
         CLOUDFRONT_CERTIFICATE_ARN = "arn:aws:acm:us-east-1:747310139457:certificate/1e702711-0bd2-4806-b60d-c7ec45b93eac"
@@ -47,11 +51,19 @@ class StatementProcessorStack(Stack):
 
         # region ---------- ParameterStore ----------
 
-        # SSM Parameter Store Parameter ARNs, using wildcards to satisfy ssm:GetParametersByPath
-        parameter_arns = [f"arn:aws:ssm:eu-west-1:{env.account}:parameter/StatementProcessor/*"]
-
-        # Create a policy statement to grant SSM Parameter Store access and SecureString decryption permission
-        parameter_policy = iam.PolicyStatement(actions=["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "kms:Decrypt"], resources=parameter_arns)
+        deploy_secret_env = {
+            "XERO_CLIENT_ID": os.getenv("XERO_CLIENT_ID"),
+            "XERO_CLIENT_SECRET": os.getenv("XERO_CLIENT_SECRET"),
+            "SESSION_FERNET_KEY": os.getenv("SESSION_FERNET_KEY"),
+            "FLASK_SECRET_KEY": os.getenv("FLASK_SECRET_KEY"),
+        }
+        missing_deploy_secrets = [name for name, value in deploy_secret_env.items() if not value]
+        if missing_deploy_secrets:
+            missing_csv = ", ".join(sorted(missing_deploy_secrets))
+            raise ValueError(
+                "Missing deploy-time secret environment variables for CDK synthesis: "
+                f"{missing_csv}. Run cdk/deploy_stack.sh so secrets are resolved from SSM before 'cdk deploy'."
+            )
 
         # endregion ---------- ParameterStore ----------
 
@@ -110,6 +122,12 @@ class StatementProcessorStack(Stack):
             bucket_name=S3_BUCKET_NAME,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
+        static_assets_bucket = s3.Bucket(
+            self,
+            STATIC_ASSETS_BUCKET_NAME,
+            bucket_name=STATIC_ASSETS_BUCKET_NAME,
+            removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
+        )
         s3_bucket.add_to_resource_policy(
             iam.PolicyStatement(
                 sid="AllowTextractReadStatements",
@@ -134,7 +152,10 @@ class StatementProcessorStack(Stack):
             removal_policy=RemovalPolicy.DESTROY if not is_production else RemovalPolicy.RETAIN,
         )
 
-        textraction_lambda_image = _lambda.EcrImageCode.from_asset_image(directory="../lambda_functions/textraction_lambda")
+        textraction_lambda_image = _lambda.EcrImageCode.from_asset_image(
+            directory="../lambda_functions/textraction_lambda",
+            platform=ecr_assets.Platform.LINUX_ARM64,
+        )
 
         textraction_lambda = _lambda.Function(
             self,
@@ -144,6 +165,7 @@ class StatementProcessorStack(Stack):
             memory_size=2048,
             handler=Handler.FROM_IMAGE,
             runtime=Runtime.FROM_IMAGE,
+            architecture=_lambda.Architecture.ARM_64,
             timeout=Duration.seconds(60),
             log_group=textraction_log_group,
             environment={
@@ -282,7 +304,11 @@ class StatementProcessorStack(Stack):
             "StatementProcessorWebLambda",
             function_name=WEB_LAMBDA_FUNCTION_NAME,
             description="Statement processor web app served through Lambda Function URL",
-            code=_lambda.DockerImageCode.from_image_asset(directory="../service"),
+            code=_lambda.DockerImageCode.from_image_asset(
+                directory="../service",
+                platform=ecr_assets.Platform.LINUX_ARM64,
+            ),
+            architecture=_lambda.Architecture.ARM_64,
             memory_size=1768,
             timeout=Duration.seconds(30),
             log_group=web_lambda_log_group,
@@ -297,10 +323,10 @@ class StatementProcessorStack(Stack):
                 "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
                 "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
                 "TEXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
-                "XERO_CLIENT_ID_PATH": "/StatementProcessor/XERO_CLIENT_ID",
-                "XERO_CLIENT_SECRET_PATH": "/StatementProcessor/XERO_CLIENT_SECRET",
-                "SESSION_FERNET_KEY_PATH": "/StatementProcessor/SESSION_FERNET_KEY",
-                "FLASK_SECRET_KEY_PATH": "/StatementProcessor/FLASK_SECRET_KEY",
+                "XERO_CLIENT_ID": deploy_secret_env["XERO_CLIENT_ID"],
+                "XERO_CLIENT_SECRET": deploy_secret_env["XERO_CLIENT_SECRET"],
+                "SESSION_FERNET_KEY": deploy_secret_env["SESSION_FERNET_KEY"],
+                "FLASK_SECRET_KEY": deploy_secret_env["FLASK_SECRET_KEY"],
                 "XERO_REDIRECT_URI": "https://cloudcathode.com/callback",
             },
         )
@@ -316,8 +342,6 @@ class StatementProcessorStack(Stack):
                 resources=["*"],
             )
         )
-        web_lambda.add_to_role_policy(parameter_policy)
-
         tenant_statements_table.grant_read_write_data(web_lambda)
         tenant_contacts_config_table.grant_read_write_data(web_lambda)
         tenant_data_table.grant_read_write_data(web_lambda)
@@ -337,9 +361,20 @@ class StatementProcessorStack(Stack):
             cache_policy=cloudfront_cache_policy,
             origin_request_policy=cloudfront_origin_request_policy,
         )
+        # Keep the /static prefix in S3 so the object keys match local Flask static URLs.
+        cloudfront_static_behavior = cloudfront.BehaviorOptions(
+            origin=origins.S3BucketOrigin.with_origin_access_control(static_assets_bucket),
+            viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+            allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+            compress=True,
+            cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        )
 
         cloudfront_distribution_props: dict[str, object] = {
             "default_behavior": cloudfront_default_behavior,
+            "additional_behaviors": {
+                "/static/*": cloudfront_static_behavior,
+            },
             "price_class": cloudfront.PriceClass.PRICE_CLASS_ALL,
             "http_version": cloudfront.HttpVersion.HTTP2_AND_3,
             "enable_ipv6": True,

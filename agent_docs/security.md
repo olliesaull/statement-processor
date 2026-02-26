@@ -29,7 +29,7 @@ Do not change these semantics without updating frontend logic and docs.
 - Session data is encrypted with Fernet and stored in chunked cookies (`EncryptedChunkedSessionInterface`).
 - Session TTL is enforced at decrypt-time, not only by cookie expiry.
 - Invalid/tampered/missing chunk sets must fail closed and trigger cookie cleanup.
-- Fernet key is loaded from SSM Parameter Store (`SESSION_FERNET_KEY_PATH`), never hardcoded.
+- Fernet key is loaded from the `SESSION_FERNET_KEY` environment variable (in AWS, `cdk/deploy_stack.sh` pulls it from SSM SecureString before deploy and CDK injects it), never hardcoded.
 
 ## Upload and Extraction Boundaries
 

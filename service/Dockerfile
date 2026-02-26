@@ -1,6 +1,9 @@
-FROM python:3.13-slim AS builder
+FROM python:3.13-alpine AS builder
 
 WORKDIR /app
+
+# Install build dependencies for Python packages with C extensions
+RUN apk add --no-cache gcc musl-dev libffi-dev openssl-dev cargo
 
 # Install dependencies in builder stage
 COPY requirements.txt ./
@@ -8,9 +11,12 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir --target=/app/packages -r requirements.txt
 
 # Final stage
-FROM python:3.13-slim
+FROM python:3.13-alpine
 
 WORKDIR /app
+
+# Install runtime dependencies only
+RUN apk add --no-cache libffi openssl
 
 # Lambda Web Adapter exposes this containerized Flask app through Lambda + Function URLs.
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 /lambda-adapter /opt/extensions/lambda-adapter
