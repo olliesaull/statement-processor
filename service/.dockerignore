@@ -25,8 +25,15 @@ tmp/
 
 # Docker
 Dockerfile
+.dockerignore
 
 # Non-runtime project files
 tests/
 playwright_tests/
 requirements-dev.txt
+pyproject.toml
+pytest.ini
+Makefile
+run_as_container.sh
+architecture-diagram.md
+update_dependencies.sh

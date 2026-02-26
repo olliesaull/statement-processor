@@ -1,3 +1,13 @@
+FROM python:3.13-slim AS builder
+
+WORKDIR /app
+
+# Install dependencies in builder stage
+COPY requirements.txt ./
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --target=/app/packages -r requirements.txt
+
+# Final stage
 FROM python:3.13-slim
 
 WORKDIR /app
@@ -5,15 +15,30 @@ WORKDIR /app
 # Lambda Web Adapter exposes this containerized Flask app through Lambda + Function URLs.
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 /lambda-adapter /opt/extensions/lambda-adapter
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+# Copy installed packages from builder
+COPY --from=builder /app/packages /app/packages
 
-COPY . .
+# Copy only runtime application code
+COPY app.py config.py logger.py sync.py tenant_data_repository.py xero_repository.py ./
+COPY core/ ./core/
+COPY templates/ ./templates/
+COPY static/ ./static/
+COPY utils/ ./utils/
 
+# Pre-compile Python bytecode for faster cold starts
+RUN python3.13 -m compileall -q .
+
+# Set Python path to include packages
+ENV PYTHONPATH=/app/packages
 ENV PORT=8080
 ENV AWS_LWA_PORT=8080
+# Reduce Python startup overhead
+ENV PYTHONUNBUFFERED=1
+# Flask app location
+ENV FLASK_APP=app.py
 
 EXPOSE 8080
 
-CMD ["python3.13", "-c", "import os; from app import app; app.run(host='0.0.0.0', port=int(os.getenv('PORT', '8080')))"]
+# Use gunicorn for production-grade WSGI server (faster than Flask dev server)
+# If gunicorn not in requirements, fall back to direct app execution
+CMD ["python3.13", "app.py"]
