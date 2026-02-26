@@ -39,6 +39,6 @@ ENV FLASK_APP=app.py
 
 EXPOSE 8080
 
-# Use gunicorn for production-grade WSGI server (faster than Flask dev server)
-# If gunicorn not in requirements, fall back to direct app execution
+# Flask dev server is optimal for Lambda Function URLs (single concurrent request per container)
+# Gunicorn would add unnecessary overhead (worker management, pre-fork) for Lambda's execution model
 CMD ["python3.13", "app.py"]
