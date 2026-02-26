@@ -1397,7 +1397,3 @@ def logout():
 def chrome_devtools_ping(path):
     """Respond to Chrome DevTools well-known probes without logging 404s."""
     return "", 204  # No content, indicates "OK but nothing here"
-
-
-if __name__ == "__main__":
-    app.run(port=8080)

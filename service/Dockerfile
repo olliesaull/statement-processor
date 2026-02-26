@@ -1,4 +1,4 @@
-FROM python:3.13-alpine AS builder
+FROM python:3.14-alpine AS builder
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir --target=/app/packages -r requirements.txt
 
 # Final stage
-FROM python:3.13-alpine
+FROM python:3.14-alpine
 
 WORKDIR /app
 
@@ -19,10 +19,10 @@ WORKDIR /app
 RUN apk add --no-cache libffi openssl
 
 # Lambda Web Adapter exposes this containerized Flask app through Lambda + Function URLs.
-COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 /lambda-adapter /opt/extensions/lambda-adapter
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.0-rc1 /lambda-adapter /opt/extensions/lambda-adapter
 
 # Copy installed packages from builder
-COPY --from=builder /app/packages /app/packages
+COPY --from=builder /app/packages /usr/local/lib/python3.14/site-packages
 
 # Copy only runtime application code
 COPY app.py config.py logger.py sync.py tenant_data_repository.py xero_repository.py ./
@@ -32,16 +32,7 @@ COPY static/ ./static/
 COPY utils/ ./utils/
 
 # Pre-compile Python bytecode for faster cold starts
-# RUN python3.13 -m compileall -q .
-
-# Set Python path to include packages
-ENV PYTHONPATH=/app/packages
-ENV PORT=8080
-ENV AWS_LWA_PORT=8080
-# Reduce Python startup overhead
-ENV PYTHONUNBUFFERED=1
-# Flask app location
-ENV FLASK_APP=app.py
+RUN python3.14 -m compileall -q .
 
 EXPOSE 8080
 
