@@ -32,7 +32,7 @@ COPY static/ ./static/
 COPY utils/ ./utils/
 
 # Pre-compile Python bytecode for faster cold starts
-RUN python3.13 -m compileall -q .
+# RUN python3.13 -m compileall -q .
 
 # Set Python path to include packages
 ENV PYTHONPATH=/app/packages
@@ -47,4 +47,4 @@ EXPOSE 8080
 
 # Flask dev server is optimal for Lambda Function URLs (single concurrent request per container)
 # Gunicorn would add unnecessary overhead (worker management, pre-fork) for Lambda's execution model
-CMD ["python3.13", "app.py"]
+CMD ["python", "-m", "flask", "run", "--host", "0.0.0.0", "--port", "8080"]

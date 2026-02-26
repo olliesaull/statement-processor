@@ -313,6 +313,7 @@ class StatementProcessorStack(Stack):
             timeout=Duration.seconds(30),
             log_group=web_lambda_log_group,
             environment={
+                "AWS_LWA_ASYNC_INIT": "true",
                 "STAGE": "prod" if is_production else "dev",
                 "DOMAIN_NAME": domain_name,
                 "POWERTOOLS_SERVICE_NAME": "StatementProcessor",
