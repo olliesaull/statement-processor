@@ -17,6 +17,7 @@ AWS_REGION: str | None = os.getenv("AWS_REGION")
 S3_BUCKET_NAME: str | None = os.getenv("S3_BUCKET_NAME")
 STAGE: str | None = os.getenv("STAGE")
 TEXTRACTION_STATE_MACHINE_ARN: str | None = os.getenv("TEXTRACTION_STATE_MACHINE_ARN")
+VALKEY_URL: str = os.getenv("VALKEY_URL", "redis://127.0.0.1:6379/0")
 # Ignoring Bandit suggestion as tempfile.gettempdir returns /tmp anyways (B108:hardcoded_tmp_directory)
 LOCAL_DATA_DIR: str = "./tmp/data" if STAGE in {"dev", "local"} else "/tmp/data"  # nosec B108
 
@@ -37,5 +38,4 @@ tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME)
 # Required credentials are resolved on import from direct environment variables.
 CLIENT_ID: str | None = os.getenv("XERO_CLIENT_ID")
 CLIENT_SECRET: str | None = os.getenv("XERO_CLIENT_SECRET")
-SESSION_FERNET_KEY: str | None = os.getenv("SESSION_FERNET_KEY")
 FLASK_SECRET_KEY: str | None = os.getenv("FLASK_SECRET_KEY")

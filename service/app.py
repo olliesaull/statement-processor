@@ -9,13 +9,15 @@ from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Any
 
+import redis
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from flask_session import Session
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.datastructures import FileStorage
 
-from config import CLIENT_ID, CLIENT_SECRET, FLASK_SECRET_KEY, S3_BUCKET_NAME, SESSION_FERNET_KEY
+from config import CLIENT_ID, CLIENT_SECRET, FLASK_SECRET_KEY, S3_BUCKET_NAME, VALKEY_URL
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
@@ -23,6 +25,7 @@ from core.models import ContactConfig, StatementItem
 from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, PaymentNumberMap, StatementItemPayload, StatementRowsByHeader, StatementRowViewModel, XeroDocumentPayload
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
+from sync import check_load_required, sync_data
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import (
     active_tenant_required,
@@ -47,12 +50,12 @@ from utils.dynamo import (
     set_all_statement_items_completed,
     set_statement_item_completed,
 )
-from utils.encrypted_chunked_session import EncryptedChunkedSessionInterface
 from utils.statement_rows import format_item_type_label as _format_item_type_label
 from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
 from utils.statement_view import build_right_rows, build_row_comparisons, get_date_format_from_config, get_number_separators_from_config, match_invoices_to_statement_items, prepare_display_mappings
 from utils.storage import StatementJSONNotFoundError, fetch_json_statement, is_allowed_pdf, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
 from utils.workflows import start_textraction_state_machine
+from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
@@ -64,18 +67,18 @@ MAX_UPLOAD_MB = os.getenv("MAX_UPLOAD_MB", "10")
 MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB) * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
-_session_cookie_secure = (os.getenv("SESSION_COOKIE_SECURE") or "true").strip().lower() in {"1", "true", "yes", "on"}
-_session_ttl_seconds = int(os.getenv("SESSION_TTL_SECONDS", "900"))
-_session_chunk_size = int(os.getenv("SESSION_COOKIE_CHUNK_SIZE", "3700"))
-_session_max_chunks = int(os.getenv("SESSION_COOKIE_MAX_CHUNKS", "8"))
+# Configure Redis-backed server sessions with only required/useful options.
 app.config.update(
-    SESSION_COOKIE_SECURE=_session_cookie_secure,
+    SESSION_TYPE="redis",
+    SESSION_REDIS=redis.from_url(VALKEY_URL),
+    SESSION_PERMANENT=False,
+    SESSION_USE_SIGNER=True,
+    SESSION_COOKIE_SECURE="true",
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_REFRESH_EACH_REQUEST=True,
-    PERMANENT_SESSION_LIFETIME=timedelta(seconds=_session_ttl_seconds),
+    PERMANENT_SESSION_LIFETIME=timedelta(seconds=1860),
 )
-app.session_interface = EncryptedChunkedSessionInterface(fernet_key=SESSION_FERNET_KEY, ttl_seconds=_session_ttl_seconds, chunk_size=_session_chunk_size, max_chunks=_session_max_chunks)
+Session(app)
 
 
 # Mirror selected config values in Flask app config for convenience
@@ -122,34 +125,11 @@ def _inject_statement_row_palette_css() -> dict[str, Any]:
     return {"statement_row_css_variables": STATEMENT_ROW_CSS_VARIABLES}
 
 
-def _sync_functions() -> tuple[Any, Any]:
-    """Import sync helpers only when sync-related routes are used.
-
-    This keeps public pages from paying Xero SDK import cost during cold start.
-    """
-    from sync import check_load_required, sync_data  # pylint: disable=import-outside-toplevel
-
-    return check_load_required, sync_data
-
-
-def _xero_repository_functions() -> tuple[Any, Any, Any, Any]:
-    """Import Xero data access helpers only for Xero-backed pages."""
-    from xero_repository import (  # pylint: disable=import-outside-toplevel
-        get_contacts,
-        get_credit_notes_by_contact,
-        get_invoices_by_contact,
-        get_payments_by_contact,
-    )
-
-    return get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
-
-
 def _trigger_initial_sync_if_required(tenant_id: str | None) -> None:
     """Kick off an initial load if the tenant has no cached data yet."""
     if not tenant_id:
         return
 
-    check_load_required, sync_data = _sync_functions()
     if check_load_required(tenant_id):
         oauth_token = session.get("xero_oauth2_token")
         if not oauth_token:
@@ -349,7 +329,6 @@ def trigger_tenant_sync(tenant_id: str):
 
     try:
         # Fire-and-forget: sync runs in the background.
-        _, sync_data = _sync_functions()
         _executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token)  # TODO: Perhaps worth checking if there is row in DDB/files in S3
         logger.info("Manual tenant sync triggered", tenant_id=tenant_id)
         return jsonify({"started": True}), 202
@@ -398,7 +377,6 @@ def ignore_favicon():
 
 def _get_active_contacts_for_upload() -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Return active contacts and a name -> ID lookup for the upload form."""
-    get_contacts, _, _, _ = _xero_repository_functions()
     contacts_raw = get_contacts()
     contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
     contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
@@ -1037,7 +1015,6 @@ def statement(statement_id: str):
     display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, contact_config)
 
     # 2) Fetch Xero documents and classify each statement item
-    _, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact = _xero_repository_functions()
     invoices: list[XeroDocumentPayload] = get_invoices_by_contact(contact_id) or []
     credit_notes: list[XeroDocumentPayload] = get_credit_notes_by_contact(contact_id) or []
     payments: list[XeroDocumentPayload] = get_payments_by_contact(contact_id) or []
@@ -1235,7 +1212,6 @@ def configs():
     """Render and update the contact mapping configuration UI."""
     tenant_id = session.get("xero_tenant_id")
 
-    get_contacts, _, _, _ = _xero_repository_functions()
     contacts_raw = get_contacts()
     contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
     contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())

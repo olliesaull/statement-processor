@@ -46,7 +46,7 @@ Preferred comment style:
 ## Project-Specific Documentation Requirements
 
 Update docs when behavior changes in:
-- Route/auth/session behavior (`service/app.py`, `service/utils/auth.py`, `service/utils/encrypted_chunked_session.py`)
+- Route/auth/session behavior (`service/app.py`, `service/config.py`, `service/utils/auth.py`)
 - Extraction contracts (`lambda_functions/textraction_lambda/core/*`)
 - Persistence contracts (DynamoDB item shapes, S3 key layouts, Step Functions payloads)
 - Operator workflows (sync, upload, reconciliation, export)

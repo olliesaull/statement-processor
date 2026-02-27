@@ -6,6 +6,8 @@ from aws_cdk import (
     RemovalPolicy,
     Stack,
 )
+from aws_cdk import aws_apprunner as apprunner
+from aws_cdk import aws_apprunner_alpha as apprunner_alpha
 from aws_cdk import aws_certificatemanager as acm
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
@@ -41,7 +43,7 @@ class StatementProcessorStack(Stack):
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
         S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
         STATIC_ASSETS_BUCKET_NAME = f"dexero-statement-processor-{stage}-assets"
-        WEB_LAMBDA_FUNCTION_NAME = f"statement-processor-web-{stage}"
+        APP_RUNNER_SERVICE_NAME = f"statement-processor-{stage}"
         CLOUDFRONT_ALIASES = ["cloudcathode.com", "www.cloudcathode.com"]
         CLOUDFRONT_CERTIFICATE_ARN = "arn:aws:acm:us-east-1:747310139457:certificate/1e702711-0bd2-4806-b60d-c7ec45b93eac"
         CLOUDFRONT_CACHE_POLICY_ID = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
@@ -54,7 +56,6 @@ class StatementProcessorStack(Stack):
         deploy_secret_env = {
             "XERO_CLIENT_ID": os.getenv("XERO_CLIENT_ID"),
             "XERO_CLIENT_SECRET": os.getenv("XERO_CLIENT_SECRET"),
-            "SESSION_FERNET_KEY": os.getenv("SESSION_FERNET_KEY"),
             "FLASK_SECRET_KEY": os.getenv("FLASK_SECRET_KEY"),
         }
         missing_deploy_secrets = [name for name, value in deploy_secret_env.items() if not value]
@@ -290,49 +291,14 @@ class StatementProcessorStack(Stack):
 
         # endregion ---------- StepFunctions ----------
 
-        # region ---------- WebLambda ----------
+        # region ---------- AppRunner ----------
 
-        web_lambda_log_group = logs.LogGroup(
+        statement_processor_instance_role = iam.Role(
             self,
-            "StatementProcessorWebLambdaLogGroup",
-            retention=log_retention,
-            removal_policy=RemovalPolicy.DESTROY if not is_production else RemovalPolicy.RETAIN,
+            "Statement Processor App Runner Instance Role",
+            assumed_by=iam.ServicePrincipal("tasks.apprunner.amazonaws.com"),
         )
-
-        web_lambda = _lambda.DockerImageFunction(
-            self,
-            "StatementProcessorWebLambda",
-            function_name=WEB_LAMBDA_FUNCTION_NAME,
-            description="Statement processor web app served through Lambda Function URL",
-            code=_lambda.DockerImageCode.from_image_asset(directory="../service"),
-            architecture=_lambda.Architecture.ARM_64,
-            memory_size=1768,
-            timeout=Duration.seconds(30),
-            log_group=web_lambda_log_group,
-            tracing=_lambda.Tracing.ACTIVE,
-            environment={
-                "AWS_LWA_PORT": "8080",
-                "AWS_LWA_ASYNC_INIT": "true",
-                "PYTHONUNBUFFERED": "1",
-                "STAGE": "prod" if is_production else "dev",
-                "DOMAIN_NAME": domain_name,
-                "POWERTOOLS_SERVICE_NAME": "StatementProcessor",
-                "LOG_LEVEL": "DEBUG",
-                "MAX_UPLOAD_MB": "6",
-                "S3_BUCKET_NAME": S3_BUCKET_NAME,
-                "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
-                "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
-                "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
-                "TEXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
-                "XERO_CLIENT_ID": deploy_secret_env["XERO_CLIENT_ID"],
-                "XERO_CLIENT_SECRET": deploy_secret_env["XERO_CLIENT_SECRET"],
-                "SESSION_FERNET_KEY": deploy_secret_env["SESSION_FERNET_KEY"],
-                "FLASK_SECRET_KEY": deploy_secret_env["FLASK_SECRET_KEY"],
-                "XERO_REDIRECT_URI": "https://cloudcathode.com/callback",
-            },
-        )
-
-        web_lambda.add_to_role_policy(
+        statement_processor_instance_role.add_to_policy(
             iam.PolicyStatement(
                 actions=[
                     "cloudwatch:PutMetricData",
@@ -343,19 +309,65 @@ class StatementProcessorStack(Stack):
                 resources=["*"],
             )
         )
-        tenant_statements_table.grant_read_write_data(web_lambda)
-        tenant_contacts_config_table.grant_read_write_data(web_lambda)
-        tenant_data_table.grant_read_write_data(web_lambda)
-        s3_bucket.grant_read_write(web_lambda)
+        tenant_statements_table.grant_read_write_data(statement_processor_instance_role)
+        tenant_contacts_config_table.grant_read_write_data(statement_processor_instance_role)
+        tenant_data_table.grant_read_write_data(statement_processor_instance_role)
+        s3_bucket.grant_read_write(statement_processor_instance_role)
 
-        web_function_url = web_lambda.add_function_url(auth_type=_lambda.FunctionUrlAuthType.AWS_IAM)
+        auto_scaling_configuration = apprunner_alpha.AutoScalingConfiguration(
+            self,
+            "AutoScalingConfiguration",
+            auto_scaling_configuration_name="SingleInstance",
+            max_concurrency=200,
+            max_size=1,
+        )
+
+        apprunner_asset = ecr_assets.DockerImageAsset(self, "AppRunnerImage", directory="../service/")
+        web = apprunner_alpha.Service(
+            self,
+            "Statement Processor Website",
+            instance_role=statement_processor_instance_role,
+            memory=apprunner_alpha.Memory.ONE_GB,
+            cpu=apprunner_alpha.Cpu.QUARTER_VCPU,
+            service_name=APP_RUNNER_SERVICE_NAME,
+            auto_scaling_configuration=auto_scaling_configuration,
+            source=apprunner_alpha.Source.from_asset(
+                asset=apprunner_asset,
+                image_configuration=apprunner_alpha.ImageConfiguration(
+                    port=8080,
+                    environment_variables={
+                        "STAGE": "prod" if is_production else "dev",
+                        "DOMAIN_NAME": domain_name,
+                        "POWERTOOLS_SERVICE_NAME": "StatementProcessor",
+                        "LOG_LEVEL": "DEBUG",
+                        "MAX_UPLOAD_MB": "10",
+                        "S3_BUCKET_NAME": S3_BUCKET_NAME,
+                        "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
+                        "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
+                        "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
+                        "TEXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
+                        "XERO_CLIENT_ID": deploy_secret_env["XERO_CLIENT_ID"],
+                        "XERO_CLIENT_SECRET": deploy_secret_env["XERO_CLIENT_SECRET"],
+                        "FLASK_SECRET_KEY": deploy_secret_env["FLASK_SECRET_KEY"],
+                        "XERO_REDIRECT_URI": "https://cloudcathode.com/callback",
+                    },
+                ),
+            ),
+        )
+
+        cfn_service: apprunner.CfnService = web.node.default_child  # type: ignore[assignment]
+        app_runner_service_domain = cfn_service.attr_service_url
 
         cloudfront_cache_policy = cloudfront.CachePolicy.from_cache_policy_id(self, "StatementProcessorCloudFrontCachePolicy", CLOUDFRONT_CACHE_POLICY_ID)
         cloudfront_origin_request_policy = cloudfront.OriginRequestPolicy.from_origin_request_policy_id(
             self, "StatementProcessorCloudFrontOriginRequestPolicy", CLOUDFRONT_ORIGIN_REQUEST_POLICY_ID
         )
         cloudfront_default_behavior = cloudfront.BehaviorOptions(
-            origin=origins.FunctionUrlOrigin.with_origin_access_control(web_function_url),
+            # App Runner is a custom HTTPS origin; CloudFront OAC is not supported for this origin type.
+            origin=origins.HttpOrigin(
+                app_runner_service_domain,
+                protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+            ),
             viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
             compress=True,
@@ -387,30 +399,60 @@ class StatementProcessorStack(Stack):
             cloudfront_distribution_props["certificate"] = cloudfront_certificate
             cloudfront_distribution_props["domain_names"] = CLOUDFRONT_ALIASES
 
-        cloudfront_distribution = cloudfront.Distribution(self, "StatementProcessorDistribution", **cloudfront_distribution_props)
+        cloudfront.Distribution(self, "StatementProcessorDistribution", **cloudfront_distribution_props)
 
-        # New Function URL permissions require lambda:InvokeFunction in addition to lambda:InvokeFunctionUrl.
-        web_lambda.add_permission(
-            "StatementProcessorWebLambdaInvokeFunctionFromCloudFrontPermission",
-            principal=iam.ServicePrincipal("cloudfront.amazonaws.com"),
-            action="lambda:InvokeFunction",
-            source_arn=cloudfront_distribution.distribution_arn,
-        )
-
-        # endregion ---------- WebLambda ----------
+        # endregion ---------- AppRunner ----------
 
         # region ---------- CloudWatch ----------
 
-        lambda_error_topic = sns.Topic(
+        runtime_error_topic = sns.Topic(
             self,
-            "StatementProcessorLambdaErrorTopic",
-            display_name=f"Statement Processor {stage} Lambda Errors",
+            "StatementProcessorRuntimeErrorTopic",
+            display_name=f"Statement Processor {stage} Runtime Errors",
         )
         for email in NOTIFICATION_EMAILS:
-            lambda_error_topic.add_subscription(subs.EmailSubscription(email))
+            runtime_error_topic.add_subscription(subs.EmailSubscription(email))
+
+        service_id = cfn_service.attr_service_id
+        app_logs_group = logs.LogGroup.from_log_group_name(
+            self,
+            "StatementProcessorAppRunnerApplicationLogs",
+            log_group_name=f"/aws/apprunner/{APP_RUNNER_SERVICE_NAME}/{service_id}/application",
+        )
+
+        app_error_metric_filter = logs.MetricFilter(
+            self,
+            "StatementProcessorAppRunnerErrorMetricFilter",
+            log_group=app_logs_group,
+            filter_pattern=logs.FilterPattern.literal("ERROR"),
+            metric_namespace="StatementProcessorAppRunner/ApplicationLogs",
+            metric_name="ErrorCount",
+            metric_value="1",
+            default_value=0,
+        )
+        app_error_metric_filter.node.add_dependency(cfn_service)
+
+        app_error_metric = cloudwatch.Metric(
+            namespace="StatementProcessorAppRunner/ApplicationLogs",
+            metric_name="ErrorCount",
+            statistic="Sum",
+            period=Duration.minutes(1),
+        )
+
+        app_error_alarm = cloudwatch.Alarm(
+            self,
+            "StatementProcessorAppRunnerErrorAlarm",
+            alarm_name=f"StatementProcessorAppRunnerErrorAlarm-{stage}",
+            metric=app_error_metric,
+            threshold=1,
+            evaluation_periods=1,
+            datapoints_to_alarm=1,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+        app_error_alarm.add_alarm_action(cw_actions.SnsAction(runtime_error_topic))
 
         lambda_alarm_targets: list[tuple[str, logs.ILogGroup]] = [
-            ("StatementProcessorWebLambda", web_lambda_log_group),
             ("TextractionLambda", textraction_log_group),
         ]
 
@@ -447,6 +489,6 @@ class StatementProcessorStack(Stack):
                 comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
                 treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
             )
-            error_alarm.add_alarm_action(cw_actions.SnsAction(lambda_error_topic))
+            error_alarm.add_alarm_action(cw_actions.SnsAction(runtime_error_topic))
 
         # endregion ---------- CloudWatch ----------

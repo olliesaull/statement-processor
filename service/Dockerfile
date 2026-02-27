@@ -1,41 +1,38 @@
-FROM python:3.14-alpine AS builder
+FROM python:3.13-slim AS builder
 
 WORKDIR /app
 
-# Install build dependencies for Python packages with C extensions
-RUN apk add --no-cache gcc musl-dev libffi-dev openssl-dev cargo
+# Install only essential build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies in builder stage
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir --target=/app/packages -r requirements.txt
+    && pip install --no-cache-dir --target=/app/packages -r requirements.txt \
+    && pip install --no-cache-dir --target=/app/packages gunicorn
 
 # Final stage
-FROM python:3.14-alpine
+FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install runtime dependencies only
-RUN apk add --no-cache libffi openssl
-
-# Lambda Web Adapter exposes this containerized Flask app through Lambda + Function URLs.
-COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.0-rc1 /lambda-adapter /opt/extensions/lambda-adapter
-
 # Copy installed packages from builder
-COPY --from=builder /app/packages /usr/local/lib/python3.14/site-packages
+COPY --from=builder /app/packages /usr/local/lib/python3.13/site-packages
 
 # Copy only runtime application code
 COPY app.py config.py logger.py sync.py tenant_data_repository.py xero_repository.py ./
 COPY core/ ./core/
 COPY templates/ ./templates/
+# Keep static assets in all images for environment parity and direct Function URL fallback.
+# CloudFront serves /static/* in production; removing static saves only ~0.15 MB, so we optimize for simplicity.
 COPY static/ ./static/
 COPY utils/ ./utils/
 
 # Pre-compile Python bytecode for faster cold starts
-RUN python3.14 -m compileall -q .
+RUN python3.13 -m compileall -q .
 
 EXPOSE 8080
 
-# Flask dev server is optimal for Lambda Function URLs (single concurrent request per container)
-# Gunicorn would add unnecessary overhead (worker management, pre-fork) for Lambda's execution model
-CMD ["python", "-m", "flask", "run", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python3.13", "-m", "gunicorn", "--bind", "0.0.0.0:8080", "app:app"]

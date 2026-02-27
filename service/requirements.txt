@@ -4,13 +4,14 @@ aws_lambda_powertools
 
 # Web app
 flask
+Flask-Session
 Authlib
 requests
 xero-python
 Flask-WTF
-cryptography
 
 # Other
 pydantic
 dotenv
 openpyxl
+redis

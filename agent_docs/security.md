@@ -26,10 +26,11 @@ Do not change these semantics without updating frontend logic and docs.
 
 ## Session Security Contracts
 
-- Session data is encrypted with Fernet and stored in chunked cookies (`EncryptedChunkedSessionInterface`).
-- Session TTL is enforced at decrypt-time, not only by cookie expiry.
-- Invalid/tampered/missing chunk sets must fail closed and trigger cookie cleanup.
-- Fernet key is loaded from the `SESSION_FERNET_KEY` environment variable (in AWS, `cdk/deploy_stack.sh` pulls it from SSM SecureString before deploy and CDK injects it), never hardcoded.
+- Session state is server-side in Valkey/Redis via Flask-Session (`SESSION_TYPE='redis'`, `SESSION_REDIS=redis.from_url(VALKEY_URL)`).
+- Browser cookies only contain the signed session identifier; OAuth tokens and tenant payloads stay in Redis.
+- `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_HTTPONLY`, and `SESSION_COOKIE_SAMESITE='Lax'` must remain enabled.
+- `SESSION_TTL_SECONDS` sets `PERMANENT_SESSION_LIFETIME`; keep this aligned with expected idle session lifetime.
+- `VALKEY_URL` must target a trusted Redis/Valkey endpoint (ElastiCache in AWS). Do not expose Redis publicly.
 
 ## Upload and Extraction Boundaries
 

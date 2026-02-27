@@ -148,7 +148,7 @@
   - Templates and UI assets: `service/templates/` (Jinja2 views) and `service/static/` (static assets).
   - Configuration + AWS clients: `service/config.py` (environment-variable loading, boto3 clients/resources).
   - Logging: `service/logger.py` (structured logger used across modules).
-  - Session/auth wiring: encrypted chunked cookie session config in `service/app.py` (custom Flask `SessionInterface`, no Flask-Session/Redis/ElastiCache dependency).
+  - Session/auth wiring: Redis-backed server-side sessions in `service/app.py` using Flask-Session + Valkey/ElastiCache.
     - Tenant sync-status checks are read directly from DynamoDB via `service/utils/tenant_status.py` for consistent cross-instance behavior.
 
 - **Main modules/packages**
@@ -209,16 +209,15 @@
     - `/tenants/disconnect` (POST): disconnect tenant from Xero.
     - **Cookie consent gate**: Protected routes and `/login` require the browser cookie `cookie_consent=true`. If consent is missing, UI routes redirect to `/cookies`; API routes return `401` JSON with `{"error": "cookie_consent_required", "redirect": "/cookies"}`.
     - **Session-state UI cookie**: Authenticated UI responses set `session_is_set=true` (short-lived helper cookie) so frontend JavaScript can toggle the final navbar item between `Login` and `Logout` without template-time session checks.
-    - **Encrypted chunked auth-session cookies**:
-      - Backend/session store is `service/utils/encrypted_chunked_session.py`, a custom Flask `SessionInterface` that keeps session state entirely in browser cookies (stateless server runtime).
-      - Session payload is serialized with Flask `TaggedJSONSerializer`, encrypted/authenticated with Fernet, and split into sibling cookies when needed (`session`, `session.1`, `session.2`, ...).
-      - Primary cookie format is `v1.<chunk_count>.<chunk0>`; sibling cookies carry overflow chunks.
-      - `SESSION_TTL_SECONDS` (default `900`) is enforced in two places: cookie `Max-Age` and Fernet decrypt-time TTL validation. Expired payloads are rejected server-side even if the browser still sends a stale cookie.
-      - Cookie controls are configured in `service/app.py`: `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_HTTPONLY=True`, `SESSION_COOKIE_SAMESITE='Lax'`, and `SESSION_REFRESH_EACH_REQUEST=True` for rolling expiry behavior.
-      - Required auth/session secrets (`XERO_CLIENT_ID`, `XERO_CLIENT_SECRET`, `SESSION_FERNET_KEY`, `FLASK_SECRET_KEY`) are now read directly from environment variables in `service/config.py`.
+    - **Server-side auth sessions (Valkey/ElastiCache)**:
+      - Backend/session store now uses Flask-Session with Redis (`SESSION_TYPE='redis'`, `SESSION_REDIS=redis.from_url(VALKEY_URL)`), so browser cookies carry only a signed session identifier while OAuth tokens remain server-side.
+      - The app intentionally uses the same explicit session-config style as Numerint (`app.config[...]` assignments followed by `Session(app)`) for consistency and simpler operational debugging.
+      - `VALKEY_URL` (default `redis://127.0.0.1:6379/0`) is loaded from environment in `service/config.py`; production deployments should point it at the ElastiCache/Valkey endpoint.
+      - Cookie controls remain configured in `service/app.py`: `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_HTTPONLY=True`, `SESSION_COOKIE_SAMESITE='Lax'`, and `SESSION_REFRESH_EACH_REQUEST=True`.
+      - `SESSION_TTL_SECONDS` (default `900`) is still used to set `PERMANENT_SESSION_LIFETIME`.
+      - Required auth/session secrets are now `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET`, and `FLASK_SECRET_KEY` (no `SESSION_FERNET_KEY`).
       - In AWS, `cdk/deploy_stack.sh` resolves those values from SSM secure parameters at deployment and passes them into CDK for Lambda environment injection. This keeps deployment-time secret sourcing while reducing cold-start latency by removing runtime secret fetches.
       - Flask app secret key remains stable across cold starts because it is provided as a fixed environment value rather than generated at runtime.
-      - Invalid/missing/tampered chunk sets and oversized payloads fail closed: session opens empty and cookie family is cleared on response, preventing partial/unsafe recovery.
   - **Misc**
     - `/.well-known/<path>` (GET): returns 204 for DevTools probes.
 

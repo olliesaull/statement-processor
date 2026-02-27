@@ -131,7 +131,6 @@ deploy() {
     echo "Resolving deploy-time secrets from SSM Parameter Store..."
     XERO_CLIENT_ID="$(fetch_secure_parameter "/StatementProcessor/XERO_CLIENT_ID")"
     XERO_CLIENT_SECRET="$(fetch_secure_parameter "/StatementProcessor/XERO_CLIENT_SECRET")"
-    SESSION_FERNET_KEY="$(fetch_secure_parameter "/StatementProcessor/SESSION_FERNET_KEY")"
     FLASK_SECRET_KEY="$(fetch_secure_parameter "/StatementProcessor/FLASK_SECRET_KEY")"
     echo "Deploy-time secrets resolved."
 
@@ -140,7 +139,6 @@ deploy() {
     echo "Deploying stack ${STACK_NAME} with profile ${PROFILE}..."
     XERO_CLIENT_ID="$XERO_CLIENT_ID" \
         XERO_CLIENT_SECRET="$XERO_CLIENT_SECRET" \
-        SESSION_FERNET_KEY="$SESSION_FERNET_KEY" \
         FLASK_SECRET_KEY="$FLASK_SECRET_KEY" \
         cdk deploy "$STACK_NAME" --profile "$PROFILE"
 
