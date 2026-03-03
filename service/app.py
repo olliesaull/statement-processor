@@ -57,6 +57,8 @@ from utils.storage import StatementJSONNotFoundError, fetch_json_statement, is_a
 from utils.workflows import start_textraction_state_machine
 from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
 
+# python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app
+
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 

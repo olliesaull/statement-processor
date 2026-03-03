@@ -218,6 +218,10 @@
       - Required auth/session secrets are now `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET`, and `FLASK_SECRET_KEY` (no `SESSION_FERNET_KEY`).
       - In AWS, `cdk/deploy_stack.sh` resolves those values from SSM secure parameters at deployment and passes them into CDK for Lambda environment injection. This keeps deployment-time secret sourcing while reducing cold-start latency by removing runtime secret fetches.
       - Flask app secret key remains stable across cold starts because it is provided as a fixed environment value rather than generated at runtime.
+      - **Container runtime parity for local development**:
+        - `service/Dockerfile` installs Valkey and uses `service/start.sh` to run Valkey and Gunicorn in one container.
+        - `service/run_as_container.sh` now mirrors the Numerint workflow: it replaces any existing `statement-processor` container, rebuilds, runs on `localhost:8080`, tails logs, and supports `-i/--interactive` shell mode.
+        - Rationale: Flask-Session now depends on a Redis/Valkey backend, so running cache and web process together keeps local execution aligned with App Runner behavior and avoids a second local service to manage.
   - **Misc**
     - `/.well-known/<path>` (GET): returns 204 for DevTools probes.
 

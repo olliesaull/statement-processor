@@ -15,3 +15,4 @@ pydantic
 dotenv
 openpyxl
 redis
+gunicorn
