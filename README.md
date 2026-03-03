@@ -117,6 +117,7 @@
   - `TextractionStateMachine` (`state_machine`): orchestrates `StartTextractDocumentAnalysis` → `WaitForTextract` → `GetTextractStatus` → `ProcessStatement`, with success/failure handling for Textract job status.
 - **App Runner**
   - `Statement Processor Website` (`web`): App Runner service built from `service/` (`AppRunnerImage`) to run the Flask service; uses an instance role to access DynamoDB, S3, Textract, and Step Functions.
+  - Production public-domain settings are configured in `cdk/app.py` (`PROD_DOMAIN_NAME`) and consumed by `cdk/stacks/statement_processor.py` to set CloudFront aliases and the OAuth callback host consistently.
 - **IAM roles and policies**
   - `Statement Processor App Runner Instance Role` (`statement_processor_instance_role`): grants App Runner access to CloudWatch metrics, Textract, and Step Functions; table and S3 permissions are added via grants.
   - Web Lambda runtime no longer requires `ssm:GetParameter`/`kms:Decrypt` for Xero/session secrets; `cdk/deploy_stack.sh` reads SSM secure parameters before deploy and passes them into CDK as deploy-time environment variables for Lambda. This removes per-cold-start SSM/KMS network calls from the Flask service startup path.
@@ -217,6 +218,7 @@
       - `SESSION_TTL_SECONDS` (default `900`) is still used to set `PERMANENT_SESSION_LIFETIME`.
       - Required auth/session secrets are now `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET`, and `FLASK_SECRET_KEY` (no `SESSION_FERNET_KEY`).
       - In AWS, `cdk/deploy_stack.sh` resolves those values from SSM secure parameters at deployment and passes them into CDK for Lambda environment injection. This keeps deployment-time secret sourcing while reducing cold-start latency by removing runtime secret fetches.
+      - In CDK, `XERO_REDIRECT_URI` is derived from the configured stack domain (`https://<domain>/callback`) for prod, and falls back to `http://localhost:8080/callback` outside prod. Rationale: keeping OAuth callbacks on the same public host avoids cross-host session/cookie mismatches.
       - Flask app secret key remains stable across cold starts because it is provided as a fixed environment value rather than generated at runtime.
       - **Container runtime parity for local development**:
         - `service/Dockerfile` installs Valkey and uses `service/start.sh` to run Valkey and Gunicorn in one container.

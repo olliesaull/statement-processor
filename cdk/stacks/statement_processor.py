@@ -37,6 +37,15 @@ class StatementProcessorStack(Stack):
         stage = stage.lower()
         is_production: bool = stage == "prod"
         log_retention = logs.RetentionDays.THREE_MONTHS if is_production else logs.RetentionDays.ONE_WEEK
+        configured_domain = (domain_name or "").strip().lower().removeprefix("https://").removeprefix("http://").strip("/")
+        apex_domain = configured_domain[4:] if configured_domain.startswith("www.") else configured_domain
+        cloudfront_aliases: list[str] = [apex_domain, f"www.{apex_domain}"] if apex_domain else []
+        if is_production and not apex_domain:
+            raise ValueError(
+                "domain_name must be set for prod deployments so CloudFront aliases "
+                "and OAuth callback routing are configured for the public site."
+            )
+        xero_redirect_uri = f"https://{apex_domain}/callback" if apex_domain else "http://localhost:8080/callback"
 
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
@@ -44,7 +53,6 @@ class StatementProcessorStack(Stack):
         S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
         STATIC_ASSETS_BUCKET_NAME = f"dexero-statement-processor-{stage}-assets"
         APP_RUNNER_SERVICE_NAME = f"statement-processor-{stage}"
-        CLOUDFRONT_ALIASES = ["cloudcathode.com", "www.cloudcathode.com"]
         CLOUDFRONT_CERTIFICATE_ARN = "arn:aws:acm:us-east-1:747310139457:certificate/1e702711-0bd2-4806-b60d-c7ec45b93eac"
         CLOUDFRONT_CACHE_POLICY_ID = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
         CLOUDFRONT_ORIGIN_REQUEST_POLICY_ID = "27f26a87-73c7-4734-9f02-b10dbda0774c"
@@ -337,7 +345,7 @@ class StatementProcessorStack(Stack):
                     port=8080,
                     environment_variables={
                         "STAGE": "prod" if is_production else "dev",
-                        "DOMAIN_NAME": domain_name,
+                        "DOMAIN_NAME": apex_domain,
                         "POWERTOOLS_SERVICE_NAME": "StatementProcessor",
                         "LOG_LEVEL": "DEBUG",
                         "MAX_UPLOAD_MB": "10",
@@ -349,7 +357,9 @@ class StatementProcessorStack(Stack):
                         "XERO_CLIENT_ID": deploy_secret_env["XERO_CLIENT_ID"],
                         "XERO_CLIENT_SECRET": deploy_secret_env["XERO_CLIENT_SECRET"],
                         "FLASK_SECRET_KEY": deploy_secret_env["FLASK_SECRET_KEY"],
-                        "XERO_REDIRECT_URI": "https://cloudcathode.com/callback",
+                        # Keep callback host aligned with the configured public domain to avoid
+                        # cross-host session/cookie mismatches during OAuth.
+                        "XERO_REDIRECT_URI": xero_redirect_uri,
                     },
                 ),
             ),
@@ -397,7 +407,7 @@ class StatementProcessorStack(Stack):
         if is_production:
             cloudfront_certificate = acm.Certificate.from_certificate_arn(self, "StatementProcessorCloudFrontCertificate", CLOUDFRONT_CERTIFICATE_ARN)
             cloudfront_distribution_props["certificate"] = cloudfront_certificate
-            cloudfront_distribution_props["domain_names"] = CLOUDFRONT_ALIASES
+            cloudfront_distribution_props["domain_names"] = cloudfront_aliases
 
         cloudfront.Distribution(self, "StatementProcessorDistribution", **cloudfront_distribution_props)
 
