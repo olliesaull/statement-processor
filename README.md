@@ -107,6 +107,8 @@
   - `TenantStatementsTable` (`tenant_statements_table`): statement‑level records; GSIs `TenantIDCompletedIndex` and `TenantIDStatementItemIDIndex` support filtering by completion status and per‑item lookups (see inline comments).
   - `TenantContactsConfigTable` (`tenant_contacts_config_table`): shared table wired into both App Runner and the Textraction Lambda via env vars and IAM grants, so it acts as shared per‑tenant configuration/state (details of contents TODO (needs verification)).
   - `TenantDataTable` (`tenant_data_table`): shared tenant data table wired into both App Runner and the Textraction Lambda via env vars and IAM grants (details of contents TODO (needs verification)).
+  - `TenantTokenLedgerTable` (`tenant_token_ledger_table`): append-only tenant billing ledger table keyed by `TenantID` + `LedgerEntryID`; exposed only to App Runner so future billing/token mutations stay out of the textraction runtime until they are actually needed.
+  - `StripeEventStoreTable` (`stripe_event_store_table`): Stripe webhook idempotency table keyed by `StripeEventID`; exposed only to App Runner because webhook verification and deduplication terminate in the Flask service, not the Textraction Lambda.
 - **S3 bucket**
   - `dexero-statement-processor-{stage}` (`s3_bucket`): shared object store referenced by both App Runner and the Textraction Lambda; includes an explicit bucket policy to allow Textract to read statement PDFs.
 - **Lambda**
@@ -347,6 +349,25 @@
   "LastSyncTime": 1706448896000
 }
 ```
+
+**TenantTokenLedgerTable** (`cdk/stacks/statement_processor.py`)
+- **Keys**
+  - Partition key: `TenantID`
+  - Sort key: `LedgerEntryID`
+- **Concept**
+  - Append-only token/billing audit log for each tenant. The stack intentionally wires this table only into App Runner because billing flows will execute in the Flask service; the Textraction Lambda does not currently need billing-table access.
+- **Planned writers/readers**
+  - Future billing/token services in `service/` will write token grants, reservations, releases, and consumption rows.
+  - Future billing/account pages in `service/` will query tenant ledger history.
+
+**StripeEventStoreTable** (`cdk/stacks/statement_processor.py`)
+- **Keys**
+  - Partition key: `StripeEventID`
+- **Concept**
+  - Webhook idempotency store for Stripe events. Persisting processed event IDs in a dedicated table lets the Flask service safely ignore Stripe retries/replays without widening the Textraction Lambda IAM surface.
+- **Planned writers/readers**
+  - Future Stripe webhook handlers in `service/` will record processed event IDs before applying token grants.
+  - Future billing services in `service/` may read this table for webhook troubleshooting.
 
 ### S3 Layout
 **Bucket**

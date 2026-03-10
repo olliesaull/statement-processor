@@ -50,6 +50,8 @@ class StatementProcessorStack(Stack):
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
+        TENANT_TOKEN_LEDGER_TABLE_NAME = "TenantTokenLedgerTable"
+        STRIPE_EVENT_STORE_TABLE_NAME = "StripeEventStoreTable"
         S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
         STATIC_ASSETS_BUCKET_NAME = f"dexero-statement-processor-{stage}-assets"
         APP_RUNNER_SERVICE_NAME = f"statement-processor-{stage}"
@@ -117,6 +119,25 @@ class StatementProcessorStack(Stack):
             TENANT_DATA_TABLE_NAME,
             table_name=TENANT_DATA_TABLE_NAME,
             partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
+        )
+
+        tenant_token_ledger_table = dynamodb.Table(
+            self,
+            TENANT_TOKEN_LEDGER_TABLE_NAME,
+            table_name=TENANT_TOKEN_LEDGER_TABLE_NAME,
+            partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="LedgerEntryID", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
+        )
+
+        stripe_event_store_table = dynamodb.Table(
+            self,
+            STRIPE_EVENT_STORE_TABLE_NAME,
+            table_name=STRIPE_EVENT_STORE_TABLE_NAME,
+            partition_key=dynamodb.Attribute(name="StripeEventID", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
@@ -320,6 +341,8 @@ class StatementProcessorStack(Stack):
         tenant_statements_table.grant_read_write_data(statement_processor_instance_role)
         tenant_contacts_config_table.grant_read_write_data(statement_processor_instance_role)
         tenant_data_table.grant_read_write_data(statement_processor_instance_role)
+        tenant_token_ledger_table.grant_read_write_data(statement_processor_instance_role)
+        stripe_event_store_table.grant_read_write_data(statement_processor_instance_role)
         s3_bucket.grant_read_write(statement_processor_instance_role)
 
         auto_scaling_configuration = apprunner_alpha.AutoScalingConfiguration(
@@ -353,6 +376,8 @@ class StatementProcessorStack(Stack):
                         "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
                         "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
                         "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
+                        "TENANT_TOKEN_LEDGER_TABLE_NAME": TENANT_TOKEN_LEDGER_TABLE_NAME,
+                        "STRIPE_EVENT_STORE_TABLE_NAME": STRIPE_EVENT_STORE_TABLE_NAME,
                         "TEXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
                         "XERO_CLIENT_ID": deploy_secret_env["XERO_CLIENT_ID"],
                         "XERO_CLIENT_SECRET": deploy_secret_env["XERO_CLIENT_SECRET"],
