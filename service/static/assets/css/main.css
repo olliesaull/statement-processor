@@ -417,7 +417,11 @@ a:focus-visible {
 
 .upload-column-file,
 .upload-column-contact {
-  width: 45%;
+  width: 37%;
+}
+
+.upload-column-pages {
+  width: 16%;
 }
 
 .upload-column-actions {
@@ -425,12 +429,74 @@ a:focus-visible {
 }
 
 .upload-statements-table {
+  background-color: transparent;
   --bs-table-bg: transparent;
+  --bs-table-border-color: transparent;
   --bs-table-striped-bg: transparent;
+}
+
+.upload-statements-table > :not(caption) > * > * {
+  background-color: transparent;
+  box-shadow: inset 0 0 0 9999px transparent;
+  border-bottom-color: transparent;
 }
 
 .upload-statements-table .form-control {
   background-color: var(--bg);
+}
+
+.upload-page-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 7rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background-color: var(--surface);
+  color: var(--secondary);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.upload-page-count[data-page-count-state="counting"] {
+  background-color: #eef4ff;
+  border-color: #c8d5f6;
+  color: var(--primary);
+}
+
+.upload-page-count[data-page-count-state="ready"] {
+  background-color: #eaf7ef;
+  border-color: #b6e3c2;
+  color: #116149;
+}
+
+.upload-page-count[data-page-count-state="error"] {
+  background-color: #fdecec;
+  border-color: #f7c2c2;
+  color: var(--danger);
+}
+
+.upload-page-summary {
+  color: var(--secondary);
+  font-size: 0.92rem;
+}
+
+.upload-preflight-summary {
+  min-height: 1.35rem;
+  font-size: 0.92rem;
+}
+
+.upload-preflight-summary[data-preflight-state="checking"] {
+  color: var(--primary);
+}
+
+.upload-preflight-summary[data-preflight-state="ready"] {
+  color: #116149;
+}
+
+.upload-preflight-summary[data-preflight-state="error"] {
+  color: var(--danger);
 }
 
 .configs-xero-column-example {
@@ -453,6 +519,25 @@ a:focus-visible {
   color: var(--secondary);
   font-size: 0.92rem;
   padding: 0.4rem 0.8rem;
+}
+
+.tenant-token-chip {
+  background-color: #eaf7ef;
+  border-color: #b6e3c2;
+  color: #116149;
+}
+
+.tenant-token-balance {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.5rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid #b6e3c2;
+  border-radius: 999px;
+  background-color: #eaf7ef;
+  color: #116149;
+  font-weight: 600;
 }
 
 .tenant-table tbody tr[data-tenant-status="LOADING"] td,

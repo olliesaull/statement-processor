@@ -52,8 +52,9 @@ from utils.dynamo import (
 )
 from utils.statement_rows import format_item_type_label as _format_item_type_label
 from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
+from utils.statement_upload_validation import build_statement_upload_preflight, build_upload_token_sufficiency, prepare_statement_uploads, validate_upload_payload
 from utils.statement_view import build_right_rows, build_row_comparisons, get_date_format_from_config, get_number_separators_from_config, match_invoices_to_statement_items, prepare_display_mappings
-from utils.storage import StatementJSONNotFoundError, fetch_json_statement, is_allowed_pdf, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
+from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
 from utils.workflows import start_textraction_state_machine
 from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
 
@@ -353,22 +354,34 @@ def index():
 def tenant_management():
     """Render tenant management, consuming one-time messages from session."""
     tenants = session.get("xero_tenants") or []
-    active_tenant_id = session.get("xero_tenant_id")
+    current_tenant_id = session.get("xero_tenant_id")
+    current_tenant = None
+    tenant_ids: list[str] = []
+    for tenant in tenants:
+        if not isinstance(tenant, dict):
+            continue
+        tenant_id = tenant.get("tenantId")
+        if not tenant_id:
+            continue
+        tenant_ids.append(tenant_id)
+        if tenant_id == current_tenant_id:
+            current_tenant = tenant
     # Messages are popped so they only display once.
     message = session.pop("tenant_message", None)
     error = session.pop("tenant_error", None)
 
-    active_tenant = next((t for t in tenants if t.get("tenantId") == active_tenant_id), None)
-    logger.info(
-        "Rendering tenant_management page",
-        active_tenant_id=active_tenant_id,
-        tenants=len(tenants),
-        has_message=bool(message),
-        has_error=bool(error),
-        authenticated=bool(session.get("xero_oauth2_token")),
-    )
+    tenant_token_balances: dict[str, int] = {}
+    try:
+        tenant_token_balances = TenantDataRepository.get_tenant_token_balances(tenant_ids)
+    except Exception as exc:
+        logger.exception("Failed to load tenant token balances", tenant_ids=tenant_ids, error=exc)
 
-    return render_template("tenant_management.html", tenants=tenants, active_tenant_id=active_tenant_id, active_tenant=active_tenant, message=message, error=error)
+    ct_token_balance = tenant_token_balances.get(current_tenant_id, 0) if current_tenant_id else 0
+    logger.info("Rendering tenant_management page", current_tenant_id=current_tenant_id, tenant_ids=tenant_ids, current_tenant_token_balance=ct_token_balance)
+
+    return render_template(
+        "tenant_management.html", tenants=tenants, current_tenant=current_tenant, ct_token_balance=ct_token_balance, tenant_token_balances=tenant_token_balances, message=message, error=error
+    )
 
 
 @app.route("/favicon.ico")
@@ -384,32 +397,6 @@ def _get_active_contacts_for_upload() -> tuple[list[dict[str, Any]], dict[str, s
     contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
     contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
     return contacts_list, contact_lookup
-
-
-def _validate_upload_payload(files: list, names: list[str]) -> bool:
-    """Validate the number of uploaded files and selected contacts."""
-    if not files:
-        logger.info("Upload rejected; no statement files provided.")
-        return False
-    if len(files) != len(names):
-        logger.info("Upload rejected; file count does not match contact selections.")
-        return False
-    return True
-
-
-def _ensure_contact_config(tenant_id: str | None, contact_id: str, contact_name: str, filename: str, error_messages: list[str]) -> bool:
-    """Ensure the contact has a config; on failure, log and append a user-facing error."""
-    try:
-        get_contact_config(tenant_id, contact_id)
-    except KeyError:
-        logger.warning("Upload blocked; contact config missing", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=filename)
-        error_messages.append(f"Contact '{contact_name}' does not have a statement config yet. Please configure it before uploading.")
-        return False
-    except Exception as exc:
-        logger.exception("Upload blocked; config lookup failed", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=filename, error=exc)
-        error_messages.append(f"Could not load the config for '{contact_name}'. Please try again later.")
-        return False
-    return True
 
 
 def _process_statement_upload(tenant_id: str | None, uploaded_file: FileStorage, contact_id: str, contact_name: str) -> str:
@@ -445,6 +432,35 @@ def _process_statement_upload(tenant_id: str | None, uploaded_file: FileStorage,
     return statement_id
 
 
+@app.route("/api/upload-statements/preflight", methods=["POST"])
+@xero_token_required
+@route_handler_logging
+def upload_statements_preflight():
+    """Count uploaded PDF pages on the server before the real upload is submitted."""
+    tenant_id = (session.get("xero_tenant_id") or "").strip()
+    if not tenant_id:
+        logger.info("Upload preflight rejected; tenant missing")
+        return jsonify({"error": "TenantID is required"}), 400
+
+    files = [uploaded_file for uploaded_file in request.files.getlist("statements") if uploaded_file and uploaded_file.filename]
+    if not files:
+        logger.info("Upload preflight rejected; no files supplied", tenant_id=tenant_id)
+        return jsonify({"error": "At least one statement PDF is required"}), 400
+
+    preflight_result = build_statement_upload_preflight(tenant_id, files)
+    logger.info(
+        "Upload preflight evaluated",
+        tenant_id=tenant_id,
+        files=len(preflight_result.files),
+        total_pages=preflight_result.total_pages,
+        available_tokens=preflight_result.available_tokens,
+        sufficient=preflight_result.is_sufficient,
+        can_submit=preflight_result.can_submit,
+        shortfall=preflight_result.shortfall,
+    )
+    return jsonify(preflight_result.to_response_payload()), 200
+
+
 @app.route("/upload-statements", methods=["GET", "POST"])
 @active_tenant_required("Please select a tenant before uploading statements.")
 @xero_token_required
@@ -464,27 +480,29 @@ def upload_statements():
         files = [f for f in request.files.getlist("statements") if f and f.filename]
         names = request.form.getlist("contact_names")
         logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
-        if _validate_upload_payload(files, names):
-            for uploaded_file, contact in zip(files, names, strict=False):
-                if not contact.strip():
-                    logger.info("Missing contact", statement_filename=uploaded_file.filename)
-                    continue
-                if not is_allowed_pdf(uploaded_file.filename, uploaded_file.mimetype):
-                    logger.info("Rejected non-PDF upload", statement_filename=uploaded_file.filename)
-                    continue
+        if validate_upload_payload(files, names):
+            prepared_uploads = prepare_statement_uploads(tenant_id, files, names, contact_lookup, error_messages)
+            if prepared_uploads:
+                token_sufficiency = build_upload_token_sufficiency(tenant_id, prepared_uploads)
 
-                contact_name = contact.strip()
-                contact_id: str | None = contact_lookup.get(contact_name)
-                if not contact_id:
-                    logger.warning("Upload blocked; contact not found", tenant_id=tenant_id, contact_name=contact_name, statement_filename=uploaded_file.filename)
-                    error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")  # nosec B608 - user-facing message only, no SQL execution
-                    continue
-
-                if not _ensure_contact_config(tenant_id, contact_id, contact_name, uploaded_file.filename, error_messages):
-                    continue
-
-                _process_statement_upload(tenant_id=tenant_id, uploaded_file=uploaded_file, contact_id=contact_id, contact_name=contact_name)
-                uploads_ok += 1
+                if token_sufficiency.shortfall:
+                    logger.info(
+                        "Upload blocked; insufficient tokens",
+                        tenant_id=tenant_id,
+                        files=len(prepared_uploads),
+                        total_pages=token_sufficiency.total_pages,
+                        available_tokens=token_sufficiency.available_tokens,
+                        shortfall=token_sufficiency.shortfall,
+                    )
+                    error_messages.append(
+                        "This upload needs "
+                        f"{token_sufficiency.total_pages} tokens but the tenant only has {token_sufficiency.available_tokens} available. "
+                        f"Remove {token_sufficiency.shortfall} page(s) or buy more tokens before uploading."
+                    )
+                else:
+                    for prepared_upload in prepared_uploads:
+                        _process_statement_upload(tenant_id=tenant_id, uploaded_file=prepared_upload.uploaded_file, contact_id=prepared_upload.contact_id, contact_name=prepared_upload.contact_name)
+                        uploads_ok += 1
 
         if uploads_ok:
             success_count = uploads_ok

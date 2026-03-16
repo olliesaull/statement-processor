@@ -14,5 +14,6 @@ Flask-WTF
 pydantic
 dotenv
 openpyxl
+pypdf
 redis
 gunicorn

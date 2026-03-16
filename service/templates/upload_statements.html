@@ -24,7 +24,8 @@
     </div>
   {% endif %}
 
-  <form method="POST" action="{{ url_for('upload_statements') }}" enctype="multipart/form-data" class="content-max-720" id="upload-statements-form">
+  <form method="POST" action="{{ url_for('upload_statements') }}" enctype="multipart/form-data" class="content-max-720" id="upload-statements-form"
+    data-preflight-url="{{ url_for('upload_statements_preflight') }}" data-login-url="{{ url_for('login') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset class="page-panel">
       <table class="table table-sm align-middle upload-statements-table mb-3">
@@ -32,6 +33,7 @@
           <tr>
             <th class="upload-column-file">Statement (PDF)</th>
             <th class="upload-column-contact">Contact</th>
+            <th class="upload-column-pages text-center">Pages (Est.)</th>
             <th class="upload-column-actions"></th>
           </tr>
         </thead>
@@ -43,6 +45,9 @@
             <td>
               <input type="text" name="contact_names" class="form-control contact-input" placeholder="Select contact"
                 list="contacts-list" autocomplete="off" data-automation="statement-upload-contact" required>
+            </td>
+            <td class="text-center">
+              <div class="upload-page-count" data-page-count-state="idle" data-automation="statement-upload-page-count">Select PDF</div>
             </td>
             <td class="text-end">
               <button type="button" class="btn btn-outline-danger btn-sm remove-row"
@@ -59,6 +64,9 @@
         {% endfor %}
       </datalist>
 
+      <p class="upload-page-summary mb-2" id="upload-page-summary" aria-live="polite">No PDFs selected yet.</p>
+      <p class="upload-preflight-summary mb-3" id="upload-preflight-summary" aria-live="polite" data-preflight-state="idle"></p>
+
       <div class="d-flex flex-wrap gap-2">
         <button id="add-row" type="button" class="btn btn-outline-secondary" data-automation="statement-upload-add">Add statement</button>
         <button type="submit" class="btn btn-primary" data-automation="statement-upload-submit">Upload</button>
@@ -67,48 +75,5 @@
   </form>
 </div>
 
-<script>
-  const rowsContainer = document.getElementById("rows");
-  const addRowButton = document.getElementById("add-row");
-
-  function createRow() {
-    const tr = document.createElement('tr');
-
-    tr.innerHTML = `
-        <td>
-          <input type="file"
-                 name="statements"
-                 class="form-control statement-file-input"
-                 accept="application/pdf,.pdf"
-                 data-automation="statement-upload-file"
-                 required>
-        </td>
-        <td>
-          <input type="text"
-                 name="contact_names"
-                 class="form-control contact-input"
-                 placeholder="Select contact"
-                 list="contacts-list"
-                 autocomplete="off"
-                 data-automation="statement-upload-contact"
-                 required>
-        </td>
-        <td class="text-end">
-          <button type="button" class="btn btn-outline-danger btn-sm remove-row" aria-label="Remove row">Remove</button>
-        </td>
-      `;
-    return tr;
-  }
-
-  function handleTableClick(event) {
-    const removeButton = event.target.closest(".remove-row");
-    if (!removeButton) return;
-    removeButton.closest("tr")?.remove();
-  }
-
-  if (addRowButton && rowsContainer) {
-    addRowButton.addEventListener("click", () => rowsContainer.appendChild(createRow()));
-    rowsContainer.addEventListener("click", handleTableClick);
-  }
-</script>
+<script type="module" src="{{ url_for('static', filename='assets/js/upload-statements.js') }}"></script>
 {% endblock %}

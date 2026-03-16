@@ -184,8 +184,9 @@
   - **Core UI**
     - `/` (GET): landing page (`index`).
     - `/cookies` (GET): cookie policy + consent page for essential cookies.
-    - `/tenant_management` (GET): tenant picker/overview (requires Xero auth via `@xero_token_required`).
-    - `/upload-statements` (GET/POST): upload PDFs and trigger textraction (requires tenant + Xero auth, blocks while loading).
+    - `/tenant_management` (GET): tenant picker/overview (requires Xero auth via `@xero_token_required`). The page reads each tenant's `TokenBalance` snapshot from `TenantDataTable` so the current tenant chip and tenant list both show available tokens without recomputing ledger totals in-request.
+    - `/upload-statements` (GET/POST): upload PDFs and trigger textraction (requires tenant + Xero auth, blocks while loading). The page keeps the lightweight client-side page estimate for instant feedback, but the POST handler now also re-counts every accepted PDF on the server and rejects the whole valid batch when its confirmed page total exceeds the tenant's current `TokenBalance`.
+    - `/api/upload-statements/preflight` (POST): authoritative upload validation endpoint used by the upload page before submit. It accepts the currently selected PDFs, counts their pages server-side with `pypdf` (while the browser keeps its own lightweight estimate for instant UX), reads `TenantDataTable.TokenBalance`, and returns per-file counts plus `total_pages`, `available_tokens`, `shortfall`, and `can_submit`. This exists so the UI can warn about insufficient tokens before the final upload request without trusting the browser-only estimate.
     - `/statements` (GET): list and sort statements (requires tenant + Xero auth, blocks while loading).
     - `/statement/<statement_id>` (GET/POST): statement detail view, completion toggles, and XLSX export (requires tenant + Xero auth, blocks while loading).
     - `/statement/<statement_id>/delete` (POST): delete statement + artefacts (requires tenant + Xero auth, blocks while loading).
@@ -335,18 +336,20 @@
 - **Keys**
   - Partition key: `TenantID`
 - **Concept**
-  - Tracks tenant‑level sync status and the last successful sync time.
+  - Tracks tenant‑level sync status, the last successful sync time, and lightweight tenant billing snapshot fields such as `TokenBalance` that the UI can read quickly.
 - **Writers**
   - `service/sync.py:update_tenant_status` (sets `TenantStatus`, `LastSyncTime`).
   - `service/sync.py:check_load_required` (seeds a row with `TenantStatus=LOADING`).
+  - Future billing/token services in `service/` will update `TokenBalance` alongside ledger writes so tenant pages can read a fast balance snapshot.
 - **Readers**
-  - `service/tenant_data_repository.py` and `service/app.py` (tenant status APIs/UI gating).
+  - `service/tenant_data_repository.py` and `service/app.py` (tenant status APIs/UI gating, tenant-management token balance display, and upload preflight token checks).
 - **Example item**:
 ```json
 {
   "TenantID": "<tenant_id>",
   "TenantStatus": "LOADING",
-  "LastSyncTime": 1706448896000
+  "LastSyncTime": 1706448896000,
+  "TokenBalance": 125
 }
 ```
 
