@@ -226,44 +226,14 @@ preflight_multiarch() {
     echo "Multi-arch preflight OK."
 }
 
-fetch_secure_parameter() {
-    # Fetch one decrypted SecureString value from SSM at deploy time.
-    # We pass these into CDK as process env vars because Lambda env vars
-    # cannot use ssm-secure dynamic references directly in CloudFormation.
-    local parameter_name="$1"
-    local value
-
-    if ! value="$(aws ssm get-parameter --name "$parameter_name" --with-decryption --query "Parameter.Value" --output text --region "$AWS_REGION" --profile "$PROFILE")"; then
-        echo "Error: failed to read secure SSM parameter '$parameter_name' for profile '$PROFILE' in region '$AWS_REGION'."
-        exit 1
-    fi
-
-    if [ -z "$value" ]; then
-        echo "Error: SSM parameter '$parameter_name' is empty."
-        exit 1
-    fi
-
-    printf '%s' "$value"
-}
-
 deploy() {
     # Fail fast on local build capability before interacting with CloudFormation.
+    # Secrets are now fetched from SSM at container startup by the Flask app, so
+    # no secret resolution is needed here at deploy time.
     preflight_multiarch
 
-    # Resolve runtime secrets once at deploy time (not at Lambda cold start).
-    echo "Resolving deploy-time secrets from SSM Parameter Store..."
-    XERO_CLIENT_ID="$(fetch_secure_parameter "/StatementProcessor/XERO_CLIENT_ID")"
-    XERO_CLIENT_SECRET="$(fetch_secure_parameter "/StatementProcessor/XERO_CLIENT_SECRET")"
-    FLASK_SECRET_KEY="$(fetch_secure_parameter "/StatementProcessor/FLASK_SECRET_KEY")"
-    echo "Deploy-time secrets resolved."
-
-    # Scope secrets to this single cdk process by using inline env assignment.
-    # This avoids persisting them in shell startup files or global environment.
     echo "Deploying stack ${STACK_NAME} with profile ${PROFILE}..."
-    XERO_CLIENT_ID="$XERO_CLIENT_ID" \
-        XERO_CLIENT_SECRET="$XERO_CLIENT_SECRET" \
-        FLASK_SECRET_KEY="$FLASK_SECRET_KEY" \
-        cdk deploy "$STACK_NAME" --profile "$PROFILE"
+    cdk deploy "$STACK_NAME" --profile "$PROFILE"
 
     # Push static assets after infra/app deploy so CloudFront serves latest files.
     echo "Syncing static assets to s3://${ASSETS_BUCKET_NAME}/static/..."

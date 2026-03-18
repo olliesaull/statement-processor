@@ -1,5 +1,3 @@
-import os
-
 import aws_cdk as cdk
 from aws_cdk import (
     Duration,
@@ -59,23 +57,6 @@ class StatementProcessorStack(Stack):
         CLOUDFRONT_ORIGIN_REQUEST_POLICY_ID = "27f26a87-73c7-4734-9f02-b10dbda0774c"
 
         NOTIFICATION_EMAILS = ["ollie@dotelastic.com", "james@dotelastic.com"]
-
-        # region ---------- ParameterStore ----------
-
-        deploy_secret_env = {
-            "XERO_CLIENT_ID": os.getenv("XERO_CLIENT_ID"),
-            "XERO_CLIENT_SECRET": os.getenv("XERO_CLIENT_SECRET"),
-            "FLASK_SECRET_KEY": os.getenv("FLASK_SECRET_KEY"),
-        }
-        missing_deploy_secrets = [name for name, value in deploy_secret_env.items() if not value]
-        if missing_deploy_secrets:
-            missing_csv = ", ".join(sorted(missing_deploy_secrets))
-            raise ValueError(
-                "Missing deploy-time secret environment variables for CDK synthesis: "
-                f"{missing_csv}. Run cdk/deploy_stack.sh so secrets are resolved from SSM before 'cdk deploy'."
-            )
-
-        # endregion ---------- ParameterStore ----------
 
         # region ---------- DynamoDB ----------
 
@@ -365,6 +346,15 @@ class StatementProcessorStack(Stack):
         tenant_token_ledger_table.grant_read_write_data(statement_processor_instance_role)
         stripe_event_store_table.grant_read_write_data(statement_processor_instance_role)
         s3_bucket.grant_read_write(statement_processor_instance_role)
+        # Allow the running container to fetch Xero OAuth credentials and the Flask
+        # secret key from SSM at startup. Secrets are no longer injected as CloudFormation
+        # environment variables so they are never stored in the stack template.
+        statement_processor_instance_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["ssm:GetParameters"],
+                resources=["arn:aws:ssm:eu-west-1:747310139457:parameter/StatementProcessor/*"],
+            )
+        )
 
         auto_scaling_configuration = apprunner_alpha.AutoScalingConfiguration(
             self,
@@ -408,9 +398,12 @@ class StatementProcessorStack(Stack):
                         "TENANT_TOKEN_LEDGER_TABLE_NAME": TENANT_TOKEN_LEDGER_TABLE_NAME,
                         "STRIPE_EVENT_STORE_TABLE_NAME": STRIPE_EVENT_STORE_TABLE_NAME,
                         "TEXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
-                        "XERO_CLIENT_ID": deploy_secret_env["XERO_CLIENT_ID"],
-                        "XERO_CLIENT_SECRET": deploy_secret_env["XERO_CLIENT_SECRET"],
-                        "FLASK_SECRET_KEY": deploy_secret_env["FLASK_SECRET_KEY"],
+                        # SSM paths for secrets — read at container startup. Storing paths
+                        # (not values) here means changing a secret only requires an SSM
+                        # update, not a CDK redeploy.
+                        "XERO_CLIENT_ID_SSM_PATH": "/StatementProcessor/XERO_CLIENT_ID",
+                        "XERO_CLIENT_SECRET_SSM_PATH": "/StatementProcessor/XERO_CLIENT_SECRET",
+                        "FLASK_SECRET_KEY_SSM_PATH": "/StatementProcessor/FLASK_SECRET_KEY",
                     },
                 ),
             ),
