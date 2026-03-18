@@ -26,7 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /app/packages /usr/local/lib/python3.13/site-packages
 
 # Copy only runtime application code.
-COPY app.py config.py logger.py sync.py tenant_data_repository.py xero_repository.py ./
+# Copy every top-level Python module so new service modules are not accidentally
+# omitted from the container image during future refactors.
+COPY ./*.py ./
 COPY core/ ./core/
 COPY templates/ ./templates/
 # Keep static assets in all images for environment parity and direct Function URL fallback.

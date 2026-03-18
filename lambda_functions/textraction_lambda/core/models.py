@@ -31,6 +31,7 @@ class TextractionEvent(BaseModel):
     pdf_key: str = Field(alias="pdfKey")
     json_key: str = Field(alias="jsonKey")
     pdf_bucket: str | None = Field(default=None, alias="pdfBucket")
+    textract_status: str | None = Field(default=None, alias="textractStatus")
 
 
 class ContactConfig(BaseModel):

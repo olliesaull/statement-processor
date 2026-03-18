@@ -37,3 +37,6 @@ Makefile
 run_as_container.sh
 architecture-diagram.md
 update_dependencies.sh
+
+# Local control sockets
+gunicorn.ctl

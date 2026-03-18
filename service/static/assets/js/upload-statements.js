@@ -1,3 +1,5 @@
+import { appendCsrfTokenToFormData } from "./csrf.js";
+
 const uploadForm = document.getElementById("upload-statements-form");
 const rowsContainer = document.getElementById("rows");
 const addRowButton = document.getElementById("add-row");
@@ -51,16 +53,6 @@ function createRow() {
       </td>
     `;
   return tr;
-}
-
-function getCsrfToken() {
-  const hiddenInput = uploadForm ? uploadForm.querySelector('input[name="csrf_token"]') : null;
-  if (hiddenInput instanceof HTMLInputElement && hiddenInput.value) {
-    return hiddenInput.value;
-  }
-
-  const meta = document.querySelector('meta[name="csrf-token"]');
-  return meta ? meta.getAttribute("content") || "" : "";
 }
 
 function getSelectedFileEntries() {
@@ -278,6 +270,7 @@ async function redirectForUnauthorizedResponse(response) {
 
 function buildPreflightRequest(entries) {
   const formData = new FormData();
+  appendCsrfTokenToFormData(formData, uploadForm || document);
   entries.forEach(({ file }) => {
     formData.append("statements", file);
   });
@@ -332,7 +325,6 @@ async function runPreflight() {
       method: "POST",
       headers: {
         Accept: "application/json",
-        "X-CSRFToken": getCsrfToken(),
       },
       body: buildPreflightRequest(entries),
       credentials: "same-origin",

@@ -45,11 +45,10 @@ class StatementProcessorStack(Stack):
                 "domain_name must be set for prod deployments so CloudFront aliases "
                 "and OAuth callback routing are configured for the public site."
             )
-        xero_redirect_uri = f"https://{apex_domain}/callback" if apex_domain else "http://localhost:8080/callback"
-
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
+        TENANT_BILLING_TABLE_NAME = "TenantBillingTable"
         TENANT_TOKEN_LEDGER_TABLE_NAME = "TenantTokenLedgerTable"
         STRIPE_EVENT_STORE_TABLE_NAME = "StripeEventStoreTable"
         S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
@@ -118,6 +117,15 @@ class StatementProcessorStack(Stack):
             self,
             TENANT_DATA_TABLE_NAME,
             table_name=TENANT_DATA_TABLE_NAME,
+            partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
+        )
+
+        tenant_billing_table = dynamodb.Table(
+            self,
+            TENANT_BILLING_TABLE_NAME,
+            table_name=TENANT_BILLING_TABLE_NAME,
             partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
@@ -204,6 +212,8 @@ class StatementProcessorStack(Stack):
                 "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
                 "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
                 "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
+                "TENANT_BILLING_TABLE_NAME": TENANT_BILLING_TABLE_NAME,
+                "TENANT_TOKEN_LEDGER_TABLE_NAME": TENANT_TOKEN_LEDGER_TABLE_NAME,
             },
         )
 
@@ -217,6 +227,8 @@ class StatementProcessorStack(Stack):
         tenant_statements_table.grant_read_write_data(textraction_lambda)
         tenant_contacts_config_table.grant_read_write_data(textraction_lambda)
         tenant_data_table.grant_read_write_data(textraction_lambda)
+        tenant_billing_table.grant_read_write_data(textraction_lambda)
+        tenant_token_ledger_table.grant_read_write_data(textraction_lambda)
         s3_bucket.grant_read_write(textraction_lambda)
 
         # endregion ---------- Lambda ----------
@@ -276,10 +288,17 @@ class StatementProcessorStack(Stack):
                     "s3Bucket": sfn.JsonPath.string_at("$.s3Bucket"),
                     "pdfKey": sfn.JsonPath.string_at("$.pdfKey"),
                     "jsonKey": sfn.JsonPath.string_at("$.jsonKey"),
+                    "textractStatus": sfn.JsonPath.string_at("$.textractStatus.JobStatus"),
                 }
             ),
             result_path="$.lambdaResult",
         )
+
+        workflow_succeeded = sfn.Succeed(self, "StatementProcessed")
+        workflow_failed = sfn.Fail(self, "StatementProcessingFailed")
+        process_statement_outcome = sfn.Choice(self, "DidStatementProcessingSucceed?")
+        process_statement_outcome.when(sfn.Condition.string_equals("$.lambdaResult.Payload.status", "ok"), workflow_succeeded)
+        process_statement_outcome.otherwise(workflow_failed)
 
         textract_finished = sfn.Choice(self, "IsTextractFinished?")
         textract_finished.when(
@@ -292,10 +311,11 @@ class StatementProcessorStack(Stack):
         )
         textract_finished.when(
             sfn.Condition.string_equals("$.textractStatus.JobStatus", "FAILED"),
-            sfn.Fail(self, "TextractFailed"),
+            process_statement,
         )
         textract_finished.otherwise(wait_for_textract)
 
+        process_statement.next(process_statement_outcome)
         wait_for_textract.next(get_textract_status)
         get_textract_status.next(textract_finished)
         start_textract.next(wait_for_textract)
@@ -341,6 +361,7 @@ class StatementProcessorStack(Stack):
         tenant_statements_table.grant_read_write_data(statement_processor_instance_role)
         tenant_contacts_config_table.grant_read_write_data(statement_processor_instance_role)
         tenant_data_table.grant_read_write_data(statement_processor_instance_role)
+        tenant_billing_table.grant_read_write_data(statement_processor_instance_role)
         tenant_token_ledger_table.grant_read_write_data(statement_processor_instance_role)
         stripe_event_store_table.grant_read_write_data(statement_processor_instance_role)
         s3_bucket.grant_read_write(statement_processor_instance_role)
@@ -358,10 +379,17 @@ class StatementProcessorStack(Stack):
             self,
             "Statement Processor Website",
             instance_role=statement_processor_instance_role,
-            memory=apprunner_alpha.Memory.ONE_GB,
-            cpu=apprunner_alpha.Cpu.QUARTER_VCPU,
+            memory=apprunner_alpha.Memory.TWO_GB,
+            cpu=apprunner_alpha.Cpu.HALF_VCPU,
             service_name=APP_RUNNER_SERVICE_NAME,
             auto_scaling_configuration=auto_scaling_configuration,
+            health_check=apprunner_alpha.HealthCheck.http(
+                path="/healthz",
+                interval=Duration.seconds(10),
+                timeout=Duration.seconds(5),
+                healthy_threshold=1,
+                unhealthy_threshold=5,
+            ),
             source=apprunner_alpha.Source.from_asset(
                 asset=apprunner_asset,
                 image_configuration=apprunner_alpha.ImageConfiguration(
@@ -376,15 +404,13 @@ class StatementProcessorStack(Stack):
                         "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
                         "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
                         "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
+                        "TENANT_BILLING_TABLE_NAME": TENANT_BILLING_TABLE_NAME,
                         "TENANT_TOKEN_LEDGER_TABLE_NAME": TENANT_TOKEN_LEDGER_TABLE_NAME,
                         "STRIPE_EVENT_STORE_TABLE_NAME": STRIPE_EVENT_STORE_TABLE_NAME,
                         "TEXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
                         "XERO_CLIENT_ID": deploy_secret_env["XERO_CLIENT_ID"],
                         "XERO_CLIENT_SECRET": deploy_secret_env["XERO_CLIENT_SECRET"],
                         "FLASK_SECRET_KEY": deploy_secret_env["FLASK_SECRET_KEY"],
-                        # Keep callback host aligned with the configured public domain to avoid
-                        # cross-host session/cookie mismatches during OAuth.
-                        "XERO_REDIRECT_URI": xero_redirect_uri,
                     },
                 ),
             ),

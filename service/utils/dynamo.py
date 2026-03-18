@@ -2,7 +2,6 @@
 
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 from typing import Any
 
 from boto3.dynamodb.conditions import Attr, Key
@@ -201,28 +200,3 @@ def delete_statement_data(tenant_id: str, statement_id: str) -> None:
             raise
 
     logger.info("Statement deletion complete", tenant_id=tenant_id, statement_id=statement_id, items_deleted=deleted_items, s3_objects=len(s3_keys))
-
-
-def add_statement_to_table(tenant_id: str, entry: dict[str, str]) -> None:
-    """Persist a new statement record in DynamoDB."""
-    item = {
-        "TenantID": tenant_id,
-        "StatementID": entry["statement_id"],
-        "OriginalStatementFilename": entry["statement_name"],
-        "ContactID": entry["contact_id"],
-        "ContactName": entry["contact_name"],
-        # Store upload time in UTC for sorting/filtering
-        "UploadedAt": datetime.now(UTC).replace(microsecond=0).isoformat(),
-        "Completed": "false",
-        "RecordType": "statement",
-    }
-    try:
-        # Ensure we don't overwrite an existing statement for this tenant.
-        # NOTE: Table key schema is (TenantID, StatementID). Using StatementID here is intentional.
-        tenant_statements_table.put_item(Item=item, ConditionExpression=Attr("StatementID").not_exists())
-        logger.info("Statement added to table", tenant_id=tenant_id, statement_id=entry["statement_id"], contact_id=entry.get("contact_id"))
-    except ClientError as e:
-        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            # Using single-quotes to simplify nested quotes in f-string
-            raise ValueError(f"Statement {entry['statement_name']} already exists") from e
-        raise

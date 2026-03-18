@@ -12,7 +12,7 @@ from werkzeug.datastructures import FileStorage
 
 from core.get_contact_config import get_contact_config
 from logger import logger
-from tenant_data_repository import TenantDataRepository
+from tenant_billing_repository import TenantBillingRepository
 from utils.pdf_page_count import PDFPageCountError, count_pdf_pages
 from utils.storage import is_allowed_pdf
 
@@ -67,20 +67,6 @@ class PreparedStatementUpload:
     page_count: int
 
 
-@dataclass(frozen=True)
-class UploadTokenSufficiencyResult:
-    """Token sufficiency summary for a validated upload batch."""
-
-    total_pages: int
-    available_tokens: int
-    shortfall: int
-
-    @property
-    def is_sufficient(self) -> bool:
-        """Return whether the current tenant balance covers the batch pages."""
-        return self.shortfall == 0
-
-
 def validate_upload_payload(files: list[FileStorage], names: list[str]) -> bool:
     """Validate the number of uploaded files and selected contacts."""
     if not files:
@@ -111,7 +97,7 @@ def build_statement_upload_preflight(tenant_id: str | None, files: list[FileStor
     """Count pages for the current batch and compare it with the tenant balance."""
     file_results = [count_uploaded_pdf_pages(tenant_id, uploaded_file) for uploaded_file in files]
     total_pages = sum(result.page_count or 0 for result in file_results)
-    available_tokens = TenantDataRepository.get_tenant_token_balance(tenant_id)
+    available_tokens = TenantBillingRepository.get_tenant_token_balance(tenant_id)
     shortfall = max(total_pages - available_tokens, 0)
     is_sufficient = total_pages <= available_tokens
     has_errors = any(result.error for result in file_results)
@@ -124,14 +110,6 @@ def build_statement_upload_preflight(tenant_id: str | None, files: list[FileStor
         can_submit=bool(file_results) and not has_errors and is_sufficient,
         shortfall=shortfall,
     )
-
-
-def build_upload_token_sufficiency(tenant_id: str | None, prepared_uploads: list[PreparedStatementUpload]) -> UploadTokenSufficiencyResult:
-    """Calculate whether a validated upload batch fits within the tenant balance."""
-    total_pages = sum(upload.page_count for upload in prepared_uploads)
-    available_tokens = TenantDataRepository.get_tenant_token_balance(tenant_id)
-    shortfall = max(total_pages - available_tokens, 0)
-    return UploadTokenSufficiencyResult(total_pages=total_pages, available_tokens=available_tokens, shortfall=shortfall)
 
 
 def _ensure_contact_config(tenant_id: str | None, contact_id: str, contact_name: str, filename: str, error_messages: list[str]) -> bool:

@@ -3,7 +3,6 @@
 import json
 import os
 import secrets
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from io import BytesIO
@@ -14,10 +13,10 @@ from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
-from flask_wtf.csrf import CSRFProtect
-from werkzeug.datastructures import FileStorage
+from flask_wtf.csrf import CSRFError, CSRFProtect
 
-from config import CLIENT_ID, CLIENT_SECRET, FLASK_SECRET_KEY, S3_BUCKET_NAME, VALKEY_URL
+from billing_service import BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
+from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, S3_BUCKET_NAME, STAGE, VALKEY_URL
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
@@ -26,6 +25,7 @@ from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, Paymen
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
 from sync import check_load_required, sync_data
+from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import (
     active_tenant_required,
@@ -39,7 +39,6 @@ from utils.auth import (
     xero_token_required,
 )
 from utils.dynamo import (
-    add_statement_to_table,
     delete_statement_data,
     get_completed_statements,
     get_incomplete_statements,
@@ -52,7 +51,7 @@ from utils.dynamo import (
 )
 from utils.statement_rows import format_item_type_label as _format_item_type_label
 from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
-from utils.statement_upload_validation import build_statement_upload_preflight, build_upload_token_sufficiency, prepare_statement_uploads, validate_upload_payload
+from utils.statement_upload_validation import PreparedStatementUpload, build_statement_upload_preflight, prepare_statement_uploads, validate_upload_payload
 from utils.statement_view import build_right_rows, build_row_comparisons, get_date_format_from_config, get_number_separators_from_config, match_invoices_to_statement_items, prepare_display_mappings
 from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
 from utils.workflows import start_textraction_state_machine
@@ -76,11 +75,12 @@ app.config.update(
     SESSION_REDIS=redis.from_url(VALKEY_URL),
     SESSION_PERMANENT=False,
     SESSION_USE_SIGNER=True,
-    SESSION_COOKIE_SECURE="true",
+    SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     PERMANENT_SESSION_LIFETIME=timedelta(seconds=1860),
 )
+
 Session(app)
 
 
@@ -89,7 +89,6 @@ app.config["CLIENT_ID"] = CLIENT_ID
 app.config["CLIENT_SECRET"] = CLIENT_SECRET
 
 XERO_OIDC_METADATA_URL = os.getenv("XERO_OIDC_METADATA_URL", "https://identity.xero.com/.well-known/openid-configuration")
-REDIRECT_URI = os.getenv("XERO_REDIRECT_URI")
 
 oauth = OAuth(app)
 oauth.register(
@@ -111,6 +110,42 @@ DECIMAL_SEPARATOR_OPTIONS = [(".", "Dot (.)"), (",", "Comma (,)")]
 THOUSANDS_SEPARATOR_OPTIONS = [("", "None"), (",", "Comma (,)"), (".", "Dot (.)"), (" ", "Space ( )"), ("'", "Apostrophe (')")]
 DECIMAL_SEPARATOR_VALUES = {opt[0] for opt in DECIMAL_SEPARATOR_OPTIONS}
 THOUSANDS_SEPARATOR_VALUES = {opt[0] for opt in THOUSANDS_SEPARATOR_OPTIONS}
+
+
+class StatementUploadStartError(RuntimeError):
+    """Raised when a reserved statement cannot be handed off to processing."""
+
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(error: CSRFError):
+    """Log CSRF failures with request context and return API-safe JSON.
+
+    The upload preflight and tenant sync flows both use JavaScript ``fetch``
+    requests. When Flask-WTF rejects those requests, its default HTML 400
+    response gives the frontend very little to work with. This handler keeps
+    browser routes simple while making API failures explicit and diagnosable.
+    """
+    session_cookie_name = app.config.get("SESSION_COOKIE_NAME", "session")
+    logger.warning(
+        "CSRF validation failed",
+        path=request.path,
+        method=request.method,
+        host=request.host,
+        origin=request.headers.get("Origin"),
+        referer=request.headers.get("Referer"),
+        content_type=request.content_type,
+        content_length=request.content_length,
+        csrf_error=error.description,
+        csrf_header_present=bool(request.headers.get("X-CSRFToken")),
+        csrf_form_token_present=bool(request.form.get("csrf_token")),
+        cookie_header_present=bool(request.headers.get("Cookie")),
+        session_cookie_present=session_cookie_name in request.cookies,
+    )
+
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "csrf_validation_failed", "message": "Security validation failed. Refresh the page and try again."}), 400
+
+    return "Security validation failed. Refresh the page and try again.", 400
 
 
 @app.context_processor
@@ -166,6 +201,19 @@ def _normalize_thousands_separator(value: str | None) -> str:
     if value in THOUSANDS_SEPARATOR_VALUES:
         return value if value is not None else DEFAULT_THOUSANDS_SEPARATOR
     return DEFAULT_THOUSANDS_SEPARATOR
+
+
+def _absolute_app_url(path: str) -> str:
+    """Build an absolute application URL from the configured public hostname.
+
+    This mirrors Numerint's simpler Python-side host handling: local
+    development uses ``http://localhost:<port>``, while non-local stages always
+    generate ``https://<DOMAIN_NAME>`` URLs.
+    """
+    if STAGE == "local":
+        local_port = os.getenv("PORT", "8080")
+        return f"http://{DOMAIN_NAME}:{local_port}{path}"
+    return f"https://{DOMAIN_NAME}{path}"
 
 
 def _build_config_rows(cfg: ContactConfig) -> list[dict[str, Any]]:
@@ -348,6 +396,12 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/healthz")
+def healthz():
+    """Return a minimal unauthenticated liveness response for App Runner."""
+    return "", 200
+
+
 @app.route("/tenant_management")
 @route_handler_logging
 @xero_token_required
@@ -372,7 +426,7 @@ def tenant_management():
 
     tenant_token_balances: dict[str, int] = {}
     try:
-        tenant_token_balances = TenantDataRepository.get_tenant_token_balances(tenant_ids)
+        tenant_token_balances = TenantBillingRepository.get_tenant_token_balances(tenant_ids)
     except Exception as exc:
         logger.exception("Failed to load tenant token balances", tenant_ids=tenant_ids, error=exc)
 
@@ -399,37 +453,114 @@ def _get_active_contacts_for_upload() -> tuple[list[dict[str, Any]], dict[str, s
     return contacts_list, contact_lookup
 
 
-def _process_statement_upload(tenant_id: str | None, uploaded_file: FileStorage, contact_id: str, contact_name: str) -> str:
-    """Upload the PDF, register the statement, and kick off textraction."""
-    file_bytes = getattr(uploaded_file, "content_length", None)
-    statement_id = str(uuid.uuid4())
-    logger.info(
-        "Preparing statement upload", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_id=statement_id, statement_filename=uploaded_file.filename, bytes=file_bytes
-    )
+def _process_statement_upload(tenant_id: str | None, reserved_upload: ReservedStatementUpload) -> str:
+    """Upload a reserved statement PDF and kick off textraction.
 
-    entry = {"statement_id": statement_id, "statement_name": uploaded_file.filename, "contact_name": contact_name, "contact_id": contact_id}
+    Args:
+        tenant_id: Active Xero tenant.
+        reserved_upload: Upload row that already has a statement id and token reservation.
+
+    Returns:
+        The statement id linked to the upload.
+
+    Raises:
+        StatementUploadStartError: S3 upload or workflow startup failed after reservation.
+    """
+    file_bytes = getattr(reserved_upload.uploaded_file, "content_length", None)
+    statement_id = reserved_upload.statement_id
+    logger.info(
+        "Preparing statement upload",
+        tenant_id=tenant_id,
+        contact_id=reserved_upload.contact_id,
+        contact_name=reserved_upload.contact_name,
+        statement_id=statement_id,
+        statement_filename=reserved_upload.uploaded_file.filename,
+        bytes=file_bytes,
+    )
 
     # Upload PDF to S3 first so downstream processing can read it.
     pdf_statement_key = statement_pdf_s3_key(tenant_id, statement_id)
-    upload_statement_to_s3(fs_like=uploaded_file, key=pdf_statement_key)
-    logger.info("Uploaded statement PDF", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, s3_key=pdf_statement_key)
-
-    # Persist statement metadata to DynamoDB.
-    add_statement_to_table(tenant_id, entry)
-    logger.info("Statement submitted and metadata registered", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, table_entry=entry)
+    try:
+        upload_statement_to_s3(fs_like=reserved_upload.uploaded_file, key=pdf_statement_key)
+        logger.info("Uploaded statement PDF", tenant_id=tenant_id, contact_id=reserved_upload.contact_id, statement_id=statement_id, s3_key=pdf_statement_key)
+    except Exception as exc:
+        logger.exception("Failed to upload reserved statement PDF", tenant_id=tenant_id, contact_id=reserved_upload.contact_id, statement_id=statement_id, s3_key=pdf_statement_key, error=exc)
+        raise StatementUploadStartError("The statement PDF could not be uploaded.") from exc
 
     # Kick off background textraction so it's ready by the time the user views it.
     json_statement_key = statement_json_s3_key(tenant_id, statement_id)
-    started = start_textraction_state_machine(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
+    started = start_textraction_state_machine(tenant_id=tenant_id, contact_id=reserved_upload.contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
 
-    log_kwargs = {"tenant_id": tenant_id, "contact_id": contact_id, "statement_id": statement_id, "pdf_key": pdf_statement_key, "json_key": json_statement_key}
+    log_kwargs = {"tenant_id": tenant_id, "contact_id": reserved_upload.contact_id, "statement_id": statement_id, "pdf_key": pdf_statement_key, "json_key": json_statement_key}
 
     if started:
         logger.info("Started textraction workflow", **log_kwargs)
     else:
         logger.error("Failed to start textraction workflow", **log_kwargs)
+        raise StatementUploadStartError("The statement workflow could not be started.")
 
     return statement_id
+
+
+def _handle_reserved_upload_failure(tenant_id: str | None, reserved_upload: ReservedStatementUpload, exc: Exception, error_messages: list[str]) -> None:
+    """Release tokens and clean up statement data after upload-start failure."""
+    logger.exception("Upload failed after token reservation; releasing tokens", tenant_id=tenant_id, statement_id=reserved_upload.statement_id, contact_id=reserved_upload.contact_id, error=exc)
+
+    release_succeeded = False
+    try:
+        release_succeeded = BillingService.release_statement_reservation(tenant_id, reserved_upload.statement_id)
+    except BillingServiceError as release_exc:
+        logger.exception("Failed to release reserved tokens after upload-start failure", tenant_id=tenant_id, statement_id=reserved_upload.statement_id, error=release_exc)
+
+    filename = reserved_upload.uploaded_file.filename or "Unnamed PDF"
+    if not release_succeeded:
+        error_messages.append(f"{filename}: The upload was not started and token recovery needs operator attention.")
+        return
+
+    try:
+        delete_statement_data(tenant_id, reserved_upload.statement_id)
+    except Exception as cleanup_exc:
+        logger.exception("Failed to clean up statement after upload-start failure", tenant_id=tenant_id, statement_id=reserved_upload.statement_id, error=cleanup_exc)
+
+    error_messages.append(f"{filename}: The upload was not started. Any reserved tokens were returned.")
+
+
+def _reserve_statement_uploads(tenant_id: str | None, prepared_uploads: list[PreparedStatementUpload], error_messages: list[str]) -> list[ReservedStatementUpload]:
+    """Reserve tokens for a validated batch and collect user-facing errors."""
+    try:
+        return BillingService.reserve_statement_uploads(tenant_id, prepared_uploads)
+    except InsufficientTokensError:
+        logger.info("Upload blocked; token reservation failed due to insufficient balance", tenant_id=tenant_id, files=len(prepared_uploads))
+        error_messages.append("The tenant no longer has enough available tokens for this upload. Refresh the page, remove some PDFs, or buy more tokens before trying again.")
+    except BillingServiceError as exc:
+        logger.exception("Upload blocked; token reservation failed", tenant_id=tenant_id, files=len(prepared_uploads), error=exc)
+        error_messages.append("Could not reserve tokens for this upload. Please try again.")
+    return []
+
+
+def _handle_upload_statements_post(tenant_id: str | None, *, contact_lookup: dict[str, str], error_messages: list[str]) -> int:
+    """Validate, reserve, and start workflow processing for one upload POST."""
+    files = [f for f in request.files.getlist("statements") if f and f.filename]
+    names = request.form.getlist("contact_names")
+    logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
+
+    if not validate_upload_payload(files, names):
+        return 0
+
+    prepared_uploads = prepare_statement_uploads(tenant_id, files, names, contact_lookup, error_messages)
+    if not prepared_uploads:
+        return 0
+
+    reserved_uploads = _reserve_statement_uploads(tenant_id, prepared_uploads, error_messages)
+    uploads_ok = 0
+    for reserved_upload in reserved_uploads:
+        try:
+            _process_statement_upload(tenant_id=tenant_id, reserved_upload=reserved_upload)
+            uploads_ok += 1
+        except StatementUploadStartError as exc:
+            _handle_reserved_upload_failure(tenant_id, reserved_upload, exc, error_messages)
+
+    return uploads_ok
 
 
 @app.route("/api/upload-statements/preflight", methods=["POST"])
@@ -477,32 +608,7 @@ def upload_statements():
 
     uploads_ok = 0
     if request.method == "POST":
-        files = [f for f in request.files.getlist("statements") if f and f.filename]
-        names = request.form.getlist("contact_names")
-        logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
-        if validate_upload_payload(files, names):
-            prepared_uploads = prepare_statement_uploads(tenant_id, files, names, contact_lookup, error_messages)
-            if prepared_uploads:
-                token_sufficiency = build_upload_token_sufficiency(tenant_id, prepared_uploads)
-
-                if token_sufficiency.shortfall:
-                    logger.info(
-                        "Upload blocked; insufficient tokens",
-                        tenant_id=tenant_id,
-                        files=len(prepared_uploads),
-                        total_pages=token_sufficiency.total_pages,
-                        available_tokens=token_sufficiency.available_tokens,
-                        shortfall=token_sufficiency.shortfall,
-                    )
-                    error_messages.append(
-                        "This upload needs "
-                        f"{token_sufficiency.total_pages} tokens but the tenant only has {token_sufficiency.available_tokens} available. "
-                        f"Remove {token_sufficiency.shortfall} page(s) or buy more tokens before uploading."
-                    )
-                else:
-                    for prepared_upload in prepared_uploads:
-                        _process_statement_upload(tenant_id=tenant_id, uploaded_file=prepared_upload.uploaded_file, contact_id=prepared_upload.contact_id, contact_name=prepared_upload.contact_name)
-                        uploads_ok += 1
+        uploads_ok = _handle_upload_statements_post(tenant_id, contact_lookup=contact_lookup, error_messages=error_messages)
 
         if uploads_ok:
             success_count = uploads_ok
@@ -643,6 +749,11 @@ def statements():
 def delete_statement(statement_id: str):
     """Delete the statement and redirect back to the list view."""
     tenant_id = session.get("xero_tenant_id")
+    record = get_statement_record(tenant_id, statement_id)
+    if record and str(record.get("TokenReservationStatus") or "").strip().lower() == "reserved":
+        logger.info("Delete rejected; statement still processing", tenant_id=tenant_id, statement_id=statement_id)
+        session["tenant_error"] = "This statement is still processing and cannot be deleted yet."
+        return redirect(url_for("statements"))
 
     try:
         delete_statement_data(tenant_id, statement_id)
@@ -1023,9 +1134,33 @@ def statement(statement_id: str):
     try:
         data = fetch_json_statement(tenant_id=tenant_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
     except StatementJSONNotFoundError:
+        reservation_status = str(record.get("TokenReservationStatus") or "").strip().lower()
+        if reservation_status == "released":
+            logger.info("Statement processing failed; JSON missing after release", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
+            return render_template(
+                "statement.html",
+                is_processing=False,
+                processing_failed=True,
+                incomplete_count=0,
+                completed_count=0,
+                all_statement_rows=[],
+                statement_rows=[],
+                raw_statement_headers=[],
+                has_payment_rows=False,
+                **base_context,
+            )
         logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
         return render_template(
-            "statement.html", is_processing=True, incomplete_count=0, completed_count=0, all_statement_rows=[], statement_rows=[], raw_statement_headers=[], has_payment_rows=False, **base_context
+            "statement.html",
+            is_processing=True,
+            processing_failed=False,
+            incomplete_count=0,
+            completed_count=0,
+            all_statement_rows=[],
+            statement_rows=[],
+            raw_statement_headers=[],
+            has_payment_rows=False,
+            **base_context,
         )
 
     # 1) Parse display configuration and left-side rows
@@ -1142,6 +1277,7 @@ def statement(statement_id: str):
     context: dict[str, Any] = {
         **base_context,
         "is_processing": False,
+        "processing_failed": False,
         "raw_statement_headers": display_headers,
         "statement_rows": visible_rows,
         "all_statement_rows": statement_rows,
@@ -1286,16 +1422,16 @@ def login():
         logger.info("Login blocked; cookie consent missing")
         return redirect(url_for("cookies"))
 
-    if not CLIENT_ID or not CLIENT_SECRET or not REDIRECT_URI:
-        return "Missing XERO_CLIENT_ID, XERO_CLIENT_SECRET, or XERO_REDIRECT_URI env vars", 500
-
     # OIDC nonce ties the auth response to this browser session.
     nonce = secrets.token_urlsafe(24)
     session["oauth_nonce"] = nonce
 
+    callback_url = _absolute_app_url(url_for("callback"))
     logger.info("Redirecting to Xero authorization", scope_count=len(scope_str().split()))
     # Authlib stores state/nonce in session and builds the authorize URL.
-    return oauth.xero.authorize_redirect(redirect_uri=REDIRECT_URI, nonce=nonce)
+    # Building the callback from DOMAIN_NAME keeps the OAuth flow aligned with
+    # the canonical public host without adding Flask-side host redirects.
+    return oauth.xero.authorize_redirect(redirect_uri=callback_url, nonce=nonce)
 
 
 @app.route("/callback")

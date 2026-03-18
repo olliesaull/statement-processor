@@ -49,6 +49,7 @@
               {% set contact_name = stmt.get("ContactName") or "—" %}
               {% set item_date_range = stmt.get("ItemDateRangeDisplay") or "—" %}
               {% set statement_filename = stmt.get("OriginalStatementFilename") or "—" %}
+              {% set is_reserved = (stmt.get("TokenReservationStatus") or "")|lower == "reserved" %}
               <tr data-statement-id="{{ stmt['StatementID'] }}" data-contact-name="{{ stmt.get('ContactName') or '' }}" data-automation="statement-row">
                 <td class="statements-col-contact">
                   <span class="cell-value-wrapper">
@@ -70,10 +71,14 @@
                     <a href="{{ url_for('statement', statement_id=stmt['StatementID']) }}" class="btn btn-sm btn-primary" data-automation="statement-reconcile-link">
                       Reconcile
                     </a>
-                    <form method="post" action="{{ url_for('delete_statement', statement_id=stmt['StatementID']) }}" class="d-inline" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                      <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                    </form>
+                    {% if is_reserved %}
+                      <button type="button" class="btn btn-sm btn-outline-secondary" disabled>Processing</button>
+                    {% else %}
+                      <form method="post" action="{{ url_for('delete_statement', statement_id=stmt['StatementID']) }}" class="d-inline" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                      </form>
+                    {% endif %}
                   </div>
                 </td>
               </tr>

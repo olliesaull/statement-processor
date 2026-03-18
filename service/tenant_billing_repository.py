@@ -1,0 +1,64 @@
+"""Repository helpers for tenant billing snapshots stored in DynamoDB."""
+
+from collections.abc import Iterable
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any
+
+from config import tenant_billing_table
+from repository_helpers import fetch_items_by_tenant_id
+
+
+@dataclass(frozen=True)
+class TenantBillingRepository:
+    """Repository wrapper around the TenantBilling DynamoDB table."""
+
+    _table = tenant_billing_table
+
+    @staticmethod
+    def _determine_token_balance(item: dict[str, Any]) -> int:
+        """Extract an integer token balance from a DynamoDB billing record."""
+        raw_balance = item.get("TokenBalance")
+
+        if raw_balance is None:
+            return 0
+
+        if isinstance(raw_balance, (int, Decimal)):
+            return int(raw_balance)
+
+        return 0
+
+    @classmethod
+    def get_item(cls, tenant_id: str) -> dict[str, object] | None:
+        """Fetch a single tenant billing record by ID."""
+        if not tenant_id:
+            return None
+
+        response = cls._table.get_item(Key={"TenantID": tenant_id})
+        return response.get("Item")
+
+    @classmethod
+    def get_tenant_token_balance(cls, tenant_id: str | None) -> int:
+        """Fetch the current token balance snapshot for one tenant."""
+        item = cls.get_item((tenant_id or "").strip())
+        if not item:
+            return 0
+        return cls._determine_token_balance(item)
+
+    @classmethod
+    def _get_items_by_tenant_id(cls, tenant_ids: Iterable[str], max_workers: int = 4) -> dict[str, dict[str, object] | None]:
+        """Fetch multiple tenant billing records concurrently."""
+        return fetch_items_by_tenant_id(cls.get_item, tenant_ids, max_workers=max_workers)
+
+    @classmethod
+    def get_tenant_token_balances(cls, tenant_ids: Iterable[str], max_workers: int = 4) -> dict[str, int]:
+        """Fetch multiple tenant billing records concurrently and return their token balances."""
+        unique_ids = {tid.strip() for tid in tenant_ids if tid and isinstance(tid, str)}
+        balances: dict[str, int] = dict.fromkeys(unique_ids, 0)
+        items = cls._get_items_by_tenant_id(unique_ids, max_workers=max_workers)
+
+        for tenant_id, item in items.items():
+            if item:
+                balances[tenant_id] = cls._determine_token_balance(item)
+
+        return balances

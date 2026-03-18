@@ -29,8 +29,8 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
   - `StartTextractDocumentAnalysis`
   - `WaitForTextract` (10s poll interval)
   - `GetTextractStatus`
-  - `ProcessStatement` (invoke Textraction Lambda on `SUCCEEDED` or `PARTIAL_SUCCESS`)
-  - `TextractFailed` on `FAILED`
+  - `ProcessStatement` (invoke Textraction Lambda on `SUCCEEDED`, `PARTIAL_SUCCESS`, or `FAILED`)
+  - `DidStatementProcessingSucceed?` to branch on the Lambda payload status before the execution ends
 - Started by web app upload flow via [`service/utils/workflows.py`](service/utils/workflows.py).
 
 ### Data stores
@@ -38,6 +38,8 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
   - `TenantStatementsTable`
   - `TenantContactsConfigTable`
   - `TenantDataTable`
+  - `TenantBillingTable`
+  - `TenantTokenLedgerTable`
 - S3 bucket: `dexero-statement-processor-{stage}` for statement files and cached Xero datasets.
 
 ### External integrations
@@ -52,11 +54,11 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
 ### Statement upload and extraction
 1. User uploads PDF(s) on `/upload-statements`.
 2. Service validates contact mapping exists and file is PDF.
-3. PDF uploaded to S3 at `<tenant_id>/statements/<statement_id>.pdf`.
-4. Statement header row is written to `TenantStatementsTable`.
+3. Service reserves tokens atomically in `TenantBillingTable` + `TenantTokenLedgerTable` and creates the statement header row with `PdfPageCount`, `ReservationLedgerEntryID`, and `TokenReservationStatus=reserved`.
+4. PDF uploaded to S3 at `<tenant_id>/statements/<statement_id>.pdf`.
 5. Step Functions execution starts with tenant/contact/statement/S3 keys.
 6. Lambda processes Textract output and writes JSON to `<tenant_id>/statements/<statement_id>.json`.
-7. Statement item rows are written to `TenantStatementsTable` using item IDs like `<statement_id>#item-0001`.
+7. Lambda consumes the earlier reservation on success, or releases it on workflow failure, and statement item rows are written to `TenantStatementsTable` using item IDs like `<statement_id>#item-0001`.
 
 ### Statement detail reconciliation
 1. `/statement/<statement_id>` loads statement header from DynamoDB.
@@ -88,6 +90,7 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
   - `Completed` (`"true"` / `"false"` string)
   - `EarliestItemDate`, `LatestItemDate`
   - `JobId`
+  - `PdfPageCount`, `ReservationLedgerEntryID`, `TokenReservationStatus` for billing lifecycle tracking
 
 ### `TenantContactsConfigTable`
 - Key: `TenantID` + `ContactID`
@@ -124,3 +127,5 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
 - `cdk/`: AWS infrastructure definitions for web Lambda, textraction Lambda, Step Functions, DynamoDB, S3, CloudWatch/SNS.
 - `service/`: Flask web app, reconciliation logic, Xero sync/cache access, templates/static assets, unit + Playwright tests.
 - `lambda_functions/textraction_lambda/`: Textract result reconstruction, mapping/normalization, anomaly flagging, persistence.
+- `scripts/clear_ddb_and_s3/`: operator reset tool for the configured S3 bucket and tenant data tables; it supports full-environment clears or one-tenant deletes by `TenantID`/S3 prefix so the existing workflow can be narrowed without changing which resources are touched.
+- `scripts/manual_token_adjustment/`: operator-only tool for manual token grants/removals; intentionally reuses the service billing transaction logic so snapshot and ledger writes stay atomic.

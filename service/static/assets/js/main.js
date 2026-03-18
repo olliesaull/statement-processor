@@ -1,7 +1,4 @@
-const getCsrfToken = () => {
-  const meta = document.querySelector('meta[name="csrf-token"]');
-  return meta ? meta.getAttribute("content") : "";
-};
+import { buildCsrfUrlEncodedBody } from "./csrf.js";
 
 const COOKIE_CONSENT_COOKIE_NAME = "cookie_consent";
 const SESSION_IS_SET_COOKIE_NAME = "session_is_set";
@@ -230,8 +227,9 @@ async function handleSyncClick(button) {
       method: "POST",
       headers: {
         "Accept": "application/json",
-        "X-CSRFToken": getCsrfToken(),
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
       },
+      body: buildCsrfUrlEncodedBody(),
       credentials: "same-origin",
     });
 

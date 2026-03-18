@@ -106,8 +106,9 @@
 - **DynamoDB tables**
   - `TenantStatementsTable` (`tenant_statements_table`): statement‑level records; GSIs `TenantIDCompletedIndex` and `TenantIDStatementItemIDIndex` support filtering by completion status and per‑item lookups (see inline comments).
   - `TenantContactsConfigTable` (`tenant_contacts_config_table`): shared table wired into both App Runner and the Textraction Lambda via env vars and IAM grants, so it acts as shared per‑tenant configuration/state (details of contents TODO (needs verification)).
-  - `TenantDataTable` (`tenant_data_table`): shared tenant data table wired into both App Runner and the Textraction Lambda via env vars and IAM grants (details of contents TODO (needs verification)).
-  - `TenantTokenLedgerTable` (`tenant_token_ledger_table`): append-only tenant billing ledger table keyed by `TenantID` + `LedgerEntryID`; exposed only to App Runner so future billing/token mutations stay out of the textraction runtime until they are actually needed.
+  - `TenantDataTable` (`tenant_data_table`): shared tenant state table wired into both App Runner and the Textraction Lambda via env vars and IAM grants; this now stays focused on sync/load metadata rather than mutable billing balance state.
+  - `TenantBillingTable` (`tenant_billing_table`): dedicated tenant billing snapshot table keyed by `TenantID`; shared by App Runner and the Textraction Lambda because uploads reserve tokens in the web app while asynchronous consume/release settlement happens after the Step Functions workflow finishes. Keeping this snapshot separate from `TenantDataTable` lets balance writes stay atomic with the token ledger without colliding with sync/load metadata.
+  - `TenantTokenLedgerTable` (`tenant_token_ledger_table`): append-only tenant billing ledger table keyed by `TenantID` + `LedgerEntryID`; shared by App Runner and the Textraction Lambda because both runtimes now participate in the token lifecycle (`RESERVE` on upload, `CONSUME` on success, `RELEASE` on failure).
   - `StripeEventStoreTable` (`stripe_event_store_table`): Stripe webhook idempotency table keyed by `StripeEventID`; exposed only to App Runner because webhook verification and deduplication terminate in the Flask service, not the Textraction Lambda.
 - **S3 bucket**
   - `dexero-statement-processor-{stage}` (`s3_bucket`): shared object store referenced by both App Runner and the Textraction Lambda; includes an explicit bucket policy to allow Textract to read statement PDFs.
@@ -119,10 +120,14 @@
   - `TextractionStateMachine` (`state_machine`): orchestrates `StartTextractDocumentAnalysis` → `WaitForTextract` → `GetTextractStatus` → `ProcessStatement`, with success/failure handling for Textract job status.
 - **App Runner**
   - `Statement Processor Website` (`web`): App Runner service built from `service/` (`AppRunnerImage`) to run the Flask service; uses an instance role to access DynamoDB, S3, Textract, and Step Functions.
+  - App Runner now receives explicit `AWS_REGION` and `AWS_DEFAULT_REGION` runtime env vars from CDK instead of relying on platform-injected defaults. Rationale: `service/config.py` creates boto3 clients during module import, and the Flask worker boot path must not depend on whether App Runner happens to inject a default region variable.
+  - App Runner health checks now use HTTP against `/healthz` instead of raw TCP. The Flask route returns `200` with an empty body. Rationale: TCP only proves the Gunicorn master socket is open; it does not prove a worker successfully booted or that Flask can return a response. `/healthz` is a tiny unauthenticated route with no template or business-logic work, so it is a better signal for whether Flask can actually handle requests.
+  - Lambda does not set `AWS_REGION` manually in CDK. Rationale: Lambda reserves that environment variable name and already injects the runtime region automatically.
   - Production public-domain settings are configured in `cdk/app.py` (`PROD_DOMAIN_NAME`) and consumed by `cdk/stacks/statement_processor.py` to set CloudFront aliases and the OAuth callback host consistently.
 - **IAM roles and policies**
   - `Statement Processor App Runner Instance Role` (`statement_processor_instance_role`): grants App Runner access to CloudWatch metrics, Textract, and Step Functions; table and S3 permissions are added via grants.
   - Web Lambda runtime no longer requires `ssm:GetParameter`/`kms:Decrypt` for Xero/session secrets; `cdk/deploy_stack.sh` reads SSM secure parameters before deploy and passes them into CDK as deploy-time environment variables for Lambda. This removes per-cold-start SSM/KMS network calls from the Flask service startup path.
+  - `cdk/deploy_stack.sh` now runs a bounded Docker multi-arch preflight before `cdk deploy`: it reuses any existing `buildx` builder that already advertises `linux/arm64` (preferring the active/default builder before creating the repo-specific `multiarch` builder), skips the privileged `tonistiigi/binfmt` refresh when an initial `linux/arm64` smoke test already succeeds, and wraps bootstrap/runtime checks in explicit progress messages plus timeouts. Rationale: first-run image pulls and stale custom builders were previously hidden behind `/dev/null`, which made deploys look stuck at the Docker multi-arch step even when Docker was still bootstrapping emulation.
   - Textract permissions added to both Lambda and state machine roles to allow `StartDocumentAnalysis` and `GetDocumentAnalysis`.
 - **CloudWatch + SNS**
   - `StatementProcessorAppRunnerErrorMetricFilter` + `StatementProcessorAppRunnerErrorAlarm`: parses App Runner application logs for `ERROR` and raises an alarm.
@@ -130,7 +135,7 @@
 
 ## Orchestration (Step Functions & Textract)
 **State machine definitions and entry points**
-- `TextractionStateMachine` is defined in `cdk/stacks/statement_processor.py` as a single chainable state machine built from `StartTextractDocumentAnalysis` -> `WaitForTextract` -> `GetTextractStatus` -> `IsTextractFinished?` -> `ProcessStatement` or `TextractFailed`.
+- `TextractionStateMachine` is defined in `cdk/stacks/statement_processor.py` as a single chainable state machine built from `StartTextractDocumentAnalysis` -> `WaitForTextract` -> `GetTextractStatus` -> `IsTextractFinished?` -> `ProcessStatement` -> `DidStatementProcessingSucceed?`. The workflow now invokes the same Lambda on both Textract success and Textract failure so billing settlement always runs before the execution ends.
 - Executions are started from the Flask service via `service/utils/workflows.py:start_textraction_state_machine`, invoked during upload in `service/app.py:_process_statement_upload`.
 
 **Step-by-step flow (code-grounded)**
@@ -139,10 +144,10 @@
 3. Workflow waits 10 seconds (`WaitForTextract`).
 4. Workflow calls `getDocumentAnalysis` to check `JobStatus` (`GetTextractStatus`).
 5. If status is `SUCCEEDED` or `PARTIAL_SUCCESS`, invoke `TextractionLambda` with job id + S3 keys (`ProcessStatement`).
-6. If status is `FAILED`, transition to `TextractFailed` (explicit failure).
+6. If status is `FAILED`, invoke the same Lambda with `textractStatus=FAILED` so it can release the earlier token reservation instead of leaving tokens stuck in `reserved`.
 7. Otherwise, loop back to wait and poll again until timeout.
-8. Lambda retrieves paginated Textract results, builds statement JSON, persists items, and writes JSON to S3 (`lambda_functions/textraction_lambda/core/extraction.py` + `lambda_functions/textraction_lambda/core/textract_statement.py`).
-9. `lambda_functions/textraction_lambda/main.py` returns a compact metadata payload (IDs, `jsonKey`, filename/date/item summary) instead of embedding the full statement JSON in state output; the full artifact is read from S3 to avoid Step Functions state-size limits.
+8. Lambda retrieves paginated Textract results, builds statement JSON, persists items, and writes JSON to S3 (`lambda_functions/textraction_lambda/core/extraction.py` + `lambda_functions/textraction_lambda/core/textract_statement.py`). On success it consumes the earlier reservation; on failure it releases the reservation back to `TenantBillingTable`.
+9. `lambda_functions/textraction_lambda/main.py` returns a compact metadata payload (IDs, `jsonKey`, filename/date/item summary) instead of embedding the full statement JSON in state output; Step Functions now branches on `Payload.status` so billing failures and processing failures explicitly fail the execution.
 
 ## Flask Service
 
@@ -150,6 +155,9 @@
   - Main application: `service/app.py` (Flask app factory, route handlers, template rendering, orchestration).
   - Templates and UI assets: `service/templates/` (Jinja2 views) and `service/static/` (static assets).
   - Configuration + AWS clients: `service/config.py` (environment-variable loading, boto3 clients/resources).
+    - `service/config.py` now uses a local `get_envar(...)` helper that mirrors the Numerint Flask app: required env vars fail fast during import, while a small set of local-development defaults (`DOMAIN_NAME`, `STAGE`, `VALKEY_URL`) remain explicit. AWS clients/resources are now created directly via `boto3.client(...)` / `boto3.resource(...)` rather than a custom `boto3.session.Session(...)`. Rationale: this matches the working Numerint pattern, removes conditional session logic, and makes missing runtime configuration obvious during worker startup.
+  - Gunicorn startup: `service/start.sh`.
+    - Gunicorn now writes both access logs and error logs to stdout (`--access-logfile - --error-logfile -`). Rationale: App Runner deployment failures were previously only visible as generic service rollbacks, so emitting request-path logs gives direct evidence about whether health checks reach Gunicorn and whether Flask ever returns a response.
   - Logging: `service/logger.py` (structured logger used across modules).
   - Session/auth wiring: Redis-backed server-side sessions in `service/app.py` using Flask-Session + Valkey/ElastiCache.
     - Tenant sync-status checks are read directly from DynamoDB via `service/utils/tenant_status.py` for consistent cross-instance behavior.
@@ -184,9 +192,9 @@
   - **Core UI**
     - `/` (GET): landing page (`index`).
     - `/cookies` (GET): cookie policy + consent page for essential cookies.
-    - `/tenant_management` (GET): tenant picker/overview (requires Xero auth via `@xero_token_required`). The page reads each tenant's `TokenBalance` snapshot from `TenantDataTable` so the current tenant chip and tenant list both show available tokens without recomputing ledger totals in-request.
-    - `/upload-statements` (GET/POST): upload PDFs and trigger textraction (requires tenant + Xero auth, blocks while loading). The page keeps the lightweight client-side page estimate for instant feedback, but the POST handler now also re-counts every accepted PDF on the server and rejects the whole valid batch when its confirmed page total exceeds the tenant's current `TokenBalance`.
-    - `/api/upload-statements/preflight` (POST): authoritative upload validation endpoint used by the upload page before submit. It accepts the currently selected PDFs, counts their pages server-side with `pypdf` (while the browser keeps its own lightweight estimate for instant UX), reads `TenantDataTable.TokenBalance`, and returns per-file counts plus `total_pages`, `available_tokens`, `shortfall`, and `can_submit`. This exists so the UI can warn about insufficient tokens before the final upload request without trusting the browser-only estimate.
+    - `/tenant_management` (GET): tenant picker/overview (requires Xero auth via `@xero_token_required`). The page reads each tenant's `TokenBalance` snapshot from `TenantBillingTable` so the current tenant chip and tenant list both show available tokens without recomputing ledger totals in-request.
+    - `/upload-statements` (GET/POST): upload PDFs and trigger textraction (requires tenant + Xero auth, blocks while loading). The page keeps the lightweight client-side page estimate for instant feedback, but the POST handler now reserves tokens atomically before any S3 upload starts. Reservation writes update `TenantBillingTable`, append `RESERVE` rows to `TenantTokenLedgerTable`, and create the statement header rows with `PdfPageCount`, `ReservationLedgerEntryID`, and `TokenReservationStatus=reserved`. If the web app cannot upload the PDF or start Step Functions after reservation, it immediately releases the reservation and cleans up the statement row again.
+    - `/api/upload-statements/preflight` (POST): authoritative upload validation endpoint used by the upload page before submit. It accepts the currently selected PDFs, counts their pages server-side with `pypdf` (while the browser keeps its own lightweight estimate for instant UX), reads `TenantBillingTable.TokenBalance`, and returns per-file counts plus `total_pages`, `available_tokens`, `shortfall`, and `can_submit`. This exists so the UI can warn about insufficient tokens before the final upload request without trusting the browser-only estimate.
     - `/statements` (GET): list and sort statements (requires tenant + Xero auth, blocks while loading).
     - `/statement/<statement_id>` (GET/POST): statement detail view, completion toggles, and XLSX export (requires tenant + Xero auth, blocks while loading).
     - `/statement/<statement_id>/delete` (POST): delete statement + artefacts (requires tenant + Xero auth, blocks while loading).
@@ -221,21 +229,28 @@
       - `SESSION_TTL_SECONDS` (default `900`) is still used to set `PERMANENT_SESSION_LIFETIME`.
       - Required auth/session secrets are now `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET`, and `FLASK_SECRET_KEY` (no `SESSION_FERNET_KEY`).
       - In AWS, `cdk/deploy_stack.sh` resolves those values from SSM secure parameters at deployment and passes them into CDK for Lambda environment injection. This keeps deployment-time secret sourcing while reducing cold-start latency by removing runtime secret fetches.
-      - In CDK, `XERO_REDIRECT_URI` is derived from the configured stack domain (`https://<domain>/callback`) for prod, and falls back to `http://localhost:8080/callback` outside prod. Rationale: keeping OAuth callbacks on the same public host avoids cross-host session/cookie mismatches.
+      - The Flask service now mirrors Numerint's Python-side hostname handling: `/login` builds the OAuth callback URL from `DOMAIN_NAME` at request time, using `http://localhost:<port>` when `STAGE=local` and `https://<DOMAIN_NAME>` otherwise. Rationale: this keeps callback URLs on one canonical public host without relying on Flask-side host redirects.
+      - `XERO_REDIRECT_URI` is no longer injected into the Flask service. `DOMAIN_NAME` is now the single public-host input for the Python app, while direct App Runner host blocking will be handled later at the edge/proxy layer.
+      - Browser-side CSRF delivery is now standardized across the app: `templates/base.html` always emits a `csrf-token` meta tag, and JavaScript `POST` requests send `csrf_token` in the request body instead of the `X-CSRFToken` header. Rationale: the CloudFront -> App Runner path was observed dropping the custom header in production, which caused `400` CSRF failures for tenant sync and upload preflight even though the browser had a valid token.
       - Flask app secret key remains stable across cold starts because it is provided as a fixed environment value rather than generated at runtime.
       - **Container runtime parity for local development**:
         - `service/Dockerfile` installs Valkey and uses `service/start.sh` to run Valkey and Gunicorn in one container.
         - `service/run_as_container.sh` now mirrors the Numerint workflow: it replaces any existing `statement-processor` container, rebuilds, runs on `localhost:8080`, tails logs, and supports `-i/--interactive` shell mode.
+        - `service/start.sh` now waits for Valkey readiness with `valkey-cli ping` before starting Gunicorn instead of relying on a fixed one-second sleep. Rationale: App Runner rollbacks have shown intermittent candidate startup failures, and a real readiness probe removes the race between the local session store binding its socket and the Flask worker starting to accept requests.
         - Rationale: Flask-Session now depends on a Redis/Valkey backend, so running cache and web process together keeps local execution aligned with App Runner behavior and avoids a second local service to manage.
   - **Misc**
     - `/.well-known/<path>` (GET): returns 204 for DevTools probes.
 
 - **Upload processing flow** (from `service/app.py`)
-  - `upload_statements` validates file/contact counts, enforces PDF MIME/extension rules (`service/utils/storage.py:is_allowed_pdf`), and verifies a contact config exists (`_ensure_contact_config`).
+  - `upload_statements` validates file/contact counts, enforces PDF MIME/extension rules (`service/utils/storage.py:is_allowed_pdf`), verifies a contact config exists (`_ensure_contact_config`), and then calls `service/billing_service.py` to reserve tokens atomically before any upload starts.
+  - `service/billing_service.py:reserve_statement_uploads`:
+    - Decrements `TenantBillingTable.TokenBalance` conditionally.
+    - Appends one `RESERVE` row per statement to `TenantTokenLedgerTable`.
+    - Creates the initial `TenantStatementsTable` header row with `PdfPageCount`, `ReservationLedgerEntryID`, and `TokenReservationStatus=reserved`.
   - `_process_statement_upload`:
     - Uploads PDF to S3 (`upload_statement_to_s3` → `service/utils/storage.py`).
-    - Writes statement metadata to DynamoDB (`add_statement_to_table` → `service/utils/dynamo.py`).
     - Computes JSON output key (`statement_json_s3_key`) and starts Step Functions (`start_textraction_state_machine` → `service/utils/workflows.py`).
+    - If the upload handoff fails after reservation, `service/billing_service.py:release_statement_reservation` returns the tokens and the service deletes the partially created statement row/S3 artefacts.
 
 ## Data Model
 
@@ -253,16 +268,16 @@
   - `TenantIDStatementItemIDIndex` (PK: `TenantID`, SK: `StatementItemID`) defined in CDK but not referenced in code (TODO (needs verification)).
 - **Concept**
   - Single-table pattern storing both statement headers and statement line items.
-  - `RecordType` distinguishes row types: `"statement"` for headers (`service/utils/dynamo.py:add_statement_to_table`) and `"statement_item"` for line items (`lambda_functions/textraction_lambda/core/textract_statement.py:_persist_statement_items`).
+  - `RecordType` distinguishes row types: `"statement"` for headers (`service/billing_service.py:reserve_statement_uploads`) and `"statement_item"` for line items (`lambda_functions/textraction_lambda/core/textract_statement.py:_persist_statement_items`).
 - **Writers**
-  - Statement headers: `service/utils/dynamo.py:add_statement_to_table` (initial record).
+  - Statement headers: `service/billing_service.py:reserve_statement_uploads` (initial record with billing metadata).
   - Item rows + header updates: `lambda_functions/textraction_lambda/core/textract_statement.py` (writes item rows; sets `EarliestItemDate`, `LatestItemDate`, `JobId` on header).
   - Status updates: `service/utils/dynamo.py` (completion flags and item type updates).
 - **Readers**
   - `service/utils/dynamo.py` (list statements, read header + item status, delete statement data).
   - `service/app.py` (statement list/detail flows).
   - `lambda_functions/textraction_lambda/core/textract_statement.py` (reads header to preserve completion status during re‑processing).
-- **Example header item** (created by `add_statement_to_table`, later updated by the Lambda):
+- **Example header item** (created by `service/billing_service.py:reserve_statement_uploads`, later updated by the Lambda):
 ```json
 {
   "TenantID": "<tenant_id>",
@@ -273,6 +288,9 @@
   "ContactName": "<contact_name>",
   "UploadedAt": "2024-01-28T12:34:56+00:00",
   "Completed": "false",
+  "PdfPageCount": 8,
+  "ReservationLedgerEntryID": "reserve#<statement_id>",
+  "TokenReservationStatus": "reserved",
   "JobId": "<textract_job_id>",
   "EarliestItemDate": "YYYY-MM-DD",
   "LatestItemDate": "YYYY-MM-DD"
@@ -336,20 +354,41 @@
 - **Keys**
   - Partition key: `TenantID`
 - **Concept**
-  - Tracks tenant‑level sync status, the last successful sync time, and lightweight tenant billing snapshot fields such as `TokenBalance` that the UI can read quickly.
+  - Tracks tenant‑level sync and load state only. Billing balance no longer lives here because this item is already updated by sync/load flows, so mixing mutable token balance into the same row would make atomic ledger+balance writes harder to reason about.
 - **Writers**
   - `service/sync.py:update_tenant_status` (sets `TenantStatus`, `LastSyncTime`).
   - `service/sync.py:check_load_required` (seeds a row with `TenantStatus=LOADING`).
-  - Future billing/token services in `service/` will update `TokenBalance` alongside ledger writes so tenant pages can read a fast balance snapshot.
 - **Readers**
-  - `service/tenant_data_repository.py` and `service/app.py` (tenant status APIs/UI gating, tenant-management token balance display, and upload preflight token checks).
+  - `service/tenant_data_repository.py` and `service/app.py` (tenant status APIs/UI gating only).
 - **Example item**:
 ```json
 {
   "TenantID": "<tenant_id>",
   "TenantStatus": "LOADING",
-  "LastSyncTime": 1706448896000,
-  "TokenBalance": 125
+  "LastSyncTime": 1706448896000
+}
+```
+
+**TenantBillingTable** (`cdk/stacks/statement_processor.py`)
+- **Keys**
+  - Partition key: `TenantID`
+- **Concept**
+  - Holds the current available token snapshot for each tenant. This table exists separately from `TenantDataTable` so billing services can update `TokenBalance` atomically with `TenantTokenLedgerTable` writes without sharing an item that is also mutated by sync/load workflows.
+- **Writers**
+  - `service/billing_service.py` reserves tokens on upload submit and releases them again if the web app cannot start processing.
+  - `lambda_functions/textraction_lambda/core/billing.py` consumes reserved tokens on successful textraction and releases them on asynchronous workflow failure.
+  - `scripts/manual_token_adjustment/manual_token_adjustment.py` applies manual grants/removals through the same atomic snapshot+ledger transaction logic. This exists so operator top-ups for test tenants do not bypass the audit trail or drift away from `TenantTokenLedgerTable`.
+- **Readers**
+  - `service/tenant_billing_repository.py`, `service/app.py`, and `service/utils/statement_upload_validation.py` (tenant-management token balance display and upload balance/preflight checks).
+- **Example item**:
+```json
+{
+  "TenantID": "<tenant_id>",
+  "TokenBalance": 125,
+  "UpdatedAt": "2026-03-16T12:05:10+00:00",
+  "LastLedgerEntryID": "reserve#<statement_id>",
+  "LastMutationType": "RESERVE",
+  "LastMutationSource": "upload-submit"
 }
 ```
 
@@ -358,10 +397,25 @@
   - Partition key: `TenantID`
   - Sort key: `LedgerEntryID`
 - **Concept**
-  - Append-only token/billing audit log for each tenant. The stack intentionally wires this table only into App Runner because billing flows will execute in the Flask service; the Textraction Lambda does not currently need billing-table access.
-- **Planned writers/readers**
-  - Future billing/token services in `service/` will write token grants, reservations, releases, and consumption rows.
+  - Append-only token/billing audit log for each tenant. The ledger is now the durable audit trail for upload reservations and later consume/release settlement.
+- **Writers/readers**
+  - `service/billing_service.py` writes `RESERVE` rows during upload submit.
+  - `lambda_functions/textraction_lambda/core/billing.py` writes `CONSUME` or `RELEASE` rows after the Step Functions workflow reaches a terminal outcome.
   - Future billing/account pages in `service/` will query tenant ledger history.
+
+**Manual token adjustments**
+- Script: `scripts/manual_token_adjustment/manual_token_adjustment.py`
+- Usage:
+  - `python3.13 scripts/manual_token_adjustment/manual_token_adjustment.py <tenant_id> <token_delta>`
+  - Example grant: `python3.13 scripts/manual_token_adjustment/manual_token_adjustment.py tenant-123 50`
+  - Example removal: `python3.13 scripts/manual_token_adjustment/manual_token_adjustment.py tenant-123 -20`
+- Behavior:
+  - Loads `service/.env` by default so it targets the same AWS account/region/table names as the web app.
+  - Prints current balance, proposed delta, and expected balance, then asks for one confirmation unless `--yes` is supplied.
+  - Calls `service/billing_service.py:BillingService.adjust_token_balance`, which updates `TenantBillingTable` and writes a matching `ADJUSTMENT` row to `TenantTokenLedgerTable` in one DynamoDB transaction.
+- Why this exists:
+  - Manual DynamoDB edits are unsafe for billing because changing only `TokenBalance` would break the ledger audit trail. The script keeps the snapshot and ledger consistent.
+
 
 **StripeEventStoreTable** (`cdk/stacks/statement_processor.py`)
 - **Keys**
@@ -424,6 +478,38 @@
 
 - Payment-looking references are excluded from substring matching
 
+## Clear Data Script (`scripts/clear_ddb_and_s3/clear_ddb_and_s3.py`)
+
+This script clears the resources configured in `service/.env`:
+- `S3_BUCKET_NAME`
+- `TENANT_CONTACTS_CONFIG_TABLE_NAME`
+- `TENANT_STATEMENTS_TABLE_NAME`
+- `TENANT_DATA_TABLE_NAME`
+
+### Scope
+- Default behaviour is unchanged: running the script without a tenant filter deletes data for **all tenants** from the configured bucket and tables.
+- `--tenant-id <tenant_id>` narrows the delete to one tenant:
+  - DynamoDB deletes only rows where the partition key is `TenantID=<tenant_id>`.
+  - S3 deletes only keys under `{tenant_id}/`.
+- The script intentionally does not expand into billing or ledger tables. That preserves the existing reset workflow and only reduces the blast radius when you need a tenant-specific cleanup.
+
+### Why tenant-scoped deletion works
+- The targeted DynamoDB tables are keyed by `TenantID`, so the script can issue a partition query instead of scanning and deleting unrelated tenants.
+- Statement artefacts and cached Xero datasets are stored under tenant prefixes such as `{tenant_id}/statements/...` and `{tenant_id}/data/...`, so an S3 prefix delete cleanly maps to one tenant.
+
+### Example usage
+```bash
+cd statement-processor
+
+# Delete data for every tenant in the configured resources
+python3.13 scripts/clear_ddb_and_s3/clear_ddb_and_s3.py
+
+# Delete data for one tenant only
+python3.13 scripts/clear_ddb_and_s3/clear_ddb_and_s3.py --tenant-id <tenant_id>
+
+# Skip the confirmation prompt
+python3.13 scripts/clear_ddb_and_s3/clear_ddb_and_s3.py --tenant-id <tenant_id> --yes
+```
 
 ## Tenant Snapshot Script (`scripts/tenant_snapshot/tenant_snapshot.py`)
 

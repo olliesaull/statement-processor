@@ -5,15 +5,8 @@ from io import BytesIO
 from werkzeug.datastructures import FileStorage
 
 import utils.statement_upload_validation as statement_upload_validation
-from tenant_data_repository import TenantDataRepository
-from utils.statement_upload_validation import (
-    PreparedStatementUpload,
-    UploadPageCountResult,
-    build_statement_upload_preflight,
-    build_upload_token_sufficiency,
-    prepare_statement_uploads,
-    validate_upload_payload,
-)
+from tenant_billing_repository import TenantBillingRepository
+from utils.statement_upload_validation import UploadPageCountResult, build_statement_upload_preflight, prepare_statement_uploads, validate_upload_payload
 
 
 def _make_upload(filename: str = "statement.pdf", content_type: str = "application/pdf") -> FileStorage:
@@ -36,7 +29,7 @@ def test_build_statement_upload_preflight_uses_server_counts_and_token_balance(m
         return UploadPageCountResult(filename=uploaded_file.filename or "statement.pdf", page_count=page_count)
 
     monkeypatch.setattr(statement_upload_validation, "count_uploaded_pdf_pages", _fake_count)
-    monkeypatch.setattr(TenantDataRepository, "get_tenant_token_balance", classmethod(lambda cls, tenant_id: 5))
+    monkeypatch.setattr(TenantBillingRepository, "get_tenant_token_balance", classmethod(lambda cls, tenant_id: 5))
 
     result = build_statement_upload_preflight("tenant-1", [_make_upload("one.pdf"), _make_upload("two.pdf")])
 
@@ -68,20 +61,3 @@ def test_prepare_statement_uploads_returns_valid_rows_and_collects_errors(monkey
     assert prepared_uploads[0].contact_name == "Acme Ltd"
     assert prepared_uploads[0].page_count == 2
     assert error_messages == ["bad.pdf: Unable to determine page count for this PDF.", "Please select a contact for 'missing-contact.pdf'."]
-
-
-def test_build_upload_token_sufficiency_sums_prepared_uploads(monkeypatch) -> None:
-    """Token sufficiency should total all prepared upload page counts."""
-    monkeypatch.setattr(TenantDataRepository, "get_tenant_token_balance", classmethod(lambda cls, tenant_id: 6))
-
-    prepared_uploads = [
-        PreparedStatementUpload(uploaded_file=_make_upload("one.pdf"), contact_id="contact-1", contact_name="Acme Ltd", page_count=2),
-        PreparedStatementUpload(uploaded_file=_make_upload("two.pdf"), contact_id="contact-2", contact_name="Beta Ltd", page_count=5),
-    ]
-
-    result = build_upload_token_sufficiency("tenant-1", prepared_uploads)
-
-    assert result.total_pages == 7
-    assert result.available_tokens == 6
-    assert result.shortfall == 1
-    assert not result.is_sufficient

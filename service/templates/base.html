@@ -4,9 +4,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    {% if request.endpoint == "tenant_management" %}
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    {% endif %}
     <title>{% block title %}Statement Processor{% endblock %}</title>
 
     <!-- ✅ Bootstrap CSS from official CDN -->
