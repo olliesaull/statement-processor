@@ -35,28 +35,28 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-# Enforce explicit profile selection to avoid accidental deploys to the wrong account.
-if [ -z "$PROFILE" ]; then
-    echo "Error: --profile option is required"
-    echo "Usage: ./deploy_stack.sh --profile {dotelastic-dev|dotelastic-production}"
-    exit 1
-fi
-
-# Restrict deploy profiles to known AWS named profiles used by this project.
-if [ "$PROFILE" != "dotelastic-dev" ] && [ "$PROFILE" != "dotelastic-production" ]; then
-    echo "Invalid profile: $PROFILE"
-    echo "Expected one of: dotelastic-dev, dotelastic-production"
-    exit 1
-fi
-
-# Derive stack and bucket names from profile so downstream commands stay deterministic.
-if [ "$PROFILE" = "dotelastic-production" ]; then
-    STAGE_SUFFIX="Prod"
-    STAGE_BUCKET_SUFFIX="prod"
-else
-    STAGE_SUFFIX="Dev"
-    STAGE_BUCKET_SUFFIX="dev"
-fi
+# Enforce explicit profile selection, restrict to known profiles, and derive stage names
+# in one pass — avoids three separate blocks that each re-test the same variable.
+case "$PROFILE" in
+    dotelastic-dev)
+        STAGE_SUFFIX="Dev"
+        STAGE_BUCKET_SUFFIX="dev"
+        ;;
+    dotelastic-production)
+        STAGE_SUFFIX="Prod"
+        STAGE_BUCKET_SUFFIX="prod"
+        ;;
+    "")
+        echo "Error: --profile option is required"
+        echo "Usage: ./deploy_stack.sh --profile {dotelastic-dev|dotelastic-production}"
+        exit 1
+        ;;
+    *)
+        echo "Invalid profile: $PROFILE"
+        echo "Expected one of: dotelastic-dev, dotelastic-production"
+        exit 1
+        ;;
+esac
 
 STACK_NAME="StatementProcessorStack${STAGE_SUFFIX}"
 ASSETS_BUCKET_NAME="dexero-statement-processor-${STAGE_BUCKET_SUFFIX}-assets"
@@ -157,9 +157,7 @@ validate_arm64_runtime() {
     local architecture=""
 
     echo " - Validating linux/arm64 container runtime..."
-    if architecture="$(timeout "${DOCKER_STEP_TIMEOUT_SECONDS}s" docker run --rm --platform linux/arm64 alpine uname -m)"; then
-        :
-    else
+    if ! architecture="$(timeout "${DOCKER_STEP_TIMEOUT_SECONDS}s" docker run --rm --platform linux/arm64 alpine uname -m)"; then
         local exit_code=$?
         if [ "$exit_code" -eq 124 ]; then
             echo "Error: linux/arm64 runtime validation timed out after ${DOCKER_STEP_TIMEOUT_SECONDS}s."
@@ -242,14 +240,7 @@ deploy() {
 
 # Keep an explicit manual confirmation step for production deploys.
 if [ "$PROFILE" = "dotelastic-production" ]; then
-    echo "Are you sure you want to deploy to ${PROFILE}? (Y/n): "
-    read -r response
-    if [ "$response" = "Y" ]; then
-        deploy
-    else
-        echo "Deployment aborted."
-        exit 1
-    fi
-else
-    deploy
+    read -rp "Are you sure you want to deploy to ${PROFILE}? (Y/n): " response
+    [ "$response" = "Y" ] || { echo "Deployment aborted."; exit 1; }
 fi
+deploy
