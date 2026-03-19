@@ -66,6 +66,11 @@ Do not change behaviour solely for style/cleanup.
 - Never change behaviour just to improve documentation or style.
 - If behaviour changes are required for correctness, clearly document the change.
 
+## Plans
+
+- Make the plan extremely concise. Sacrifice grammar for the sake of concision.
+- At the end of each plan, give mne a list of unanswered questions to answer, if any.
+
 ## Progressive Documentation
 Each repo may include `agent_docs/` with deeper context (read only when relevant), e.g.:
 - `agent_docs/project.md` (purpose + architecture + repo-specific workflow)
