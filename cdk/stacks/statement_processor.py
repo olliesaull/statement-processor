@@ -369,7 +369,7 @@ class StatementProcessorStack(Stack):
             self,
             "Statement Processor Website",
             instance_role=statement_processor_instance_role,
-            memory=apprunner_alpha.Memory.TWO_GB,
+            memory=apprunner_alpha.Memory.ONE_GB,
             cpu=apprunner_alpha.Cpu.HALF_VCPU,
             service_name=APP_RUNNER_SERVICE_NAME,
             auto_scaling_configuration=auto_scaling_configuration,
