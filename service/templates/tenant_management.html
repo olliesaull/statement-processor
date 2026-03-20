@@ -21,6 +21,7 @@
       {% if current_tenant %}
         <span class="tenant-current-chip">Current tenant: <strong>{{ current_tenant.tenantName or current_tenant.tenantId }}</strong></span>
         <span class="tenant-current-chip tenant-token-chip">Available tokens: <strong>{{ ct_token_balance }}</strong></span>
+        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('buy_tokens') }}">Buy Tokens</a>
       {% endif %}
     </div>
   </section>

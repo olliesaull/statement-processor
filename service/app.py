@@ -9,13 +9,14 @@ from io import BytesIO
 from typing import Any
 
 import redis
+import stripe
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
-from billing_service import BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
+from billing_service import LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
 from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, S3_BUCKET_NAME, STAGE, VALKEY_URL
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
@@ -24,6 +25,8 @@ from core.models import ContactConfig, StatementItem
 from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, PaymentNumberMap, StatementItemPayload, StatementRowsByHeader, StatementRowViewModel, XeroDocumentPayload
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
+from stripe_repository import StripeRepository
+from stripe_service import STRIPE_MAX_TOKENS, STRIPE_MIN_TOKENS, STRIPE_PRICE_PER_TOKEN_PENCE, StripeService
 from sync import check_load_required, sync_data
 from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
@@ -102,6 +105,9 @@ oauth.register(
 )
 
 _executor = ThreadPoolExecutor(max_workers=2)
+
+# Stripe service instance — used by checkout routes.
+stripe_service = StripeService()
 
 
 DEFAULT_DECIMAL_SEPARATOR = "."
@@ -589,7 +595,13 @@ def upload_statements_preflight():
         can_submit=preflight_result.can_submit,
         shortfall=preflight_result.shortfall,
     )
-    return jsonify(preflight_result.to_response_payload()), 200
+    payload = preflight_result.to_response_payload()
+    # When the user can't afford the upload, surface a direct link to the token
+    # purchase page. Injected here (not in to_response_payload) to keep the
+    # validation model free of Flask URL-routing knowledge.
+    if preflight_result.shortfall > 0:
+        payload["buy_tokens_url"] = url_for("buy_tokens")
+    return jsonify(payload), 200
 
 
 @app.route("/upload-statements", methods=["GET", "POST"])
@@ -1473,10 +1485,16 @@ def callback():  # pylint: disable=too-many-return-statements
 
     try:
         # Validates signature + standard claims and checks nonce matches session.
-        oauth.xero.parse_id_token(tokens, nonce=nonce)
+        # Capture claims so we can extract the user email for Stripe customer creation.
+        claims = oauth.xero.parse_id_token(tokens, nonce=nonce)
     except Exception as exc:
         logger.exception("Failed to validate id_token", error=str(exc))
         return "Invalid id_token", 400
+
+    # Store the authenticated user's email for Stripe Customer creation —
+    # Authlib has already validated the token above so claims are trustworthy.
+    if claims is not None:
+        session["xero_user_email"] = claims.get("email", "")
 
     save_xero_oauth2_token(tokens)
     access_token = tokens.get("access_token")
@@ -1523,6 +1541,189 @@ def logout():
     session.clear()
     response = redirect(url_for("index"))
     return clear_session_is_set_cookie(response)
+
+
+@app.route("/pricing")
+@route_handler_logging
+def pricing():
+    """Render the public-facing pricing explanation page (no login required).
+
+    Intentionally has no ``@xero_token_required`` so prospective customers
+    can see pricing before signing up.
+    """
+    return render_template("pricing.html")
+
+
+@app.route("/buy-tokens")
+@xero_token_required
+@route_handler_logging
+def buy_tokens():
+    """Render the token purchase form with current balance and pricing info."""
+    tenant_id = session.get("xero_tenant_id")
+    token_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
+    return render_template("buy_tokens.html", token_balance=token_balance, min_tokens=STRIPE_MIN_TOKENS, max_tokens=STRIPE_MAX_TOKENS, price_pence=STRIPE_PRICE_PER_TOKEN_PENCE, error=None)
+
+
+@app.route("/api/checkout/create", methods=["POST"])
+@xero_token_required
+@route_handler_logging
+def checkout_create():
+    """Validate token count, create a Stripe Checkout Session, and redirect.
+
+    Validates the submitted token count against configured min/max limits.
+    Gets or creates a Stripe Customer (cached in TenantBillingTable to avoid
+    repeated Stripe API searches on future purchases). Redirects the browser
+    to Stripe's hosted checkout page on success, or to the failed page on
+    Stripe API errors.
+    """
+    tenant_id = session.get("xero_tenant_id")
+    token_count_raw = request.form.get("token_count", "").strip()
+
+    # Validate input — re-render form on error (this is a form POST, not AJAX;
+    # JSON responses would render as raw text in the browser).
+    try:
+        token_count = int(token_count_raw)
+    except (ValueError, TypeError):
+        token_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
+        return (
+            render_template(
+                "buy_tokens.html",
+                token_balance=token_balance,
+                error="Please enter a valid number of tokens.",
+                min_tokens=STRIPE_MIN_TOKENS,
+                max_tokens=STRIPE_MAX_TOKENS,
+                price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
+            ),
+            400,
+        )
+
+    if not STRIPE_MIN_TOKENS <= token_count <= STRIPE_MAX_TOKENS:
+        token_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
+        return (
+            render_template(
+                "buy_tokens.html",
+                token_balance=token_balance,
+                error=f"Token count must be between {STRIPE_MIN_TOKENS} and {STRIPE_MAX_TOKENS}.",
+                min_tokens=STRIPE_MIN_TOKENS,
+                max_tokens=STRIPE_MAX_TOKENS,
+                price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
+            ),
+            400,
+        )
+
+    # Get or create Stripe Customer; cache ID immediately (before checkout)
+    # so future sessions skip the Stripe search even if this one is abandoned.
+    cached_customer_id = StripeRepository.get_cached_customer_id(tenant_id)
+    if cached_customer_id:
+        customer_id = cached_customer_id
+    else:
+        customer_id = stripe_service.get_or_create_customer(tenant_id=tenant_id, name=session.get("xero_tenant_name", tenant_id), email=session.get("xero_user_email", ""))
+        StripeRepository.cache_customer_id(tenant_id, customer_id)
+
+    # Build URLs — {CHECKOUT_SESSION_ID} is a Stripe template literal substituted
+    # by Stripe before redirecting the browser to the success page.
+    success_url = url_for("checkout_success", _external=True) + "?session_id={CHECKOUT_SESSION_ID}"
+    cancel_url = url_for("checkout_cancel", _external=True)
+
+    try:
+        stripe_session = stripe_service.create_checkout_session(customer_id=customer_id, token_count=token_count, tenant_id=tenant_id, success_url=success_url, cancel_url=cancel_url)
+    except stripe.StripeError:
+        logger.exception("Failed to create Stripe checkout session", tenant_id=tenant_id)
+        ref = secrets.token_hex(8)
+        return redirect(url_for("checkout_failed", ref=ref))
+
+    return redirect(stripe_session.url, code=303)
+
+
+@app.route("/checkout/success")
+@xero_token_required
+@route_handler_logging
+def checkout_success():
+    """Verify payment, credit tokens idempotently, and show confirmation.
+
+    Retrieves the Stripe session to verify ``payment_status == "paid"`` and
+    confirm the session belongs to the authenticated tenant before crediting
+    tokens. Idempotency is enforced via ``StripeEventStoreTable`` so a page
+    refresh shows the success screen without re-crediting.
+    """
+    tenant_id = session.get("xero_tenant_id")
+    session_id = request.args.get("session_id", "").strip()
+    if not session_id:
+        return redirect(url_for("checkout_failed"))
+
+    # Idempotency check — already processed? Show success without re-crediting.
+    if StripeRepository.is_session_processed(session_id):
+        record = StripeRepository.get_processed_session(session_id)
+        if record:
+            new_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
+            return render_template("checkout_success.html", tokens_credited=int(record["TokensCredited"]), new_balance=new_balance)
+        # record is None: tiny race window between is_session_processed and
+        # get_processed_session — fall through to normal processing path.
+
+    # Retrieve session from Stripe and verify payment status.
+    try:
+        stripe_session = stripe_service.retrieve_session(session_id)
+    except stripe.StripeError:
+        logger.exception("Failed to retrieve Stripe session", session_id=session_id)
+        return redirect(url_for("checkout_failed"))
+
+    if stripe_session.payment_status != "paid":
+        logger.info("Stripe session not paid", session_id=session_id, payment_status=stripe_session.payment_status)
+        return redirect(url_for("checkout_failed"))
+
+    # Security: verify the session belongs to the authenticated tenant.
+    # Prevents a user who obtains another tenant's session_id from crediting
+    # the wrong account.
+    session_tenant_id = stripe_session.metadata.get("tenant_id")
+    if session_tenant_id != tenant_id:
+        logger.warning("Session tenant_id mismatch", session_id=session_id, session_tenant_id=session_tenant_id, auth_tenant_id=tenant_id)
+        return redirect(url_for("checkout_failed"))
+
+    token_count = int(stripe_session.metadata["token_count"])
+
+    # Credit tokens. ledger_entry_id ties this ledger row to the Stripe session
+    # in StripeEventStoreTable, enabling audit cross-reference and making the
+    # ledger write conditionally idempotent via attribute_not_exists.
+    ledger_entry_id = f"purchase#{session_id}"
+    BillingService.adjust_token_balance(tenant_id, token_count, source=LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, ledger_entry_id=ledger_entry_id)
+
+    # Cache Stripe customer ID for future checkouts (idempotent — UpdateItem
+    # with same value is harmless; checkout_create already cached it, but this
+    # acts as a fallback if the customer was created but caching failed).
+    if stripe_session.customer:
+        StripeRepository.cache_customer_id(tenant_id, stripe_session.customer)
+
+    # Mark session as processed so page refreshes don't re-credit.
+    StripeRepository.record_processed_session(session_id=session_id, tenant_id=tenant_id, tokens_credited=token_count, ledger_entry_id=ledger_entry_id)
+
+    new_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
+    return render_template("checkout_success.html", tokens_credited=token_count, new_balance=new_balance)
+
+
+@app.route("/checkout/cancel")
+@xero_token_required
+@route_handler_logging
+def checkout_cancel():
+    """Render the checkout cancellation page.
+
+    Stripe redirects here when the user clicks "Back" on the hosted checkout
+    page. No tokens are credited and no Stripe session is stored.
+    """
+    return render_template("checkout_cancel.html")
+
+
+@app.route("/checkout/failed")
+@xero_token_required
+@route_handler_logging
+def checkout_failed():
+    """Render the checkout failure page with an optional reference ID.
+
+    Shown when Stripe session creation fails or when the success route
+    detects an unexpected payment state. The ``ref`` query param is a hex
+    string generated at the point of failure to help correlate log entries.
+    """
+    ref = request.args.get("ref", "")
+    return render_template("checkout_failed.html", ref=ref)
 
 
 @app.route("/.well-known/<path:path>")

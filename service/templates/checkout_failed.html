@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Payment Failed — Statement Processor{% endblock %}
+
+{% block content %}
+<div class="page-main">
+  <header class="page-header">
+    <p class="page-kicker mb-1">Payment Error</p>
+    <h1 class="mb-2">Something went wrong.</h1>
+    <p class="page-subtitle mb-0">Your payment could not be processed. No tokens have been added and you have not been charged.</p>
+  </header>
+
+  <section class="page-panel mb-4">
+    <p class="mb-1">If this problem persists, please contact support and quote the reference below.</p>
+    <p class="mb-0 text-muted small">Reference: <code>{{ ref }}</code></p>
+  </section>
+
+  <div class="d-flex flex-wrap gap-2">
+    <a class="btn btn-primary" href="{{ url_for('buy_tokens') }}">Try Again</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('tenant_management') }}">Back to Tenant Management</a>
+  </div>
+</div>
+{% endblock %}

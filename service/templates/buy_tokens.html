@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Buy Tokens — Statement Processor{% endblock %}
+
+{% block content %}
+<div class="page-main">
+  <header class="page-header">
+    <p class="page-kicker mb-1">Token Purchase</p>
+    <h1 class="mb-2">Buy Tokens</h1>
+    <p class="page-subtitle mb-0">
+      Tokens are deducted as you upload statement PDFs — 1 token per page.
+      Your current balance is <strong>{{ token_balance }}</strong> token{% if token_balance != 1 %}s{% endif %}.
+    </p>
+  </header>
+
+  {% if error %}
+    <div class="alert alert-danger" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <section class="page-panel" style="max-width: 480px;">
+    <form method="POST" action="{{ url_for('checkout_create') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="mb-3">
+        <label for="token-count" class="form-label fw-semibold">Number of tokens to purchase</label>
+        <input
+          type="number"
+          id="token-count"
+          name="token_count"
+          class="form-control"
+          min="{{ min_tokens }}"
+          max="{{ max_tokens }}"
+          data-price-pence="{{ price_pence }}"
+          data-min-tokens="{{ min_tokens }}"
+          data-max-tokens="{{ max_tokens }}"
+          placeholder="e.g. 50"
+          required
+        >
+        <div class="form-text">Minimum {{ min_tokens }} tokens, maximum {{ max_tokens }} tokens.</div>
+      </div>
+
+      <!-- Live price display — updated by the inline script below as the user types -->
+      <p class="mb-3 fw-semibold" id="price-display" aria-live="polite"></p>
+
+      <button type="submit" class="btn btn-primary">Proceed to Payment</button>
+    </form>
+  </section>
+</div>
+
+<script>
+  (function () {
+    const input = document.getElementById("token-count");
+    const display = document.getElementById("price-display");
+
+    if (!input || !display) return;
+
+    // pricePence is an integer cost-per-token read from the data attribute
+    // set by the backend (e.g. 10 = £0.10/token). Using a data attribute
+    // keeps the price logic server-authoritative and avoids hardcoding in JS.
+    const pricePence = parseInt(input.dataset.pricePence, 10);
+
+    function updateDisplay() {
+      const count = parseInt(input.value, 10);
+
+      if (!Number.isFinite(count) || count <= 0) {
+        display.textContent = "";
+        return;
+      }
+
+      const totalPence = count * pricePence;
+      // Format as pounds with two decimal places (e.g. 500p → "£5.00")
+      const pounds = (totalPence / 100).toFixed(2);
+      display.textContent = `${count} token${count === 1 ? "" : "s"} = £${pounds}`;
+    }
+
+    input.addEventListener("input", updateDisplay);
+    // Run once on load in case the browser restores a previous value
+    updateDisplay();
+  }());
+</script>
+{% endblock %}

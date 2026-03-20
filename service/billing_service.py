@@ -27,6 +27,7 @@ ENTRY_TYPE_RELEASE = "RELEASE"
 ENTRY_TYPE_RESERVE = "RESERVE"
 ENTRY_TYPE_ADJUSTMENT = "ADJUSTMENT"
 LAST_MUTATION_SOURCE_MANUAL_ADJUSTMENT = "manual-script"
+LAST_MUTATION_SOURCE_STRIPE_CHECKOUT = "stripe-checkout"
 LAST_MUTATION_TYPE_ADJUSTMENT = "ADJUSTMENT"
 LAST_MUTATION_SOURCE_UPLOAD_SUBMIT = "upload-submit"
 LAST_MUTATION_TYPE_RELEASE = "RELEASE"
@@ -291,7 +292,7 @@ class BillingService:
         return reserved_uploads
 
     @classmethod
-    def adjust_token_balance(cls, tenant_id: str, token_delta: int, *, source: str = LAST_MUTATION_SOURCE_MANUAL_ADJUSTMENT) -> TokenAdjustmentResult:
+    def adjust_token_balance(cls, tenant_id: str, token_delta: int, *, source: str = LAST_MUTATION_SOURCE_MANUAL_ADJUSTMENT, ledger_entry_id: str | None = None) -> TokenAdjustmentResult:
         """Apply a manual token adjustment atomically to snapshot and ledger.
 
         Args:
@@ -299,6 +300,12 @@ class BillingService:
             token_delta: Signed token change. Positive grants tokens; negative
                 removes them.
             source: Audit source persisted to the billing snapshot and ledger.
+            ledger_entry_id: Optional explicit entry ID. When provided (e.g.
+                ``purchase#<session_id>`` for Stripe purchases) it is used
+                directly instead of generating a random UUID. This enables
+                audit cross-reference between StripeEventStoreTable and
+                TenantTokenLedgerTable, and makes the ledger Put conditionally
+                idempotent via ``attribute_not_exists``.
 
         Returns:
             Metadata describing the applied adjustment.
@@ -315,7 +322,9 @@ class BillingService:
             raise BillingServiceError("TokenDelta must be non-zero.")
 
         adjusted_at = cls._utc_now_iso()
-        ledger_entry_id = f"adjustment#{uuid4()}"
+        # Use caller-supplied ID when provided (Stripe purchases); otherwise
+        # generate a random UUID to guarantee uniqueness for manual adjustments.
+        ledger_entry_id = ledger_entry_id if ledger_entry_id is not None else f"adjustment#{uuid4()}"
         expression_values = {
             ":zero": 0,
             ":token_delta": token_delta,

@@ -41,7 +41,7 @@ def get_envar(envar: str, default_value: str = "") -> str:
 
 
 def _fetch_ssm_secrets() -> dict[str, str]:
-    """Fetch Xero OAuth credentials and the Flask secret key from SSM in one call.
+    """Fetch Xero OAuth credentials, Flask secret key, and Stripe API key from SSM in one call.
 
     Parameter paths are read from *_SSM_PATH environment variables so they can
     be updated without a code change. Uses get_parameters (batch) to minimise
@@ -56,7 +56,7 @@ def _fetch_ssm_secrets() -> dict[str, str]:
         RuntimeError: If any parameter is missing or inaccessible.
         boto3 ClientError: If the SSM API call fails — propagates unmodified.
     """
-    params = [get_envar("XERO_CLIENT_ID_SSM_PATH"), get_envar("XERO_CLIENT_SECRET_SSM_PATH"), get_envar("FLASK_SECRET_KEY_SSM_PATH")]
+    params = [get_envar("XERO_CLIENT_ID_SSM_PATH"), get_envar("XERO_CLIENT_SECRET_SSM_PATH"), get_envar("FLASK_SECRET_KEY_SSM_PATH"), get_envar("STRIPE_API_KEY_SSM_PATH")]
     region: str = os.environ.get("AWS_REGION", "eu-west-1")
     response = boto3.client("ssm", region_name=region).get_parameters(Names=params, WithDecryption=True)
     invalid: list[str] = response.get("InvalidParameters", [])
@@ -80,6 +80,7 @@ TENANT_STATEMENTS_TABLE_NAME: str = get_envar("TENANT_STATEMENTS_TABLE_NAME")
 TENANT_DATA_TABLE_NAME: str = get_envar("TENANT_DATA_TABLE_NAME")
 TENANT_BILLING_TABLE_NAME: str = get_envar("TENANT_BILLING_TABLE_NAME")
 TENANT_TOKEN_LEDGER_TABLE_NAME: str = get_envar("TENANT_TOKEN_LEDGER_TABLE_NAME")
+STRIPE_EVENT_STORE_TABLE_NAME: str = get_envar("STRIPE_EVENT_STORE_TABLE_NAME")
 
 s3_client = boto3.client("s3")
 stepfunctions_client = boto3.client("stepfunctions")
@@ -91,8 +92,10 @@ tenant_contacts_config_table = ddb.Table(TENANT_CONTACTS_CONFIG_TABLE_NAME)
 tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME)
 tenant_billing_table = ddb.Table(TENANT_BILLING_TABLE_NAME)
 tenant_token_ledger_table = ddb.Table(TENANT_TOKEN_LEDGER_TABLE_NAME)
+stripe_event_store_table = ddb.Table(STRIPE_EVENT_STORE_TABLE_NAME)
 
 # Secrets fetched from SSM — paths are configured via *_SSM_PATH env vars.
 CLIENT_ID: str = _secrets[get_envar("XERO_CLIENT_ID_SSM_PATH")]
 CLIENT_SECRET: str = _secrets[get_envar("XERO_CLIENT_SECRET_SSM_PATH")]
 FLASK_SECRET_KEY: str = _secrets[get_envar("FLASK_SECRET_KEY_SSM_PATH")]
+STRIPE_API_KEY: str = _secrets[get_envar("STRIPE_API_KEY_SSM_PATH")]

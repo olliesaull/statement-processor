@@ -235,7 +235,15 @@ function setPreflightSummaryFromPayload(payload) {
   }
 
   if (!payload.is_sufficient) {
-    setPreflightSummary("error", `Server confirmed ${totalPages} ${pageLabel}. ${availableTokens} ${tokenLabel} available, short by ${shortfall}.`);
+    // Read the buy-tokens URL from the form's data attribute (set server-side via url_for),
+    // falling back to the hardcoded path if the attribute is missing.
+    const buyUrl = uploadForm ? uploadForm.dataset.buyTokensUrl || "/buy-tokens" : "/buy-tokens";
+    // Values are server-supplied integers — no XSS risk using innerHTML here.
+    uploadPreflightSummary.innerHTML =
+      `Server confirmed ${totalPages} ${pageLabel}. ` +
+      `${availableTokens} ${tokenLabel} available, short by ${shortfall}. ` +
+      `<a href="${buyUrl}" class="btn btn-sm btn-outline-primary ms-2">Buy Tokens</a>`;
+    uploadPreflightSummary.dataset.preflightState = "error";
     return;
   }
 

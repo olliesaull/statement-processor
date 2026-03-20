@@ -177,6 +177,9 @@
       - Centralizes row item-type labeling (`invoice` -> `INV`, etc.) and Xero ID lookup from matched row payloads.
       - Reused by both HTML row-building and Excel export paths to keep link/label behavior aligned.
     - Formatting/helpers: `service/utils/formatting.py`, `service/utils/tenant_status.py`
+  - Stripe integration: `service/stripe_service.py` and `service/stripe_repository.py`
+    - `service/stripe_service.py` — all Stripe SDK calls (`stripe.Customer.search/create`, `stripe.checkout.Session.create/retrieve`). Uses dynamic `price_data` (not fixed Price objects) because token count is a free-form integer; the single Stripe Product (`prod_UBMoFkqStKFcjg`) is referenced by `STRIPE_PRODUCT_ID` env var so purchase history is attributed correctly in Stripe reporting. Customers are keyed on `metadata["tenant_id"]` (not email) so multiple Xero users in the same org share one Stripe Customer, which is required for future subscriptions.
+    - `service/stripe_repository.py` — DynamoDB ops for checkout state: idempotency records on `StripeEventStoreTable` and Stripe Customer ID cache on `TenantBillingTable`. Imports pre-constructed table objects from `service/config.py` (consistent with all other repositories) rather than constructing its own `ddb.Table` instances.
   - Xero integration + caching: `service/xero_repository.py`
   - Background sync job: `service/sync.py`
   - Tenant metadata: `service/tenant_data_repository.py`
@@ -213,6 +216,14 @@
     - `/api/tenant-statuses` (GET): returns tenant sync statuses for polling UI.
     - `/api/tenants/<tenant_id>/sync` (POST): triggers background Xero sync for a tenant.
     - **Auth behavior for API routes**: When `@xero_token_required` protects a `/api/...` endpoint and the session token is missing or expired, the decorator returns `401` JSON (`{"error": "auth_required"}`) instead of redirecting. The frontend polling/sync code (`service/static/assets/js/main.js`) treats either a 401 response or a redirected login response as a signal to navigate to `/login`, so passive actions still force a full re-login.
+  - **Stripe / token purchasing**
+    - `/pricing` (GET): public-facing pricing page — no auth required, explains token pricing (£0.10/token, min 10 tokens).
+    - `/buy-tokens` (GET): token amount input form with live price display; requires Xero auth.
+    - `/api/checkout/create` (POST): validates token count (10–10,000), gets or creates a Stripe Customer (keyed on `tenant_id` metadata, cached in `TenantBillingTable.StripeCustomerID`), creates a Stripe Checkout Session with dynamic `price_data`, and redirects to the Stripe-hosted checkout page. Caches the Stripe Customer ID immediately so the cache is populated even if the user abandons.
+    - `/checkout/success` (GET): called by Stripe on payment completion with `?session_id=cs_xxx`. Retrieves the session from Stripe, verifies `payment_status == "paid"`, checks idempotency via `StripeEventStoreTable`, credits tokens via `BillingService.adjust_token_balance` with `source="stripe-checkout"` and a deterministic `ledger_entry_id`, then records the session as processed. Renders the success page with tokens credited and updated balance. Safe to refresh — idempotency check prevents double-crediting.
+    - `/checkout/cancel` (GET): renders a cancellation page with a "Try Again" link; no tokens are credited.
+    - `/checkout/failed` (GET): renders an error page with a hex reference ID for support lookup.
+    - **Preflight shortfall link**: when `/api/upload-statements/preflight` returns `shortfall > 0`, the response JSON now includes `buy_tokens_url: "/buy-tokens"` so the upload page JS can render a "Buy Tokens" link in the red shortfall summary.
   - **Auth**
     - `/login` (GET): start Xero OAuth flow.
     - `/callback` (GET): OAuth callback (token validation + tenant load).
@@ -388,9 +399,11 @@
   "UpdatedAt": "2026-03-16T12:05:10+00:00",
   "LastLedgerEntryID": "reserve#<statement_id>",
   "LastMutationType": "RESERVE",
-  "LastMutationSource": "upload-submit"
+  "LastMutationSource": "upload-submit",
+  "StripeCustomerID": "cus_xxx"
 }
 ```
+- `StripeCustomerID` is an optional attribute written by `service/stripe_repository.py:StripeRepository.cache_customer_id` at checkout-creation time (and again as a fallback on the success redirect). Caching it here avoids a Stripe Customer search on every subsequent purchase and is essential groundwork for subscriptions, which require a persistent Customer object.
 
 **TenantTokenLedgerTable** (`cdk/stacks/statement_processor.py`)
 - **Keys**
@@ -402,6 +415,11 @@
   - `service/billing_service.py` writes `RESERVE` rows during upload submit.
   - `lambda_functions/textraction_lambda/core/billing.py` writes `CONSUME` or `RELEASE` rows after the Step Functions workflow reaches a terminal outcome.
   - Future billing/account pages in `service/` will query tenant ledger history.
+
+**TenantTokenLedgerTable — Stripe purchase entries**
+- `source="stripe-checkout"` (`LAST_MUTATION_SOURCE_STRIPE_CHECKOUT` in `service/billing_service.py`) identifies purchase credits in the ledger.
+- `LedgerEntryID` for purchases follows the pattern `purchase#<session_id>` (e.g. `purchase#cs_test_xxx`), which cross-references the matching `StripeEventStoreTable` record for audit lookups.
+- The `adjust_token_balance()` method accepts an optional `ledger_entry_id` kwarg; when supplied it is used directly instead of generating a random UUID, enabling conditional idempotency on the ledger write via `attribute_not_exists`.
 
 **Manual token adjustments**
 - Script: `scripts/manual_token_adjustment/manual_token_adjustment.py`
@@ -421,10 +439,23 @@
 - **Keys**
   - Partition key: `StripeEventID`
 - **Concept**
-  - Webhook idempotency store for Stripe events. Persisting processed event IDs in a dedicated table lets the Flask service safely ignore Stripe retries/replays without widening the Textraction Lambda IAM surface.
-- **Planned writers/readers**
-  - Future Stripe webhook handlers in `service/` will record processed event IDs before applying token grants.
-  - Future billing services in `service/` may read this table for webhook troubleshooting.
+  - Checkout-session idempotency store. Persisting processed session IDs here prevents double-crediting if the user refreshes `/checkout/success` after a successful payment. Keyed by the Stripe checkout session ID (`cs_xxx`) rather than a webhook event ID, because the MVP uses the success-redirect pattern rather than webhooks. When webhooks are added for subscriptions, the same table will absorb `invoice.paid` and other event IDs without schema changes.
+- **Writers**
+  - `service/stripe_repository.py:StripeRepository.record_processed_session` — written after tokens are credited on `/checkout/success`.
+- **Readers**
+  - `service/stripe_repository.py:StripeRepository.is_session_processed` — checked at the start of `/checkout/success` to short-circuit re-crediting.
+  - `service/stripe_repository.py:StripeRepository.get_processed_session` — reads the stored record so the success page can display the original token count on refresh without re-calling Stripe.
+- **Example item**:
+```json
+{
+  "StripeEventID": "cs_test_xxx",
+  "EventType": "checkout.session.completed",
+  "TenantID": "<tenant_id>",
+  "TokensCredited": 50,
+  "LedgerEntryID": "purchase#cs_test_xxx",
+  "ProcessedAt": "2026-03-20T10:00:00+00:00"
+}
+```
 
 ### S3 Layout
 **Bucket**
@@ -566,6 +597,45 @@ python3.13 scripts/tenant_snapshot/tenant_snapshot.py
 - Restore intentionally creates **new statement IDs**. Statement JSON and item rows are regenerated by Textraction.
 - If you disable workflow starts (`TENANT_SNAPSHOT_START_WORKFLOWS=false`), PDFs + statement headers are restored but JSON/item rows will not exist until processing is triggered later.
 - This script is designed for operational reset/reseed workflows, not perfect forensic restoration of every historical field.
+
+## Stripe Setup
+
+### One-time dashboard steps
+1. A Product named **"Statement Processor Tokens"** already exists in Stripe test mode with ID `prod_UBMoFkqStKFcjg`. No Price objects are needed — pricing is fully dynamic via `price_data` in each checkout session.
+2. Enable Invoicing on the Stripe account (Dashboard → Settings → Billing → Invoices). Required because checkout sessions are created with `invoice_creation={"enabled": True}`.
+3. For live mode: repeat the above with live-mode keys and update `STRIPE_PRODUCT_ID` and `STRIPE_API_KEY_SSM_PATH` accordingly.
+
+### SSM parameter
+```bash
+aws ssm put-parameter \
+  --name "/StatementProcessor/STRIPE_API_KEY" \
+  --type SecureString \
+  --value "sk_test_xxx"   # or sk_live_xxx for production
+```
+The path is read at startup via `STRIPE_API_KEY_SSM_PATH` env var (already set in `service/.env` and the CDK stack).
+
+### Environment variables
+| Variable | Example value | Purpose |
+|---|---|---|
+| `STRIPE_API_KEY_SSM_PATH` | `/StatementProcessor/STRIPE_API_KEY` | SSM path for the secret key — resolved at startup |
+| `STRIPE_PRODUCT_ID` | `prod_UBMoFkqStKFcjg` | Stripe Product ID for token purchases |
+| `STRIPE_PRICE_PER_TOKEN_PENCE` | `10` | Price per token in pence (10p = £0.10) |
+| `STRIPE_CURRENCY` | `gbp` | Stripe currency code |
+| `STRIPE_MIN_TOKENS` | `10` | Minimum tokens per purchase (£1.00 minimum) |
+| `STRIPE_MAX_TOKENS` | `10000` | Maximum tokens per purchase |
+
+All non-secret variables are plain env vars (in `service/.env` for local dev; in the CDK `environment_variables` block for AppRunner). Only the secret key is stored in SSM.
+
+### Design decisions
+- **No webhooks for MVP.** Token crediting happens on the success redirect: the session is retrieved from Stripe, `payment_status` is verified, and tokens are credited. Idempotency prevents double-crediting on page refresh. If the user's browser closes before the redirect fires, tokens are credited manually via the admin adjustment tool. Webhooks will be added when subscriptions require reliable async credit.
+- **Dynamic `price_data` not fixed Prices.** Token count is a free-form integer, so a fixed Price object cannot represent every possible purchase. One Product is reused across all purchases for correct Stripe reporting attribution.
+- **Stripe Customer per tenant, not per user.** Customers are keyed on `tenant_id` metadata so multiple Xero users in the same organisation share one Stripe Customer — a prerequisite for subscriptions, where billing is per-tenant.
+- **No VAT.** Not VAT-registered (UK businesses below the £90k threshold). No `tax_rates` on line items.
+
+### Testing
+Use Stripe test cards:
+- `4242 4242 4242 4242` — successful payment
+- `4000 0000 0000 0002` — declined card
 
 ## Playwright Regression Fixture: Test Statements Ltd (Demo Company UK)
 

@@ -45,6 +45,10 @@
                             href="{{ url_for('about') }}">About</a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'pricing' %}active{% endif %}"
+                            href="{{ url_for('pricing') }}">Pricing</a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'instructions' %}active{% endif %}"
                             href="{{ url_for('instructions') }}">Instructions</a>
                     </li>
