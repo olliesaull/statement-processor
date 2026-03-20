@@ -92,11 +92,9 @@ After the existing client declarations (line 85-87), add:
 ```python
 import botocore.config
 
-textract_client = boto3.client("textract")
-bedrock_runtime_client = boto3.client(
-    "bedrock-runtime",
-    config=botocore.config.Config(retries={"max_attempts": 3, "mode": "adaptive"}),
-)
+_adaptive_retry = botocore.config.Config(retries={"max_attempts": 3, "mode": "adaptive"})
+textract_client = boto3.client("textract", config=_adaptive_retry)
+bedrock_runtime_client = boto3.client("bedrock-runtime", config=_adaptive_retry)
 ```
 
 - [ ] **Step 2: Commit**
@@ -162,6 +160,15 @@ def test_non_numeric_dates_passthrough() -> None:
         "D MMMM YYYY",
     )
     assert result == "D MMMM YYYY"
+
+
+def test_corrects_llm_format_when_data_contradicts() -> None:
+    """If LLM says MM/DD but data proves DD/MM, the format should be corrected."""
+    result = disambiguate_date_format(
+        ["15/03/2025", "20/06/2025"],
+        "MM/DD/YYYY",  # LLM got it wrong
+    )
+    assert result == "DD/MM/YYYY"
 
 
 def test_preserves_llm_format_when_unambiguous() -> None:
@@ -243,22 +250,28 @@ def disambiguate_date_format(
     second_has_gt12 = any(v > 12 for v in second_positions)
 
     if first_has_gt12 and not second_has_gt12:
-        # First position must be day (DD/MM).
+        # First position must be day (DD/MM). Correct the LLM format if it
+        # suggested MM/DD by swapping the day/month tokens.
+        corrected = _ensure_dd_mm(llm_suggested_format)
         logger.info(
             "Date format disambiguated as DD/MM",
             sample_count=len(first_positions),
             max_first=max(first_positions),
+            corrected_format=corrected,
         )
-        return llm_suggested_format
+        return corrected
 
     if second_has_gt12 and not first_has_gt12:
-        # Second position must be day (MM/DD).
+        # Second position must be day (MM/DD). Correct the LLM format if it
+        # suggested DD/MM by swapping the day/month tokens.
+        corrected = _ensure_mm_dd(llm_suggested_format)
         logger.info(
             "Date format disambiguated as MM/DD",
             sample_count=len(second_positions),
             max_second=max(second_positions),
+            corrected_format=corrected,
         )
-        return llm_suggested_format
+        return corrected
 
     # Both <= 12 everywhere: genuinely ambiguous.
     logger.info(
@@ -266,6 +279,29 @@ def disambiguate_date_format(
         sample_count=len(first_positions),
     )
     return ""
+
+
+def _ensure_dd_mm(fmt: str) -> str:
+    """If format has MM before DD, swap them so day comes first."""
+    # Handle token pairs: DD/MM, D/M, DD/M, D/MM etc.
+    # Simple approach: if format starts with M-type token before D-type, swap.
+    import re as _re
+    # Match leading M-token followed by separator then D-token
+    pattern = _re.compile(r"^(M{1,2})([\s/\-\.]+)(D{1,2}|Do)")
+    match = pattern.match(fmt)
+    if match:
+        return fmt[:match.start()] + match.group(3) + match.group(2) + match.group(1) + fmt[match.end():]
+    return fmt
+
+
+def _ensure_mm_dd(fmt: str) -> str:
+    """If format has DD before MM, swap them so month comes first."""
+    import re as _re
+    pattern = _re.compile(r"^(D{1,2}|Do)([\s/\-\.]+)(M{1,2})")
+    match = pattern.match(fmt)
+    if match:
+        return fmt[:match.start()] + match.group(3) + match.group(2) + match.group(1) + fmt[match.end():]
+    return fmt
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -418,7 +454,7 @@ Expected: FAIL — `ModuleNotFoundError`
 
 Create `service/core/bedrock_client.py`. Key elements:
 - `HAIKU_MODEL_ID = "anthropic.claude-haiku-4-5-20251001"` — model ID for Bedrock Converse API
-- `SUGGEST_CONFIG_TOOL` — tool definition dict matching the spec's JSON schema
+- `SUGGEST_CONFIG_TOOL` — tool definition dict matching the spec's JSON schema. **Important:** The Bedrock Converse API uses camelCase keys — use `inputSchema` (not `input_schema` from the spec)
 - `build_suggestion_prompt(headers, rows)` — builds the user message with headers, sample rows, and the SDF token reference table
 - `suggest_column_mapping(headers, rows)` — calls `bedrock_runtime_client.converse()` with the tool, forced `tool_choice`, parses response
 - `parse_suggestion_response(response)` — extracts tool use input from Converse API response, returns `(config_dict, confidence_notes)`
@@ -478,6 +514,7 @@ class ConfigSuggestion(BaseModel):
     contact_name: str
     statement_id: str
     filename: str
+    page_count: int
     suggested_config: dict[str, Any]
     detected_headers: list[str]
     confidence_notes: str = ""
@@ -681,6 +718,7 @@ def suggest_config_for_statement(
     statement_id: str,
     pdf_s3_key: str,
     filename: str,
+    page_count: int = 0,
 ) -> None:
     """Run the full config suggestion pipeline for a single statement.
 
@@ -715,6 +753,7 @@ def suggest_config_for_statement(
             contact_name=contact_name,
             statement_id=statement_id,
             filename=filename,
+            page_count=page_count,
             suggested_config=suggested_config,
             detected_headers=headers,
             confidence_notes=confidence_notes,
@@ -882,10 +921,21 @@ review_uploads = [u for u in prepared if u.needs_config_review]
 # Process ready uploads as before (reserve, upload, start step function)
 # ...
 
-# Submit review uploads to thread pool
+# Submit review uploads to thread pool (no token reservation — free until confirm)
 for upload in review_uploads:
-    statement_id = _create_statement_header(tenant_id, upload)  # New helper
-    pdf_key = _upload_pdf_to_s3(tenant_id, statement_id, upload)  # New helper
+    # Generate statement_id using the same pattern as existing uploads (uuid4 hex)
+    statement_id = uuid.uuid4().hex
+
+    # Create a minimal DynamoDB header row so the statement appears in /statements
+    # with status "pending_config_review". Include: TenantID, StatementID,
+    # RecordType="statement", ContactID, ContactName, Filename, PdfPageCount,
+    # Status="pending_config_review", UploadedAt=ISO timestamp.
+    _create_review_statement_header(tenant_id, statement_id, upload)
+
+    # Upload PDF to S3 at the standard path (reuse existing upload_statement_to_s3)
+    pdf_key = f"{tenant_id}/statements/{statement_id}.pdf"
+    upload_statement_to_s3(tenant_id, statement_id, upload.uploaded_file)
+
     _executor.submit(
         suggest_config_for_statement,
         tenant_id=tenant_id,
@@ -894,8 +944,11 @@ for upload in review_uploads:
         statement_id=statement_id,
         pdf_s3_key=pdf_key,
         filename=upload.uploaded_file.filename or "statement.pdf",
+        page_count=upload.page_count,
     )
 ```
+
+The `_create_review_statement_header` helper writes a DynamoDB row to `TenantStatementsTable` with the same key structure as existing statement headers (`TenantID` + `StatementID`), but with `Status="pending_config_review"` instead of the usual processing status, and no billing reservation fields.
 
 - [ ] **Step 4: Update upload success messaging**
 
@@ -935,7 +988,7 @@ This endpoint handles confirmation of a single suggested config:
 @route_handler_logging
 def confirm_config_suggestion():
     """Confirm an LLM-suggested config and kick off full extraction."""
-    tenant_id = session.get("tenant_id")
+    tenant_id = session.get("xero_tenant_id")
     data = request.get_json()
 
     contact_id = data.get("contact_id", "")
@@ -951,11 +1004,20 @@ def confirm_config_suggestion():
     config = ContactConfig.model_validate(config_payload)
     set_contact_config(tenant_id, contact_id, config)
 
+    # Load suggestion to get page_count for token reservation
+    suggestion = get_suggestion(tenant_id, statement_id)
+    page_count = suggestion.page_count if suggestion else 0
+
     # Delete suggestion from S3
     delete_suggestion(tenant_id, statement_id)
 
-    # Reserve tokens and start Step Function
-    # ... (reuse existing _reserve_and_start logic)
+    # Reserve tokens using page_count from the suggestion
+    # Use BillingService to reserve tokens for page_count pages
+    # Then start the Step Function for this statement
+    # The PDF is already in S3 from the upload step
+    pdf_key = f"{tenant_id}/statements/{statement_id}.pdf"
+    json_key = f"{tenant_id}/statements/{statement_id}.json"
+    start_textraction_state_machine(tenant_id, contact_id, statement_id, pdf_key, json_key)
 
     return jsonify({"ok": True, "statement_id": statement_id})
 ```
@@ -988,7 +1050,7 @@ Accepts a list of configs to confirm. Validates each, skips invalid ones, return
 @route_handler_logging
 def confirm_all_config_suggestions():
     """Confirm multiple suggested configs. Skips invalid ones."""
-    tenant_id = session.get("tenant_id")
+    tenant_id = session.get("xero_tenant_id")
     items = request.get_json().get("items", [])
 
     confirmed = []
@@ -1095,21 +1157,40 @@ git commit -m "feat: redesign /configs page with pending review cards and header
 In `app.py`, add a context processor that injects the pending review count into all templates:
 
 ```python
+import time
+
 @app.context_processor
 def inject_pending_review_count():
-    """Make pending config review count available to all templates."""
-    tenant_id = session.get("tenant_id")
+    """Make pending config review count available to all templates.
+
+    Caches the count in the session for 60 seconds to avoid an S3 list
+    call on every page load.
+    """
+    tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
         return {"pending_config_review_count": 0}
+
+    cache_key = "_pending_review_count"
+    cache_ts_key = "_pending_review_count_ts"
+    now = time.time()
+
+    # Return cached value if fresh (< 60s old)
+    cached_ts = session.get(cache_ts_key, 0)
+    if now - cached_ts < 60:
+        return {"pending_config_review_count": session.get(cache_key, 0)}
+
     try:
         from core.config_suggestion import get_pending_suggestion_count
         count = get_pending_suggestion_count(tenant_id)
     except Exception:
         count = 0
+
+    session[cache_key] = count
+    session[cache_ts_key] = now
     return {"pending_config_review_count": count}
 ```
 
-Add `get_pending_suggestion_count(tenant_id)` to `config_suggestion.py` — a lightweight S3 list call that counts objects under the `config-suggestions/` prefix without loading them.
+Add `get_pending_suggestion_count(tenant_id)` to `config_suggestion.py` — a lightweight S3 `list_objects_v2` call that counts objects under the `config-suggestions/` prefix without loading them. Define this in Task 6 alongside `get_pending_suggestions` and `delete_suggestion`.
 
 - [ ] **Step 2: Add banner to base.html**
 
