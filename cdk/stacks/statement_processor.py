@@ -404,6 +404,14 @@ class StatementProcessorStack(Stack):
                         "XERO_CLIENT_ID_SSM_PATH": "/StatementProcessor/XERO_CLIENT_ID",
                         "XERO_CLIENT_SECRET_SSM_PATH": "/StatementProcessor/XERO_CLIENT_SECRET",
                         "FLASK_SECRET_KEY_SSM_PATH": "/StatementProcessor/FLASK_SECRET_KEY",
+                        # Stripe — secret key fetched from SSM at startup
+                        "STRIPE_API_KEY_SSM_PATH": "/StatementProcessor/STRIPE_API_KEY",
+                        # Stripe — non-secret config (plain env vars)
+                        "STRIPE_PRODUCT_ID": "prod_UBMoFkqStKFcjg",
+                        "STRIPE_PRICE_PER_TOKEN_PENCE": "10",
+                        "STRIPE_CURRENCY": "gbp",
+                        "STRIPE_MIN_TOKENS": "10",
+                        "STRIPE_MAX_TOKENS": "10000",
                     },
                 ),
             ),

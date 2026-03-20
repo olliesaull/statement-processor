@@ -196,9 +196,9 @@ Call site: `adjust_token_balance(tenant_id, token_count, source=LAST_MUTATION_SO
 
 ### 3.1 Stripe Dashboard — Manual Steps
 
-1. Create **Product**: name `Statement Processor Tokens`, type one-time
-2. Note the Product ID (`prod_xxx`) → store as `STRIPE_PRODUCT_ID` env var
-3. Create test-mode secret key → store in SSM `/StatementProcessor/StripeApiKey`
+1. ~~Create **Product**: name `Statement Processor Tokens`, type one-time~~ **Done** — Product ID: `prod_UBMoFkqStKFcjg`
+2. ~~Note the Product ID (`prod_xxx`) → store as `STRIPE_PRODUCT_ID` env var~~ **Done** — set in `.env` and CDK stack
+3. Create test-mode secret key → store in SSM `/StatementProcessor/STRIPE_API_KEY`
 4. Enable Invoicing on the Stripe account (Dashboard → Settings → Billing → Invoices). Required because `create_checkout_session` uses `invoice_creation={"enabled": True}`.
 5. (Live) Repeat with live-mode keys for production
 
@@ -208,7 +208,7 @@ No Price objects to create — pricing is fully dynamic via `price_data`.
 
 | SSM Path | Purpose |
 |----------|---------|
-| `/StatementProcessor/StripeApiKey` | Stripe secret key (`sk_test_xxx` / `sk_live_xxx`) |
+| `/StatementProcessor/STRIPE_API_KEY` | Stripe secret key (`sk_test_xxx` / `sk_live_xxx`) |
 
 Only one new SSM secret. No webhook signing secret needed (no webhook endpoint).
 
@@ -216,7 +216,7 @@ Only one new SSM secret. No webhook signing secret needed (no webhook endpoint).
 
 | Variable | Example Value | Purpose |
 |----------|--------------|---------|
-| `STRIPE_API_KEY_SSM_PATH` | `/StatementProcessor/StripeApiKey` | SSM path read by `config.py` at startup |
+| `STRIPE_API_KEY_SSM_PATH` | `/StatementProcessor/STRIPE_API_KEY` | SSM path read by `config.py` at startup |
 | `STRIPE_PRODUCT_ID` | `prod_xxx` | Stripe Product ID created in dashboard |
 | `STRIPE_PRICE_PER_TOKEN_PENCE` | `10` | Price per token in pence (e.g. `10` = £0.10/token) |
 | `STRIPE_CURRENCY` | `gbp` | Defaults to `gbp` |
@@ -635,10 +635,10 @@ Add to the AppRunner `environment_variables` dict:
 
 ```python
 # Stripe — secret key fetched from SSM at startup
-"STRIPE_API_KEY_SSM_PATH": "/StatementProcessor/StripeApiKey",
+"STRIPE_API_KEY_SSM_PATH": "/StatementProcessor/STRIPE_API_KEY",
 
 # Stripe — non-secret config (plain env vars)
-"STRIPE_PRODUCT_ID": "prod_xxx",
+"STRIPE_PRODUCT_ID": "prod_UBMoFkqStKFcjg",
 "STRIPE_PRICE_PER_TOKEN_PENCE": "10",
 "STRIPE_CURRENCY": "gbp",
 "STRIPE_MIN_TOKENS": "10",
@@ -661,7 +661,7 @@ The non-secret values (`STRIPE_PRODUCT_ID`, `STRIPE_PRICE_PER_TOKEN_PENCE`, etc.
 
 ```bash
 aws ssm put-parameter \
-  --name "/StatementProcessor/StripeApiKey" \
+  --name "/StatementProcessor/STRIPE_API_KEY" \
   --type SecureString \
   --value "sk_test_xxx"
 ```
@@ -716,8 +716,8 @@ Then run `make update-venv`.
 
 ### Phase 1: Foundation
 1. Add `stripe` to `service/requirements.txt`, run `make update-venv`
-1a. Create SSM param `/StatementProcessor/StripeApiKey` (test-mode key) — must exist before config.py tries to fetch it
-1b. Add `STRIPE_API_KEY_SSM_PATH=/StatementProcessor/StripeApiKey` to `.env` — must be set before `config.py` is loaded locally
+1a. Create SSM param `/StatementProcessor/STRIPE_API_KEY` (test-mode key) — must exist before config.py tries to fetch it
+1b. Add `STRIPE_API_KEY_SSM_PATH=/StatementProcessor/STRIPE_API_KEY` to `.env` — must be set before `config.py` is loaded locally
 1c. Extend `config.py` to load `STRIPE_API_KEY` from SSM (safe now that both the param and the env var path exist)
 1d. Extend OAuth callback in `app.py`: capture return value of `oauth.xero.parse_id_token()` as `claims` and store `claims.get("email", "")` as `session["xero_user_email"]`
 2. Create Stripe Product in dashboard, note Product ID
