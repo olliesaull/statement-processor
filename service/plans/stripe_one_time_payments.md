@@ -106,6 +106,7 @@ Only the Stripe secret key is stored in SSM (SecureString). All non-secret confi
 
 | Template | Action | Purpose |
 |----------|--------|---------|
+| `templates/pricing.html` | **New** | Public-facing page explaining how token pricing works |
 | `templates/buy_tokens.html` | **New** | Token amount input + live price display |
 | `templates/checkout_success.html` | **New** | Payment confirmation with tokens credited and new balance |
 | `templates/checkout_cancel.html` | **New** | Payment cancelled, retry CTA |
@@ -113,6 +114,40 @@ Only the Stripe secret key is stored in SSM (SecureString). All non-secret confi
 | `templates/tenant_management.html` | **Modify** | Add "Buy Tokens" button next to balance chip |
 | `templates/upload_statements.html` | **Modify** | Add `data-buy-tokens-url` attribute on the upload form |
 | `static/assets/js/upload-statements.js` | **Modify** | Render "Buy Tokens" link in shortfall message |
+
+### 1.5 `pricing.html` — Public Pricing Page
+
+A simple, public-facing page (no login required) that explains how token-based pricing works. Extends `base.html`. No JS needed — all content is static.
+
+**Route:** `GET /pricing` — no `@xero_token_required` decorator so prospective customers can see it before signing up.
+
+**Content sections:**
+
+1. **Header** — "Simple, pay-as-you-go pricing."
+
+2. **How it works** — three short bullet points:
+   - Each PDF page costs **1 token**.
+   - Tokens are purchased in advance and deducted as you upload.
+   - Unused tokens roll over — they never expire.
+
+3. **Pricing** — a single clear card (not a tier grid) showing:
+   - **£0.10 per token** (10p per page)
+   - Minimum purchase: **10 tokens = £1.00**
+   - No subscription, no commitment — buy what you need
+
+4. **Example table** — three illustrative scenarios to make the cost tangible:
+
+   | Example | Pages | Tokens used | Cost |
+   |---------|-------|-------------|------|
+   | Small supplier statement | 2 | 2 | £0.20 |
+   | Typical monthly statement | 8 | 8 | £0.80 |
+   | Large annual statement | 30 | 30 | £3.00 |
+
+5. **Disclaimers** (small text below the card):
+   - Prices are exclusive of VAT. Not currently VAT-registered.
+   - Tokens are non-refundable once purchased.
+
+**Navbar:** Add "Pricing" link to `base.html` navbar between "About" and "Instructions" — active when `request.endpoint == 'pricing'`.
 
 ---
 
@@ -141,7 +176,7 @@ The CDK stack already defines this table and grants the AppRunner instance role 
 
 No other schema changes needed. The existing `TokenBalance`, `UpdatedAt`, `LastLedgerEntryID`, `LastMutationType`, and `LastMutationSource` fields support purchases without modification.
 
-### 2.3 Billing Ledger — new source constant
+### 2.3 Billing Ledger — new source constant and ledger_entry_id param
 
 Add to `billing_service.py`:
 
@@ -149,7 +184,11 @@ Add to `billing_service.py`:
 LAST_MUTATION_SOURCE_STRIPE_CHECKOUT = "stripe-checkout"
 ```
 
-Reuse `adjust_token_balance(tenant_id, token_delta, source=LAST_MUTATION_SOURCE_STRIPE_CHECKOUT)`. The **only** idempotency guard is `StripeRepository.is_session_processed()` — checked before any crediting. The `LedgerEntryID` stored in `StripeEventStoreTable` (`purchase#<checkout_session_id>`) is for audit linkage only (so a support engineer can cross-reference a Stripe session to the exact ledger entry); it is not passed to `adjust_token_balance()` and does not provide a second DynamoDB-level guard.
+`adjust_token_balance()` gains an optional `ledger_entry_id: str | None = None` keyword argument. When supplied (e.g. `purchase#<session_id>`), that value is used as the ledger entry ID instead of generating `f"adjustment#{uuid4()}"`. This:
+- Fixes the audit cross-reference between `StripeEventStoreTable` and `TenantTokenLedgerTable` — a support engineer can look up `purchase#cs_xxx` in either table and find the same operation.
+- Makes the ledger write conditionally idempotent via `attribute_not_exists` on the entry ID.
+
+Call site: `adjust_token_balance(tenant_id, token_count, source=LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, ledger_entry_id=f"purchase#{session_id}")`.
 
 ---
 
@@ -160,7 +199,8 @@ Reuse `adjust_token_balance(tenant_id, token_delta, source=LAST_MUTATION_SOURCE_
 1. Create **Product**: name `Statement Processor Tokens`, type one-time
 2. Note the Product ID (`prod_xxx`) → store as `STRIPE_PRODUCT_ID` env var
 3. Create test-mode secret key → store in SSM `/StatementProcessor/StripeApiKey`
-4. (Live) Repeat with live-mode keys for production
+4. Enable Invoicing on the Stripe account (Dashboard → Settings → Billing → Invoices). Required because `create_checkout_session` uses `invoice_creation={"enabled": True}`.
+5. (Live) Repeat with live-mode keys for production
 
 No Price objects to create — pricing is fully dynamic via `price_data`.
 
@@ -373,14 +413,27 @@ def checkout_create():
     tenant_id = session.get("xero_tenant_id")
     token_count_raw = request.form.get("token_count", "").strip()
 
-    # Validate input
+    # Validate input — re-render form on error (this is a form POST, not AJAX;
+    # JSON responses would render as raw text in the browser).
     try:
         token_count = int(token_count_raw)
     except (ValueError, TypeError):
-        return jsonify({"error": "invalid_token_count"}), 400
+        return render_template(
+            "buy_tokens.html",
+            error="Please enter a valid number of tokens.",
+            min_tokens=STRIPE_MIN_TOKENS,
+            max_tokens=STRIPE_MAX_TOKENS,
+            price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
+        ), 400
 
     if not (STRIPE_MIN_TOKENS <= token_count <= STRIPE_MAX_TOKENS):
-        return jsonify({"error": "token_count_out_of_range"}), 400
+        return render_template(
+            "buy_tokens.html",
+            error=f"Token count must be between {STRIPE_MIN_TOKENS} and {STRIPE_MAX_TOKENS}.",
+            min_tokens=STRIPE_MIN_TOKENS,
+            max_tokens=STRIPE_MAX_TOKENS,
+            price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
+        ), 400
 
     # Get or create Stripe Customer; cache ID immediately (before checkout)
     # so future sessions skip the Stripe search even if this one is abandoned.
@@ -462,11 +515,14 @@ def checkout_success():
 
     token_count = int(stripe_session.metadata["token_count"])
 
-    # Credit tokens (deterministic ledger entry ID = natural idempotency key)
+    # Credit tokens. ledger_entry_id ties this ledger row to the Stripe session
+    # in StripeEventStoreTable, enabling audit cross-reference and making the
+    # ledger write conditionally idempotent via attribute_not_exists.
     ledger_entry_id = f"purchase#{session_id}"
     BillingService.adjust_token_balance(
         tenant_id, token_count,
-        source=LAST_MUTATION_SOURCE_STRIPE_CHECKOUT
+        source=LAST_MUTATION_SOURCE_STRIPE_CHECKOUT,
+        ledger_entry_id=ledger_entry_id,
     )
 
     # Cache Stripe customer ID for future checkouts (idempotent — UpdateItem
@@ -488,20 +544,16 @@ def checkout_success():
 
 ### 4.6 Preflight Modification
 
-In `utils/statement_upload_validation.py`, `StatementUploadPreflightResult.to_response_payload()`:
+`statement_upload_validation.py` needs no changes for this feature. Instead, inject `buy_tokens_url` in the `upload_statements_preflight` route handler in `app.py` after calling `to_response_payload()`:
 
 ```python
-def to_response_payload(self) -> dict[str, Any]:
-    payload = {
-        # ... existing fields unchanged ...
-    }
-    if self.shortfall > 0:
-        # TODO: replace hardcoded path with url_for("buy_tokens") once this
-        # method has access to the Flask app context, or move URL injection
-        # to the route handler.
-        payload["buy_tokens_url"] = "/buy-tokens"
-    return payload
+payload = preflight_result.to_response_payload()
+if preflight_result.shortfall > 0:
+    payload["buy_tokens_url"] = url_for("buy_tokens")
+return jsonify(payload), 200
 ```
+
+This avoids giving `to_response_payload()` knowledge of Flask's URL routing (which would require app context) and keeps the validation model clean.
 
 ---
 
@@ -525,9 +577,19 @@ Add "Buy Tokens" button next to the existing balance chip (line 23):
 Extends `base.html`. Contains:
 
 - Current token balance display
-- Number input: label "Number of tokens", `min=10`, `max=10000`, step=1 (min=10 matches `STRIPE_MIN_TOKENS`)
-- Live price display line, e.g. `"50 tokens = £5.00"` — updated by JS as user types
-- The price per token (in pence) is passed as `data-price-pence` on the form element so JS can calculate without a server round-trip
+- Number input: `min`, `max`, and `data-price-pence` / `data-min-tokens` / `data-max-tokens` are passed as template variables from the route handler (read from `stripe_service` module constants), not hardcoded in the template:
+
+```html
+<input type="number"
+  min="{{ min_tokens }}"
+  max="{{ max_tokens }}"
+  data-price-pence="{{ price_pence }}"
+  data-min-tokens="{{ min_tokens }}"
+  data-max-tokens="{{ max_tokens }}"
+>
+```
+
+- Live price display line, e.g. `"50 tokens = £5.00"` — updated by JS as user types using `data-price-pence`
 - "Proceed to Payment" submit button → POST to `/api/checkout/create`
 - CSRF hidden field (`{{ csrf_token() }}`)
 
@@ -654,36 +716,39 @@ Then run `make update-venv`.
 
 ### Phase 1: Foundation
 1. Add `stripe` to `service/requirements.txt`, run `make update-venv`
-1a. Extend OAuth callback in `app.py`: capture return value of `oauth.xero.parse_id_token()` as `claims` and store `claims.get("email", "")` as `session["xero_user_email"]`
-2. Create SSM parameter `/StatementProcessor/StripeApiKey` (test key)
-3. Create Stripe Product in dashboard, note Product ID
-4. Extend `config.py` to load `STRIPE_API_KEY` from SSM
-5. Add `LAST_MUTATION_SOURCE_STRIPE_CHECKOUT` to `billing_service.py`
+1a. Create SSM param `/StatementProcessor/StripeApiKey` (test-mode key) — must exist before config.py tries to fetch it
+1b. Add `STRIPE_API_KEY_SSM_PATH=/StatementProcessor/StripeApiKey` to `.env` — must be set before `config.py` is loaded locally
+1c. Extend `config.py` to load `STRIPE_API_KEY` from SSM (safe now that both the param and the env var path exist)
+1d. Extend OAuth callback in `app.py`: capture return value of `oauth.xero.parse_id_token()` as `claims` and store `claims.get("email", "")` as `session["xero_user_email"]`
+2. Create Stripe Product in dashboard, note Product ID
+3. Add `LAST_MUTATION_SOURCE_STRIPE_CHECKOUT` to `billing_service.py`
+4. Add optional `ledger_entry_id` param to `adjust_token_balance()`
 
 ### Phase 2: Stripe Layer
 6. Create `service/stripe_service.py`
 7. Create `service/stripe_repository.py`
 
 ### Phase 3: Routes and Templates
-8. Add `GET /buy-tokens` route + `buy_tokens.html`
-9. Add `POST /api/checkout/create` route
-10. Add `GET /checkout/success` route + `checkout_success.html`
-11. Add `GET /checkout/cancel` + `GET /checkout/failed` routes + templates
+8. Add `GET /pricing` route (no auth) + `pricing.html`; add "Pricing" link to `base.html` navbar
+9. Add `GET /buy-tokens` route + `buy_tokens.html`
+10. Add `POST /api/checkout/create` route
+11. Add `GET /checkout/success` route + `checkout_success.html`
+12. Add `GET /checkout/cancel` + `GET /checkout/failed` routes + templates
 
 ### Phase 4: UI Integration
-12. Modify `tenant_management.html` — "Buy Tokens" button
-13. Modify `StatementUploadPreflightResult.to_response_payload()` — add `buy_tokens_url`
-14. Modify `upload_statements.html` — add `data-buy-tokens-url`
-15. Modify `upload-statements.js` — add "Buy Tokens" link in shortfall message
+13. Modify `tenant_management.html` — "Buy Tokens" button
+14. Inject `buy_tokens_url` in `upload_statements_preflight` route handler in `app.py` (no changes to `statement_upload_validation.py`)
+15. Modify `upload_statements.html` — add `data-buy-tokens-url`
+16. Modify `upload-statements.js` — add "Buy Tokens" link in shortfall message
 
 ### Phase 5: Infrastructure and Tests
-16. Update CDK stack with Stripe env vars
-17. Update `.env` with local dev values
-18. Write unit tests (`test_stripe_service.py`, `test_stripe_repository.py`)
-19. Run `make dev` — verify formatting, linting, tests pass
+17. Update CDK stack with Stripe env vars
+18. Update `.env` with local dev values
+19. Write unit tests (`test_stripe_service.py`, `test_stripe_repository.py`)
+20. Run `make dev` — verify formatting, linting, tests pass
 
 ### Phase 6: Documentation
-20. Update `README.md` with:
+21. Update `README.md` with:
     - Stripe setup section (create Product in dashboard, SSM parameter)
     - New environment variables table (with descriptions)
     - Local dev setup instructions for Stripe
@@ -715,15 +780,17 @@ Then run `make update-venv`.
 |------|--------|
 | `service/requirements.txt` | Add `stripe` |
 | `service/config.py` | Load `STRIPE_API_KEY` from SSM in `_fetch_ssm_secrets()` |
-| `service/billing_service.py` | Add `LAST_MUTATION_SOURCE_STRIPE_CHECKOUT` constant |
 | `service/stripe_service.py` | **New** — Stripe API wrapper |
 | `service/stripe_repository.py` | **New** — DynamoDB ops for checkout state |
-| `service/app.py` | OAuth callback: extract `xero_user_email` from id_token claims; add 5 new routes |
-| `service/utils/statement_upload_validation.py` | Add `buy_tokens_url` to preflight payload |
+| `service/app.py` | OAuth callback: extract `xero_user_email` from id_token claims; add 6 new routes; inject `buy_tokens_url` in preflight route handler |
+| `service/billing_service.py` | Add `LAST_MUTATION_SOURCE_STRIPE_CHECKOUT` constant; add optional `ledger_entry_id` param to `adjust_token_balance()` |
+| `service/utils/statement_upload_validation.py` | No change needed (URL injected in route handler) |
+| `templates/pricing.html` | **New** — public pricing explanation page |
 | `templates/buy_tokens.html` | **New** |
 | `templates/checkout_success.html` | **New** |
 | `templates/checkout_cancel.html` | **New** |
 | `templates/checkout_failed.html` | **New** |
+| `templates/base.html` | Add "Pricing" nav link |
 | `templates/tenant_management.html` | Add "Buy Tokens" button |
 | `templates/upload_statements.html` | Add `data-buy-tokens-url` attribute |
 | `static/assets/js/upload-statements.js` | Shortfall message with "Buy Tokens" link |
