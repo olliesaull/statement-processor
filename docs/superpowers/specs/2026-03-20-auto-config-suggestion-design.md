@@ -27,20 +27,24 @@ Config exists? → YES → Upload PDF → S3 → Start Step Function → Textrac
 
 ```
 Config exists? → YES → Upload PDF → S3 → Start Step Function (unchanged)
-Config exists? → NO  → Upload PDF → S3 → Background thread:
-                         1. Textract AnalyzeDocument (page 1 only, sync API)
+Config exists? → NO  → Upload PDF → S3 → Background task via ThreadPoolExecutor:
+                         1. Textract AnalyzeDocument (page 1 only, sync API, FeatureTypes=["TABLES"])
                          2. Pass headers + all rows to Bedrock Haiku 4.5 (in memory, not persisted)
                          3. Save suggested config to S3: <tenant_id>/config-suggestions/<statement_id>.json
                          4. Set statement status → "pending_config_review"
                        User confirms config later →
-                         1. Backend validates mandatory fields (number, total, date_format)
+                         1. Backend validates mandatory fields (number, date, total, date_format)
                          2. Config saved to TenantContactsConfigTable
                          3. Full Step Function kicked off (existing flow)
 ```
 
+### Token reservation
+
+First-time config suggestion uploads are **free** (no token reservation). Tokens are reserved later when the user confirms the config and the full Step Function kicks off. This avoids locked tokens for abandoned suggestions.
+
 ### Key decisions
 
-- Textract sync API (`AnalyzeDocument`) for single page — no polling needed, ~10s response.
+- Textract sync API (`AnalyzeDocument`) with `FeatureTypes=["TABLES"]` for single page — no polling needed, ~10s response.
 - Raw first-page Textract output is ephemeral (held in memory, passed to LLM, discarded). The full Step Function run produces its own Textract output.
 - Suggested config stored in S3 separately from confirmed config. Only persisted to `TenantContactsConfigTable` after user confirmation.
 - New statement status value: `pending_config_review`.
@@ -60,9 +64,31 @@ Config exists? → NO  → Upload PDF → S3 → Background thread:
 - Use Bedrock tool use (structured output) with forced tool call (`tool_choice: {"type": "tool", "name": "suggest_config"}`)
 - Prompt instructs the model to:
   1. Map headers to `number`, `date`, `due_date`, `total` fields
-  2. Infer `date_format` from sample date values
+  2. Infer `date_format` from sample date values using the **Supplier Date Format (SDF) token set** (see below)
   3. Infer `decimal_separator` and `thousands_separator` from sample numeric values
   4. Return empty string for fields it can't confidently map
+- The `raw` field from `ContactConfig` is **intentionally excluded** from auto-suggestion. Raw passthrough headers are auto-discovered during full extraction and do not need user configuration.
+
+### Supplier Date Format (SDF) token reference
+
+The LLM prompt must include this exact token set. The system uses a custom date format language — **not** Python `strftime` and **not** Java `SimpleDateFormat`.
+
+| Token | Meaning | Example match |
+|---|---|---|
+| `YYYY` | 4-digit year | 2026 |
+| `YY` | 2-digit year (2000–2099) | 26 |
+| `MMMM` | Full month name | January |
+| `MMM` | Abbreviated month (3+ chars) | Jan |
+| `MM` | Zero-padded month | 01 |
+| `M` | Month (1–2 digits) | 1 |
+| `DD` | Zero-padded day | 05 |
+| `D` | Day (1–2 digits) | 5 |
+| `Do` | Ordinal day | 5th |
+| `dddd` | Weekday name (used in optional brackets) | Monday |
+
+**Examples:** `DD/MM/YYYY`, `D MMMM YYYY`, `MM-DD-YY`, `Do MMM YYYY`, `[dddd, ]DD/MM/YYYY`
+
+The prompt must include this table and at least 3 examples so the LLM outputs in the correct format.
 
 ### Tool schema
 
@@ -76,10 +102,10 @@ Config exists? → NO  → Upload PDF → S3 → Background thread:
       "date": { "type": "string", "description": "Column header for transaction date" },
       "due_date": { "type": "string", "description": "Column header for due date, empty if not present" },
       "total": { "type": "array", "items": { "type": "string" }, "description": "Column header(s) for amount/total" },
-      "date_format": { "type": "string", "description": "Date format pattern e.g. DD/MM/YYYY using SDF tokens" },
+      "date_format": { "type": "string", "description": "Date format pattern using SDF tokens (see token reference)" },
       "decimal_separator": { "type": "string", "enum": [".", ","] },
       "thousands_separator": { "type": "string", "enum": ["", ",", ".", " ", "'"] },
-      "confidence_notes": { "type": "string", "description": "Any ambiguities or low-confidence mappings" }
+      "confidence_notes": { "type": "string", "description": "Any ambiguities or low-confidence mappings to show to the user" }
     },
     "required": ["number", "date", "total", "date_format", "decimal_separator", "thousands_separator"]
   }
@@ -88,7 +114,7 @@ Config exists? → NO  → Upload PDF → S3 → Background thread:
 
 ### Date format disambiguation (hybrid approach)
 
-1. LLM proposes a date format from sample values.
+1. LLM proposes a date format from sample values using SDF tokens.
 2. Post-processing scans all date values from page 1: if any value has day > 12, that disambiguates DD/MM vs MM/DD for the whole document.
 3. If all dates are ambiguous (day and month both <= 12), `date_format` is set to empty string → confirmation UI asks the user explicitly.
 
@@ -131,9 +157,13 @@ Persistent banner/badge visible across pages (dashboard, upload, statements) whe
 - Each header can only be selected once across fields, **except** `total` which allows multiple selections (for debit/credit patterns). Selected headers are greyed out in other dropdowns.
 - `date_format`, `decimal_separator`, `thousands_separator` use the same input types as the existing config form.
 
+### Confidence notes display
+
+The `confidence_notes` field from the LLM response is displayed as a subtle info note below the fields in each card. If the LLM returns an empty string for `confidence_notes`, the info note area is hidden entirely.
+
 ### Validation
 
-- **Client-side:** Confirm button disabled until `number`, `total` (at least one), and `date_format` are all non-empty.
+- **Client-side:** Confirm button disabled until `number`, `date`, `total` (at least one), and `date_format` are all non-empty.
 - **Server-side (source of truth):** Backend validates the same mandatory field rules before saving. Rejects incomplete configs regardless of client state.
 
 ### On confirm (per statement or "Confirm All")
@@ -146,6 +176,8 @@ Persistent banner/badge visible across pages (dashboard, upload, statements) whe
 6. Card shows "Submitted" briefly, then removed from the pending list.
 7. User can track processing status on `/statements`.
 
+**"Confirm All" behaviour:** Only submits cards where all mandatory fields are populated. Cards with missing fields are skipped and remain in the pending list. A message indicates how many were skipped and why (e.g. "2 of 3 confirmed. 1 skipped — missing date format.").
+
 ### Escape hatch
 
 "Edit in full config page" link per card for edge cases where user wants the full manual config experience.
@@ -157,8 +189,8 @@ Persistent banner/badge visible across pages (dashboard, upload, statements) whe
 ### New modules
 
 **`service/core/config_suggestion.py`** — orchestrates the config suggestion flow:
-- `suggest_config_for_statement(tenant_id, contact_id, statement_id, pdf_s3_key)` — main entry point called from background thread.
-- Calls Textract sync API for page 1.
+- `suggest_config_for_statement(tenant_id, contact_id, statement_id, pdf_s3_key)` — main entry point submitted to the thread pool.
+- Calls Textract sync API (`AnalyzeDocument`, `FeatureTypes=["TABLES"]`) for page 1.
 - Parses headers + all rows from page 1.
 - Calls Bedrock Haiku 4.5.
 - Saves suggestion to S3.
@@ -178,16 +210,15 @@ Persistent banner/badge visible across pages (dashboard, upload, statements) whe
 
 **`service/app.py`** — upload handler changes:
 - Statements with config → start Step Function (as today).
-- Statements without config → spawn background thread calling `suggest_config_for_statement()`.
+- Statements without config → submit to thread pool calling `suggest_config_for_statement()`.
 - New POST endpoint on `/configs` for confirming suggested configs.
 
 **`service/templates/configs.html`** — redesigned page per Section 3.
 
 ### Threading & concurrency
 
-- `threading.Thread(target=suggest_config_for_statement, daemon=True)` per statement.
-- `threading.Semaphore(5)` caps concurrent suggestion threads per AppRunner instance. A semaphore is a counter starting at 5 — each thread decrements on start, increments on finish. If counter is 0, new threads wait. Prevents overwhelming Textract/Bedrock concurrency limits.
-- AppRunner at 0.5 vCPU / 1 GB RAM handles this comfortably — threads are I/O bound (waiting on API calls), not CPU bound.
+- Uses the **existing `ThreadPoolExecutor`** in `app.py` (currently `max_workers=2` for Xero sync). Increase `max_workers` to accommodate config suggestion tasks alongside sync work. `ThreadPoolExecutor` handles concurrency capping and task queuing automatically — tasks exceeding the worker count queue until a worker is free.
+- AppRunner at 0.5 vCPU / 1 GB RAM handles this comfortably — tasks are I/O bound (waiting on API calls), not CPU bound.
 
 ### Retry & error handling
 
@@ -222,9 +253,9 @@ Upload (has config) → processing → completed  (unchanged)
 
 ### Edge cases
 
-1. **Multiple statements for the same new contact:** First statement triggers LLM suggestion. Subsequent statements for the same contact reuse the suggestion (or confirmed config if already confirmed). Background thread checks if a config or suggestion already exists before calling Textract + Bedrock.
+1. **Multiple statements for the same new contact:** First statement triggers LLM suggestion. Subsequent statements for the same contact reuse the suggestion (or confirmed config if already confirmed). Background task checks if a config or suggestion already exists before calling Textract + Bedrock. **Note:** There is a TOCTOU race where two tasks could both check and both proceed. This results in redundant API calls but not incorrect state (the second suggestion overwrites the first in S3). Acceptable for v1; see Future Enhancements for per-contact locking.
 
-2. **User navigates away during processing:** Background threads complete independently. Statements show up as `pending_config_review` or `config_suggestion_failed` whenever the user returns. Notification banner makes them visible.
+2. **User navigates away during processing:** Background tasks complete independently. Statements show up as `pending_config_review` or `config_suggestion_failed` whenever the user returns. Notification banner makes them visible.
 
 3. **LLM returns a bad mapping:** User catches this in the confirmation step. Dropdowns make it easy to reassign. Real validation happens during extraction.
 
@@ -232,7 +263,7 @@ Upload (has config) → processing → completed  (unchanged)
 
 5. **Textract sync API fails:** boto3 adaptive retry handles transient failures and throttling (up to 3 attempts with exponential backoff). If all retries fail → `config_suggestion_failed` → manual config with free text inputs (no detected headers available for dropdowns).
 
-6. **Cross-user Textract throttling:** The per-instance semaphore limits local concurrency. boto3 adaptive retry handles account-level throttling from multiple users/instances. After 3 failed attempts → manual config fallback. User is never stuck.
+6. **Cross-user Textract throttling:** The thread pool caps per-instance concurrency. boto3 adaptive retry handles account-level throttling from multiple users/instances. After 3 failed attempts → manual config fallback. User is never stuck.
 
 7. **Contact deleted from Xero between upload and config confirmation:** Config save still succeeds (stored by `ContactID`). Reconciliation surfaces the missing contact issue as it does today.
 
@@ -277,8 +308,10 @@ No changes. Current 0.5 vCPU / 1 GB RAM is sufficient.
 
 ## Section 7: Future Enhancements (Out of Scope for v1)
 
-1. **S3 lifecycle rule for abandoned config suggestions** — auto-delete suggestion files older than 30 days via S3 lifecycle policy. TODO for post-v1.
+1. **S3 lifecycle rule for abandoned config suggestions** — TODO: auto-delete suggestion files older than 30 days via S3 lifecycle policy.
 2. **Config suggestion accuracy tracking** — log how often users modify the LLM suggestion vs. accepting as-is, to measure and improve accuracy over time.
 3. **Caching raw Textract output** — if full Step Function re-running Textract on page 1 proves wasteful, cache and reuse. Not worth the complexity for v1.
 4. **Model upgrade path** — if Haiku 4.5 accuracy proves insufficient for certain edge cases, swap to a larger model for specific contacts/suppliers flagged as problematic.
 5. **Template configs** — for common suppliers (e.g. large suppliers that many users share), offer pre-built config templates. Requires enough user data to identify common patterns.
+6. **Per-contact locking for suggestion deduplication** — TODO: prevent redundant Textract + Bedrock calls when multiple statements for the same new contact are uploaded simultaneously. Currently results in redundant but not incorrect work.
+7. **Token reservation for config suggestion uploads** — TODO: currently first-time config suggestion uploads are free. If this is exploited or volume grows, consider reserving tokens at upload and releasing on abandonment.

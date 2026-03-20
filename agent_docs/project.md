@@ -17,7 +17,7 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
 
 ### Web application (`service/`)
 - Flask app in [`service/app.py`](service/app.py) serves server-rendered Jinja pages and JSON APIs.
-- Deployed as a containerized Lambda (`StatementProcessorWebLambda`) using Lambda Web Adapter (see [`service/Dockerfile`](service/Dockerfile)).
+- Deployed on AWS AppRunner (see [`service/Dockerfile`](service/Dockerfile)).
 
 ### Extraction pipeline (`lambda_functions/textraction_lambda/`)
 - Container Lambda entry point: [`lambda_functions/textraction_lambda/main.py`](lambda_functions/textraction_lambda/main.py).
