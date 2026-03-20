@@ -17,7 +17,7 @@
   {% endif %}
 
   <section class="page-panel" style="max-width: 480px;">
-    <form method="POST" action="{{ url_for('checkout_create') }}">
+    <form method="POST" action="{{ url_for('buy_tokens_post') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <div class="mb-3">
@@ -41,7 +41,7 @@
       <!-- Live price display — updated by the inline script below as the user types -->
       <p class="mb-3 fw-semibold" id="price-display" aria-live="polite"></p>
 
-      <button type="submit" class="btn btn-primary">Proceed to Payment</button>
+      <button type="submit" class="btn btn-primary">Next: Billing Details &rarr;</button>
     </form>
   </section>
 </div>

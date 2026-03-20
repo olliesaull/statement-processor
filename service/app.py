@@ -1564,17 +1564,17 @@ def buy_tokens():
     return render_template("buy_tokens.html", token_balance=token_balance, min_tokens=STRIPE_MIN_TOKENS, max_tokens=STRIPE_MAX_TOKENS, price_pence=STRIPE_PRICE_PER_TOKEN_PENCE, error=None)
 
 
-@app.route("/api/checkout/create", methods=["POST"])
+@app.route("/buy-tokens", methods=["POST"])
 @xero_token_required
 @route_handler_logging
-def checkout_create():
-    """Validate token count, create a Stripe Checkout Session, and redirect.
+def buy_tokens_post():
+    """Validate token count, store in session, and redirect to billing details.
 
     Validates the submitted token count against configured min/max limits.
-    Gets or creates a Stripe Customer (cached in TenantBillingTable to avoid
-    repeated Stripe API searches on future purchases). Redirects the browser
-    to Stripe's hosted checkout page on success, or to the failed page on
-    Stripe API errors.
+    On success the count is stored in ``session["pending_token_count"]`` for
+    the billing details step to consume; the user is then redirected to
+    ``/billing-details`` to enter invoice/billing information before Stripe
+    checkout is created.
     """
     tenant_id = session.get("xero_tenant_id")
     token_count_raw = request.form.get("token_count", "").strip()
@@ -1611,14 +1611,111 @@ def checkout_create():
             400,
         )
 
-    # Get or create Stripe Customer; cache ID immediately (before checkout)
-    # so future sessions skip the Stripe search even if this one is abandoned.
-    cached_customer_id = StripeRepository.get_cached_customer_id(tenant_id)
-    if cached_customer_id:
-        customer_id = cached_customer_id
-    else:
-        customer_id = stripe_service.get_or_create_customer(tenant_id=tenant_id, name=session.get("xero_tenant_name", tenant_id), email=session.get("xero_user_email", ""))
-        StripeRepository.cache_customer_id(tenant_id, customer_id)
+    # Store validated token count in session for the billing details step.
+    # Consumed (popped) by POST /api/checkout/create after a successful Stripe
+    # session is created so that retrying the billing form keeps the count.
+    session["pending_token_count"] = token_count
+    return redirect(url_for("billing_details"))
+
+
+@app.route("/billing-details")
+@xero_token_required
+@route_handler_logging
+def billing_details():
+    """Render the billing details form for a token purchase.
+
+    Requires ``session["pending_token_count"]`` to be set by
+    ``POST /buy-tokens``; redirects back to ``/buy-tokens`` if absent so the
+    user cannot land here directly without selecting a token count first.
+
+    Name and email are pre-filled from the Xero session only. Address fields
+    are always blank — each purchase creates a fresh Stripe Customer, so there
+    is no persistent customer record to pre-fill address data from.
+    """
+    if not session.get("pending_token_count"):
+        # User landed here without going through the token count step.
+        return redirect(url_for("buy_tokens"))
+    return render_template(
+        "billing_details.html",
+        token_count=session["pending_token_count"],
+        price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
+        default_email=session.get("xero_user_email", ""),
+        default_name=session.get("xero_tenant_name", ""),
+    )
+
+
+@app.route("/api/checkout/create", methods=["POST"])
+@xero_token_required
+@route_handler_logging
+def checkout_create():
+    """Accept billing details, create a fresh Stripe Customer, and create a Checkout Session.
+
+    Reads the token count from ``session["pending_token_count"]`` (set by
+    ``POST /buy-tokens``). Validates the required billing fields submitted via
+    the billing details form. On validation failure the billing form is
+    re-rendered with an error message and the session key is preserved so the
+    user can correct and resubmit without losing their token count selection.
+
+    On success:
+
+    1. A fresh Stripe Customer is created with the user-provided billing details.
+       A new customer per checkout means each invoice is attached to a customer
+       whose name, email, and address exactly match what was entered — no previous
+       purchase's customer record is ever overwritten.
+    2. A Stripe Checkout Session is created and the browser is redirected to
+       the hosted payment page.
+    3. ``session["pending_token_count"]`` is consumed only after the Stripe
+       session is successfully created.
+    """
+    tenant_id = session.get("xero_tenant_id")
+
+    # Guard: token count must have been set by POST /buy-tokens. Redirect back
+    # if the user navigated here directly (e.g. via back button after a prior
+    # successful checkout that already consumed the session key).
+    token_count = session.get("pending_token_count")
+    if not token_count:
+        return redirect(url_for("buy_tokens"))
+
+    # Read billing fields from the billing details form.
+    billing_name = request.form.get("billing_name", "").strip()
+    billing_email = request.form.get("billing_email", "").strip()
+    billing_line1 = request.form.get("billing_line1", "").strip()
+    billing_line2 = request.form.get("billing_line2", "").strip()
+    billing_city = request.form.get("billing_city", "").strip()
+    billing_state = request.form.get("billing_state", "").strip()
+    billing_postal_code = request.form.get("billing_postal_code", "").strip()
+    billing_country = request.form.get("billing_country", "").strip()
+
+    # Validate required fields — re-render billing form on failure.
+    # session["pending_token_count"] is intentionally NOT popped here so the
+    # user can correct errors and resubmit without restarting from /buy-tokens.
+    missing = []
+    if not billing_name:
+        missing.append("Name")
+    if not billing_email:
+        missing.append("Email")
+    if not billing_line1:
+        missing.append("Address line 1")
+    if not billing_postal_code:
+        missing.append("Postal code")
+    if not billing_country:
+        missing.append("Country")
+
+    if missing:
+        return (
+            render_template(
+                "billing_details.html",
+                token_count=token_count,
+                price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
+                # Re-fill the form with what the user typed so they only need to
+                # correct the missing fields rather than re-enter everything.
+                saved=request.form,
+                default_email=session.get("xero_user_email", ""),
+                default_name=session.get("xero_tenant_name", ""),
+                error=f"The following fields are required: {', '.join(missing)}.",
+            ),
+            400,
+        )
 
     # Build URLs — {CHECKOUT_SESSION_ID} is a Stripe template literal substituted
     # by Stripe before redirecting the browser to the success page.
@@ -1626,11 +1723,26 @@ def checkout_create():
     cancel_url = url_for("checkout_cancel", _external=True)
 
     try:
+        # Create a fresh Stripe Customer for this purchase with the user-provided billing
+        # details. A new customer per checkout means each invoice is attached to a customer
+        # whose name, email, and address exactly match what was entered — no previous
+        # purchase's customer record is ever overwritten.
+        customer_id = stripe_service.create_customer(
+            name=billing_name,
+            email=billing_email,
+            address={"line1": billing_line1, "line2": billing_line2, "city": billing_city, "state": billing_state, "postal_code": billing_postal_code, "country": billing_country},
+            tenant_id=tenant_id,
+        )
         stripe_session = stripe_service.create_checkout_session(customer_id=customer_id, token_count=token_count, tenant_id=tenant_id, success_url=success_url, cancel_url=cancel_url)
     except stripe.StripeError:
         logger.exception("Failed to create Stripe checkout session", tenant_id=tenant_id)
         ref = secrets.token_hex(8)
         return redirect(url_for("checkout_failed", ref=ref))
+
+    # Consume the pending token count only after a successful Stripe session
+    # creation so that a Stripe API failure leaves the session key intact and
+    # the user can retry from /billing-details without re-selecting token count.
+    session.pop("pending_token_count", None)
 
     return redirect(stripe_session.url, code=303)
 
@@ -1686,12 +1798,6 @@ def checkout_success():
     # ledger write conditionally idempotent via attribute_not_exists.
     ledger_entry_id = f"purchase#{session_id}"
     BillingService.adjust_token_balance(tenant_id, token_count, source=LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, ledger_entry_id=ledger_entry_id)
-
-    # Cache Stripe customer ID for future checkouts (idempotent — UpdateItem
-    # with same value is harmless; checkout_create already cached it, but this
-    # acts as a fallback if the customer was created but caching failed).
-    if stripe_session.customer:
-        StripeRepository.cache_customer_id(tenant_id, stripe_session.customer)
 
     # Mark session as processed so page refreshes don't re-credit.
     StripeRepository.record_processed_session(session_id=session_id, tenant_id=tenant_id, tokens_credited=token_count, ledger_entry_id=ledger_entry_id)

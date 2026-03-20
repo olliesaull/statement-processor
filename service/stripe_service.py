@@ -22,28 +22,28 @@ STRIPE_MAX_TOKENS: int = int(get_envar("STRIPE_MAX_TOKENS", "10000"))
 class StripeService:
     """Encapsulate Stripe API calls for customer management and checkout."""
 
-    def get_or_create_customer(self, *, tenant_id: str, name: str, email: str = "") -> str:
-        """Search Stripe for a customer by tenant_id metadata; create if not found.
+    def create_customer(self, *, name: str, email: str, address: dict[str, str], tenant_id: str) -> str:
+        """Create a fresh Stripe Customer for a single checkout with that purchase's billing details.
 
-        Keying on tenant_id (not email) means multiple Xero users in the same
-        organisation share one Stripe customer, which is correct for
-        subscriptions added later.
+        A new customer is created per checkout rather than reusing a persistent one,
+        so each invoice is attached to a customer whose name, email, and address
+        reflect exactly what the user entered — without overwriting any previous
+        purchase's customer record.
+
+        ``tenant_id`` is stored in metadata for traceability in the Stripe Dashboard.
 
         Args:
-            tenant_id: The Xero tenant (organisation) ID used as the search key.
-            name: The organisation display name (``session["xero_tenant_name"]``).
-            email: The logged-in Xero user's email extracted from the validated
-                id_token JWT payload. Empty string if not available.
+            name: Company or person name to appear on the invoice.
+            email: Email address Stripe will send the finalised invoice PDF to.
+            address: Billing address dict with Stripe field names:
+                ``line1``, ``line2``, ``city``, ``state``, ``postal_code``, ``country``.
+            tenant_id: Xero tenant (organisation) ID — stored in customer metadata.
 
         Returns:
             Stripe Customer ID (``cus_xxx``).
         """
-        results = stripe.Customer.search(query=f'metadata["tenant_id"]:"{tenant_id}"')
-        if results.data:
-            return results.data[0].id
-
-        customer = stripe.Customer.create(name=name, email=email, metadata={"tenant_id": tenant_id})
-        logger.info("Created Stripe customer", tenant_id=tenant_id, stripe_customer_id=customer.id)
+        customer = stripe.Customer.create(name=name, email=email, address=address, metadata={"tenant_id": tenant_id})
+        logger.info("Created per-checkout Stripe customer", tenant_id=tenant_id, stripe_customer_id=customer.id)
         return customer.id
 
     def create_checkout_session(self, *, customer_id: str, token_count: int, tenant_id: str, success_url: str, cancel_url: str) -> stripe.checkout.Session:

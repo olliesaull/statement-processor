@@ -1,4 +1,4 @@
-"""Unit tests for StripeRepository — DynamoDB idempotency and customer ID cache.
+"""Unit tests for StripeRepository — DynamoDB idempotency records.
 
 All DynamoDB calls are intercepted by monkeypatching the table objects so no
 real AWS calls are made.
@@ -100,57 +100,3 @@ def test_get_processed_session_returns_none_when_not_found(monkeypatch) -> None:
     result = StripeRepository.get_processed_session("cs_missing")
 
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# get_cached_customer_id
-# ---------------------------------------------------------------------------
-
-
-def test_get_cached_customer_id_returns_cached_value(monkeypatch) -> None:
-    """Should return the StripeCustomerID attribute from TenantBillingTable."""
-    table_mock = _make_table_mock()
-    table_mock.get_item.return_value = {"Item": {"StripeCustomerID": "cus_cached"}}
-    monkeypatch.setattr(stripe_repository_module, "_billing_table", table_mock)
-
-    result = StripeRepository.get_cached_customer_id("tenant-1")
-
-    assert result == "cus_cached"
-    table_mock.get_item.assert_called_once_with(Key={"TenantID": "tenant-1"}, ProjectionExpression="StripeCustomerID")
-
-
-def test_get_cached_customer_id_returns_none_when_attribute_absent(monkeypatch) -> None:
-    """Should return None when the item exists but StripeCustomerID is not set."""
-    table_mock = _make_table_mock()
-    table_mock.get_item.return_value = {"Item": {"TokenBalance": 100}}  # no StripeCustomerID
-    monkeypatch.setattr(stripe_repository_module, "_billing_table", table_mock)
-
-    result = StripeRepository.get_cached_customer_id("tenant-1")
-
-    assert result is None
-
-
-def test_get_cached_customer_id_returns_none_when_no_item(monkeypatch) -> None:
-    """Should return None when the tenant billing record does not exist."""
-    table_mock = _make_table_mock()
-    table_mock.get_item.return_value = {}
-    monkeypatch.setattr(stripe_repository_module, "_billing_table", table_mock)
-
-    result = StripeRepository.get_cached_customer_id("tenant-new")
-
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# cache_customer_id
-# ---------------------------------------------------------------------------
-
-
-def test_cache_customer_id_writes_to_billing_table(monkeypatch) -> None:
-    """Should write StripeCustomerID via update_item on the billing table."""
-    table_mock = _make_table_mock()
-    monkeypatch.setattr(stripe_repository_module, "_billing_table", table_mock)
-
-    StripeRepository.cache_customer_id("tenant-1", "cus_new")
-
-    table_mock.update_item.assert_called_once_with(Key={"TenantID": "tenant-1"}, UpdateExpression="SET StripeCustomerID = :cid", ExpressionAttributeValues={":cid": "cus_new"})

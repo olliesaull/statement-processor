@@ -1,4 +1,4 @@
-"""Unit tests for StripeService — customer management and checkout session creation.
+"""Unit tests for StripeService — customer creation and checkout session creation.
 
 All Stripe SDK calls are mocked so no real API calls are made.
 """
@@ -22,13 +22,6 @@ def _make_customer(customer_id: str = "cus_test123") -> MagicMock:
     return customer
 
 
-def _make_search_result(customers: list[MagicMock]) -> MagicMock:
-    """Build a Stripe Customer.search result mock."""
-    result = MagicMock()
-    result.data = customers
-    return result
-
-
 def _make_session(session_id: str = "cs_test_abc", url: str = "https://checkout.stripe.com/pay/cs_test_abc") -> MagicMock:
     """Build a minimal Stripe Checkout Session mock."""
     session = MagicMock()
@@ -38,67 +31,34 @@ def _make_session(session_id: str = "cs_test_abc", url: str = "https://checkout.
 
 
 # ---------------------------------------------------------------------------
-# get_or_create_customer
+# create_customer
 # ---------------------------------------------------------------------------
 
 
-def test_get_or_create_customer_returns_existing_customer(monkeypatch) -> None:
-    """When Stripe already has a customer for this tenant, return its ID without creating a new one."""
-    existing_customer = _make_customer("cus_existing")
-    search_result = _make_search_result([existing_customer])
+def test_create_customer_creates_with_billing_details() -> None:
+    """create_customer must call stripe.Customer.create with name, email, address, and tenant_id metadata."""
+    new_customer = _make_customer("cus_new_per_checkout")
+    address = {"line1": "1 Test St", "line2": "", "city": "London", "state": "", "postal_code": "SW1A 1AA", "country": "GB"}
 
-    with patch.object(stripe_service_module.stripe.Customer, "search", return_value=search_result) as mock_search, patch.object(stripe_service_module.stripe.Customer, "create") as mock_create:
+    with patch.object(stripe_service_module.stripe.Customer, "create", return_value=new_customer) as mock_create:
         service = StripeService()
-        result = service.get_or_create_customer(tenant_id="tenant-1", name="Acme Ltd", email="user@acme.com")
+        result = service.create_customer(name="Acme Ltd", email="billing@acme.com", address=address, tenant_id="tenant-1")
 
-    assert result == "cus_existing"
-    mock_search.assert_called_once()
-    mock_create.assert_not_called()
+    assert result == "cus_new_per_checkout"
+    mock_create.assert_called_once_with(name="Acme Ltd", email="billing@acme.com", address=address, metadata={"tenant_id": "tenant-1"})
 
 
-def test_get_or_create_customer_creates_new_customer_when_none_found(monkeypatch) -> None:
-    """When no customer exists for this tenant, create one with correct attributes."""
-    new_customer = _make_customer("cus_new123")
-    search_result = _make_search_result([])  # empty — no existing customer
+def test_create_customer_includes_tenant_id_in_metadata() -> None:
+    """tenant_id must be stored in metadata so purchases are traceable in the Stripe Dashboard."""
+    new_customer = _make_customer("cus_meta_test")
+    address = {"line1": "2 Example Rd", "line2": "", "city": "", "state": "", "postal_code": "EC1A 1BB", "country": "GB"}
 
-    with (
-        patch.object(stripe_service_module.stripe.Customer, "search", return_value=search_result),
-        patch.object(stripe_service_module.stripe.Customer, "create", return_value=new_customer) as mock_create,
-    ):
+    with patch.object(stripe_service_module.stripe.Customer, "create", return_value=new_customer) as mock_create:
         service = StripeService()
-        result = service.get_or_create_customer(tenant_id="tenant-2", name="Beta Ltd", email="user@beta.com")
+        service.create_customer(name="Test Co", email="test@testco.com", address=address, tenant_id="tenant-xyz")
 
-    assert result == "cus_new123"
-    mock_create.assert_called_once_with(name="Beta Ltd", email="user@beta.com", metadata={"tenant_id": "tenant-2"})
-
-
-def test_get_or_create_customer_search_uses_tenant_id_query() -> None:
-    """The customer search query must key on tenant_id metadata, not email."""
-    search_result = _make_search_result([_make_customer("cus_found")])
-
-    with patch.object(stripe_service_module.stripe.Customer, "search", return_value=search_result) as mock_search:
-        service = StripeService()
-        service.get_or_create_customer(tenant_id="tenant-xyz", name="XYZ Corp", email="")
-
-    call_kwargs = mock_search.call_args
-    query: str = call_kwargs.kwargs.get("query") or (call_kwargs.args[0] if call_kwargs.args else "")
-    assert "tenant-xyz" in query
-
-
-def test_get_or_create_customer_empty_email_is_accepted() -> None:
-    """An empty email (Xero session did not expose one) should not raise."""
-    new_customer = _make_customer("cus_noemail")
-    search_result = _make_search_result([])
-
-    with (
-        patch.object(stripe_service_module.stripe.Customer, "search", return_value=search_result),
-        patch.object(stripe_service_module.stripe.Customer, "create", return_value=new_customer) as mock_create,
-    ):
-        service = StripeService()
-        result = service.get_or_create_customer(tenant_id="tenant-3", name="No Email Ltd", email="")
-
-    assert result == "cus_noemail"
-    mock_create.assert_called_once_with(name="No Email Ltd", email="", metadata={"tenant_id": "tenant-3"})
+    call_kwargs = mock_create.call_args.kwargs
+    assert call_kwargs["metadata"]["tenant_id"] == "tenant-xyz"
 
 
 # ---------------------------------------------------------------------------

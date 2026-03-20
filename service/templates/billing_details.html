@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Billing Details — Statement Processor{% endblock %}
+
+{% block content %}
+<div class="page-main">
+  <header class="page-header">
+    <p class="page-kicker mb-1">Token Purchase</p>
+    <h1 class="mb-2">Billing Details</h1>
+    <p class="page-subtitle mb-0">
+      Enter the details you want to appear on your invoice.
+      You are purchasing <strong>{{ token_count }}</strong> token{% if token_count != 1 %}s{% endif %}
+      &mdash; <strong>&pound;{{ "%.2f"|format(token_count * price_pence / 100) }}</strong>.
+    </p>
+  </header>
+
+  {% if error %}
+    <div class="alert alert-danger" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <section class="page-panel" style="max-width: 600px;">
+    <form method="POST" action="{{ url_for('checkout_create') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <h2 class="h5 mb-3">Invoice contact</h2>
+
+      <div class="mb-3">
+        <label for="billing-name" class="form-label fw-semibold">Company / name <span class="text-danger">*</span></label>
+        <input
+          type="text"
+          id="billing-name"
+          name="billing_name"
+          class="form-control"
+          value="{{ saved.get('billing_name', default_name) if saved else default_name }}"
+          required
+        >
+      </div>
+
+      <div class="mb-3">
+        <label for="billing-email" class="form-label fw-semibold">Billing email <span class="text-danger">*</span></label>
+        <input
+          type="email"
+          id="billing-email"
+          name="billing_email"
+          class="form-control"
+          value="{{ saved.get('billing_email', default_email) if saved else default_email }}"
+          required
+        >
+        <div class="form-text">Stripe will send the finalised invoice PDF to this address.</div>
+      </div>
+
+      <h2 class="h5 mb-3 mt-4">Billing address</h2>
+
+      <div class="mb-3">
+        <label for="billing-line1" class="form-label fw-semibold">Address line 1 <span class="text-danger">*</span></label>
+        <input
+          type="text"
+          id="billing-line1"
+          name="billing_line1"
+          class="form-control"
+          value="{{ saved.get('billing_line1', '') if saved else '' }}"
+          required
+        >
+      </div>
+
+      <div class="mb-3">
+        <label for="billing-line2" class="form-label fw-semibold">Address line 2</label>
+        <input
+          type="text"
+          id="billing-line2"
+          name="billing_line2"
+          class="form-control"
+          value="{{ saved.get('billing_line2', '') if saved else '' }}"
+        >
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <label for="billing-city" class="form-label fw-semibold">City / town</label>
+          <input
+            type="text"
+            id="billing-city"
+            name="billing_city"
+            class="form-control"
+            value="{{ saved.get('billing_city', '') if saved else '' }}"
+          >
+        </div>
+        <div class="col-md-6">
+          <label for="billing-state" class="form-label fw-semibold">County / state / region</label>
+          <input
+            type="text"
+            id="billing-state"
+            name="billing_state"
+            class="form-control"
+            value="{{ saved.get('billing_state', '') if saved else '' }}"
+          >
+        </div>
+      </div>
+
+      <div class="row g-3 mb-4">
+        <div class="col-md-4">
+          <label for="billing-postal-code" class="form-label fw-semibold">Postcode / ZIP <span class="text-danger">*</span></label>
+          <input
+            type="text"
+            id="billing-postal-code"
+            name="billing_postal_code"
+            class="form-control"
+            value="{{ saved.get('billing_postal_code', '') if saved else '' }}"
+            required
+          >
+        </div>
+        <div class="col-md-8">
+          <label for="billing-country" class="form-label fw-semibold">Country <span class="text-danger">*</span></label>
+          <select
+            id="billing-country"
+            name="billing_country"
+            class="form-select"
+            required
+          >
+            <option value="">— Select country —</option>
+            {% set selected_country = saved.get('billing_country', '') if saved else '' %}
+            {% for code, label in [
+              ('GB', 'United Kingdom'),
+              ('US', 'United States'),
+              ('AU', 'Australia'),
+              ('AT', 'Austria'),
+              ('BE', 'Belgium'),
+              ('BR', 'Brazil'),
+              ('CA', 'Canada'),
+              ('CN', 'China'),
+              ('HR', 'Croatia'),
+              ('CY', 'Cyprus'),
+              ('CZ', 'Czech Republic'),
+              ('DK', 'Denmark'),
+              ('EE', 'Estonia'),
+              ('FI', 'Finland'),
+              ('FR', 'France'),
+              ('DE', 'Germany'),
+              ('GR', 'Greece'),
+              ('HK', 'Hong Kong'),
+              ('HU', 'Hungary'),
+              ('IN', 'India'),
+              ('IE', 'Ireland'),
+              ('IL', 'Israel'),
+              ('IT', 'Italy'),
+              ('JP', 'Japan'),
+              ('LV', 'Latvia'),
+              ('LT', 'Lithuania'),
+              ('LU', 'Luxembourg'),
+              ('MT', 'Malta'),
+              ('MX', 'Mexico'),
+              ('NL', 'Netherlands'),
+              ('NZ', 'New Zealand'),
+              ('NO', 'Norway'),
+              ('PL', 'Poland'),
+              ('PT', 'Portugal'),
+              ('RO', 'Romania'),
+              ('SG', 'Singapore'),
+              ('SK', 'Slovakia'),
+              ('SI', 'Slovenia'),
+              ('ZA', 'South Africa'),
+              ('ES', 'Spain'),
+              ('SE', 'Sweden'),
+              ('CH', 'Switzerland'),
+              ('TH', 'Thailand'),
+              ('AE', 'United Arab Emirates'),
+            ] %}
+              <option value="{{ code }}" {% if selected_country == code %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="d-flex gap-3 align-items-center">
+        <button type="submit" class="btn btn-primary">Proceed to Payment &rarr;</button>
+        <a href="{{ url_for('buy_tokens') }}" class="btn btn-outline-secondary">&larr; Back</a>
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}

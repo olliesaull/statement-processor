@@ -178,8 +178,8 @@
       - Reused by both HTML row-building and Excel export paths to keep link/label behavior aligned.
     - Formatting/helpers: `service/utils/formatting.py`, `service/utils/tenant_status.py`
   - Stripe integration: `service/stripe_service.py` and `service/stripe_repository.py`
-    - `service/stripe_service.py` — all Stripe SDK calls (`stripe.Customer.search/create`, `stripe.checkout.Session.create/retrieve`). Uses dynamic `price_data` (not fixed Price objects) because token count is a free-form integer; the single Stripe Product (`prod_UBMoFkqStKFcjg`) is referenced by `STRIPE_PRODUCT_ID` env var so purchase history is attributed correctly in Stripe reporting. Customers are keyed on `metadata["tenant_id"]` (not email) so multiple Xero users in the same org share one Stripe Customer, which is required for future subscriptions.
-    - `service/stripe_repository.py` — DynamoDB ops for checkout state: idempotency records on `StripeEventStoreTable` and Stripe Customer ID cache on `TenantBillingTable`. Imports pre-constructed table objects from `service/config.py` (consistent with all other repositories) rather than constructing its own `ddb.Table` instances.
+    - `service/stripe_service.py` — all Stripe SDK calls (`stripe.Customer.create`, `stripe.checkout.Session.create/retrieve`). Uses dynamic `price_data` (not fixed Price objects) because token count is a free-form integer; the single Stripe Product (`prod_UBMoFkqStKFcjg`) is referenced by `STRIPE_PRODUCT_ID` env var so purchase history is attributed correctly in Stripe reporting. A fresh Stripe Customer is created per checkout with the user-provided billing details so each invoice reflects exactly what was entered for that purchase.
+    - `service/stripe_repository.py` — DynamoDB ops for checkout state: idempotency records on `StripeEventStoreTable` only. Imports pre-constructed table objects from `service/config.py` (consistent with all other repositories) rather than constructing its own `ddb.Table` instances.
   - Xero integration + caching: `service/xero_repository.py`
   - Background sync job: `service/sync.py`
   - Tenant metadata: `service/tenant_data_repository.py`
@@ -219,7 +219,7 @@
   - **Stripe / token purchasing**
     - `/pricing` (GET): public-facing pricing page — no auth required, explains token pricing (£0.10/token, min 10 tokens).
     - `/buy-tokens` (GET): token amount input form with live price display; requires Xero auth.
-    - `/api/checkout/create` (POST): validates token count (10–10,000), gets or creates a Stripe Customer (keyed on `tenant_id` metadata, cached in `TenantBillingTable.StripeCustomerID`), creates a Stripe Checkout Session with dynamic `price_data`, and redirects to the Stripe-hosted checkout page. Caches the Stripe Customer ID immediately so the cache is populated even if the user abandons.
+    - `/api/checkout/create` (POST): validates billing details submitted from the billing details form, creates a fresh Stripe Customer for this purchase with the user-provided name, email, and address, creates a Stripe Checkout Session with dynamic `price_data`, and redirects to the Stripe-hosted checkout page. A new Customer is created per checkout so each invoice is permanently attached to the billing details entered for that specific purchase.
     - `/checkout/success` (GET): called by Stripe on payment completion with `?session_id=cs_xxx`. Retrieves the session from Stripe, verifies `payment_status == "paid"`, checks idempotency via `StripeEventStoreTable`, credits tokens via `BillingService.adjust_token_balance` with `source="stripe-checkout"` and a deterministic `ledger_entry_id`, then records the session as processed. Renders the success page with tokens credited and updated balance. Safe to refresh — idempotency check prevents double-crediting.
     - `/checkout/cancel` (GET): renders a cancellation page with a "Try Again" link; no tokens are credited.
     - `/checkout/failed` (GET): renders an error page with a hex reference ID for support lookup.
@@ -399,11 +399,9 @@
   "UpdatedAt": "2026-03-16T12:05:10+00:00",
   "LastLedgerEntryID": "reserve#<statement_id>",
   "LastMutationType": "RESERVE",
-  "LastMutationSource": "upload-submit",
-  "StripeCustomerID": "cus_xxx"
+  "LastMutationSource": "upload-submit"
 }
 ```
-- `StripeCustomerID` is an optional attribute written by `service/stripe_repository.py:StripeRepository.cache_customer_id` at checkout-creation time (and again as a fallback on the success redirect). Caching it here avoids a Stripe Customer search on every subsequent purchase and is essential groundwork for subscriptions, which require a persistent Customer object.
 
 **TenantTokenLedgerTable** (`cdk/stacks/statement_processor.py`)
 - **Keys**
@@ -629,7 +627,8 @@ All non-secret variables are plain env vars (in `service/.env` for local dev; in
 ### Design decisions
 - **No webhooks for MVP.** Token crediting happens on the success redirect: the session is retrieved from Stripe, `payment_status` is verified, and tokens are credited. Idempotency prevents double-crediting on page refresh. If the user's browser closes before the redirect fires, tokens are credited manually via the admin adjustment tool. Webhooks will be added when subscriptions require reliable async credit.
 - **Dynamic `price_data` not fixed Prices.** Token count is a free-form integer, so a fixed Price object cannot represent every possible purchase. One Product is reused across all purchases for correct Stripe reporting attribution.
-- **Stripe Customer per tenant, not per user.** Customers are keyed on `tenant_id` metadata so multiple Xero users in the same organisation share one Stripe Customer — a prerequisite for subscriptions, where billing is per-tenant.
+- **Fresh Stripe Customer per checkout, not a persistent one per tenant.** A new Stripe Customer is created on every purchase using the billing details the user enters at that point. The previous approach reused a single persistent Customer per tenant and called `stripe.Customer.modify` on every purchase to overwrite its name, email, and address — which corrupted the customer record on subsequent purchases, since the Stripe Customer (and its attached invoice) for an earlier purchase would then show the billing details from a later one. Creating a fresh Customer per checkout means each invoice is permanently attached to a Customer record whose name, email, and address exactly reflect what the user entered for that specific purchase. Because there is no persistent Customer to pre-fill from, the billing address fields are always blank on the form; only name and email are pre-filled from the active Xero session.
+- **No billing address pre-fill from DynamoDB.** The previous implementation cached billing details (name, email, address) in `TenantBillingTable` after each purchase and read them back to pre-fill the billing details form on repeat visits. This caching is no longer done — since each checkout creates a fresh Customer, there is no persistent record to pre-fill address data from. Name and email are still pre-filled from the Xero session (not DynamoDB) as a convenience.
 - **No VAT.** Not VAT-registered (UK businesses below the £90k threshold). No `tax_rates` on line items.
 
 ### Testing
