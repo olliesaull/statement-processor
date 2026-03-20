@@ -40,7 +40,8 @@
 | `service/templates/configs.html` | Redesigned — pending review cards at top, header dropdowns, confirm/confirm-all |
 | `service/templates/base.html` | Add notification banner for pending config reviews |
 | `service/tests/test_statement_upload_validation.py` | Update tests for new non-blocking behaviour |
-| `cdk/stacks/statement_processor.py` | Add `textract:AnalyzeDocument` + `bedrock:InvokeModel` to AppRunner role |
+| `service/templates/statements.html` | Status badges + action buttons for pending/failed config statements |
+| `cdk/stacks/statement_processor.py` | Add `textract:AnalyzeDocument` + `bedrock:InvokeModel` (with inference profile ARN) to AppRunner role |
 
 ---
 
@@ -51,17 +52,18 @@
 
 - [ ] **Step 1: Add `textract:AnalyzeDocument` and `bedrock:InvokeModel` to AppRunner role**
 
-In the existing inline policy (lines 332-340), add the two new actions. The Textract sync API uses `AnalyzeDocument` (distinct from the existing `StartDocumentAnalysis`/`GetDocumentAnalysis`). Bedrock is scoped to the Haiku 4.5 model ARN.
+In the existing inline policy (lines 332-340), add the two new actions. The Textract sync API uses `AnalyzeDocument` (distinct from the existing `StartDocumentAnalysis`/`GetDocumentAnalysis`). Bedrock needs both the foundation-model ARN and the cross-region inference profile ARN (newer models require inference profiles for on-demand invocation).
 
 ```python
 # Inside the existing PolicyStatement actions list, add:
 "textract:AnalyzeDocument",
 
-# Add a new PolicyStatement for Bedrock:
+# Add a new PolicyStatement for Bedrock (both foundation-model and inference-profile ARNs):
 iam.PolicyStatement(
     actions=["bedrock:InvokeModel"],
     resources=[
-        f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-haiku-4-5-*"
+        f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-haiku-4-5-*",
+        f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/eu.anthropic.claude-haiku-4-5-*",
     ],
 )
 ```
@@ -453,7 +455,7 @@ Expected: FAIL — `ModuleNotFoundError`
 - [ ] **Step 3: Write implementation**
 
 Create `service/core/bedrock_client.py`. Key elements:
-- `HAIKU_MODEL_ID = "anthropic.claude-haiku-4-5-20251001"` — model ID for Bedrock Converse API
+- `HAIKU_MODEL_ID = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"` — EU cross-region inference profile ID for Bedrock Converse API. **Important:** newer Bedrock models require an inference profile (region-prefixed) rather than the raw foundation model ID for on-demand invocation. Use `eu.` prefix for `eu-west-1` deployments.
 - `SUGGEST_CONFIG_TOOL` — tool definition dict matching the spec's JSON schema. **Important:** The Bedrock Converse API uses camelCase keys — use `inputSchema` (not `input_schema` from the spec)
 - `build_suggestion_prompt(headers, rows)` — builds the user message with headers, sample rows, and the SDF token reference table
 - `suggest_column_mapping(headers, rows)` — calls `bedrock_runtime_client.converse()` with the tool, forced `tool_choice`, parses response
@@ -550,9 +552,21 @@ Test the orchestrator function `suggest_config_for_statement()`. Mock Textract, 
 """Tests for config suggestion orchestrator."""
 
 import json
+from io import BytesIO
+
+from pypdf import PdfWriter
 
 import core.config_suggestion as config_suggestion_module
 from core.config_suggestion import suggest_config_for_statement
+
+
+def _make_single_page_pdf_bytes() -> bytes:
+    """Create a minimal single-page PDF for test mocks."""
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    buf = BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
 
 
 def _make_textract_response(headers: list[str], rows: list[list[str]]) -> dict:
@@ -612,12 +626,13 @@ def test_suggest_config_happy_path(monkeypatch) -> None:
         lambda dates, fmt: fmt,
     )
 
-    # Mock S3
+    # Mock S3 — get_object returns a minimal PDF so _extract_page_one can parse it.
     s3_puts = []
+    fake_pdf = _make_single_page_pdf_bytes()
 
     class FakeS3:
         def get_object(self, **kwargs):
-            raise Exception("NoSuchKey")
+            return {"Body": BytesIO(fake_pdf)}
 
         def put_object(self, **kwargs):
             s3_puts.append(kwargs)
@@ -658,6 +673,11 @@ def test_suggest_config_happy_path(monkeypatch) -> None:
 
 def test_suggest_config_textract_failure_sets_failed_status(monkeypatch) -> None:
     """When Textract fails after retries, status should be config_suggestion_failed."""
+    fake_pdf = _make_single_page_pdf_bytes()
+
+    class FakeS3:
+        def get_object(self, **kwargs):
+            return {"Body": BytesIO(fake_pdf)}
 
     class FakeTextract:
         def analyze_document(self, **kwargs):
@@ -669,6 +689,8 @@ def test_suggest_config_textract_failure_sets_failed_status(monkeypatch) -> None
         def update_item(self, **kwargs):
             ddb_updates.append(kwargs)
 
+    monkeypatch.setattr(config_suggestion_module, "s3_client", FakeS3())
+    monkeypatch.setattr(config_suggestion_module, "S3_BUCKET_NAME", "test-bucket")
     monkeypatch.setattr(config_suggestion_module, "textract_client", FakeTextract())
     monkeypatch.setattr(config_suggestion_module, "tenant_statements_table", FakeTable())
 
@@ -703,6 +725,9 @@ to S3, and updates statement status in DynamoDB.
 """
 
 import json
+from io import BytesIO
+
+from pypdf import PdfReader, PdfWriter
 
 from config import S3_BUCKET_NAME, s3_client, textract_client, tenant_statements_table
 from core.bedrock_client import suggest_column_mapping
@@ -786,7 +811,7 @@ def suggest_config_for_statement(
 ```
 
 Also implement:
-- `_extract_page_one(pdf_s3_key)` — calls `textract_client.analyze_document()` with S3 object reference and `FeatureTypes=["TABLES"]`, parses the Blocks response to extract headers (row 1), data rows (row 2+), and date column values. Returns `(headers, rows, date_values)`.
+- `_extract_page_one(pdf_s3_key)` — downloads the PDF from S3, extracts page 1 as a single-page PDF using `pypdf` (`PdfReader` + `PdfWriter`), then passes the bytes to `textract_client.analyze_document()` via the `Bytes` parameter (NOT `S3Object`) with `FeatureTypes=["TABLES"]`. **Important:** The Textract sync `AnalyzeDocument` API rejects multi-page PDFs passed via S3Object reference with `UnsupportedDocumentException`. Extracting page 1 as bytes avoids this. Parses the Blocks response to extract headers (row 1), data rows (row 2+), and date column values. Returns `(headers, rows, date_values)`.
 - `_set_statement_status(tenant_id, statement_id, status)` — updates `TenantStatementsTable` header row.
 - `get_pending_suggestions(tenant_id)` — lists config suggestion files from S3 prefix `<tenant_id>/config-suggestions/`, loads and returns as list of `ConfigSuggestion`.
 - `delete_suggestion(tenant_id, statement_id)` — deletes suggestion file from S3.
@@ -1087,17 +1112,22 @@ git commit -m "feat: add config confirm and confirm-all API endpoints"
 - Modify: `service/app.py:1374-1425` (configs route)
 - Modify: `service/templates/configs.html`
 
-- [ ] **Step 1: Update configs route to load pending suggestions**
+- [ ] **Step 1: Update configs route to load pending suggestions and support query param pre-selection**
 
-In the `configs()` GET handler, after loading contacts, also load pending suggestions:
+In the `configs()` GET handler, after loading contacts, also load pending suggestions. Additionally, support a `?contact_name=` query param so the manual config editor opens pre-filled when redirected from a failed statement:
 
 ```python
 from core.config_suggestion import get_pending_suggestions
 
 # In configs() GET:
 pending_suggestions = get_pending_suggestions(tenant_id)
-# Add to context:
 context["pending_suggestions"] = [s.model_dump() for s in pending_suggestions]
+
+# Support ?contact_name= query param for pre-selection (e.g. redirected from failed statement).
+# Add this in the GET branch (elif after the POST handling):
+elif request.args.get("contact_name"):
+    selected_contact_name = request.args["contact_name"].strip()
+    context.update(_load_config_context(tenant_id, contact_lookup, selected_contact_name))
 ```
 
 - [ ] **Step 2: Redesign configs.html template**
@@ -1220,7 +1250,7 @@ git commit -m "feat: add notification banner for pending config reviews across a
 
 ---
 
-### Task 12: Integration Test and Cleanup
+### Task 12: Integration Test and Cleanup (run after Task 13)
 
 **Files:**
 - All modified files
@@ -1248,4 +1278,44 @@ Check `/home/ollie/statement-processor/README.md` and add documentation about:
 ```bash
 git add -A
 git commit -m "docs: update README with auto config suggestion feature"
+```
+
+---
+
+### Task 13: Config Suggestion Failure Recovery UX
+
+**Files:**
+- Modify: `service/templates/statements.html`
+- Modify: `service/app.py` (statement detail route)
+
+When auto-config fails, the user needs a visible recovery path. Without this, statements with `config_suggestion_failed` status are effectively stuck — no status indicator, clicking "Reconcile" leads to a broken page, and no link to the manual config editor.
+
+- [ ] **Step 1: Add status badges and action buttons to `/statements` template**
+
+In `statements.html`, read `stmt.get("Status")` and show:
+- `pending_config_review` → yellow badge "Config Review Pending" next to filename + "Review Config" button linking to `/configs`
+- `config_suggestion_failed` → red badge "Config Required" next to filename + "Configure" button linking to `/configs?contact_name=<name>`
+- For these statuses, do NOT show the "Reconcile" button (there's no JSON data to reconcile)
+
+- [ ] **Step 2: Redirect statement detail route for unconfigured statements**
+
+In the `statement()` route handler in `app.py`, after fetching the record, check the `Status` field. If it's `pending_config_review` or `config_suggestion_failed`, redirect to `/configs?contact_name=<contact_name>` instead of rendering the detail page (which would fail due to missing JSON).
+
+```python
+record_status = str(record.get("Status") or "")
+if record_status in ("pending_config_review", "config_suggestion_failed"):
+    contact_name = str(record.get("ContactName") or "").strip()
+    return redirect(url_for("configs", contact_name=contact_name))
+```
+
+- [ ] **Step 3: Run `make dev`**
+
+Run: `cd /home/ollie/statement-processor/service && make dev`
+Expected: Pass
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add service/app.py service/templates/statements.html
+git commit -m "feat: add config failure recovery UX — status badges, redirects, contact pre-selection"
 ```
