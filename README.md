@@ -230,13 +230,14 @@
     - `/logout` (GET): clear session.
     - `/tenants/select` (POST): set active tenant in session.
     - `/tenants/disconnect` (POST): disconnect tenant from Xero.
+    - `/test-login` (GET): local-only route — only registered when `STAGE=local`. Seeds the Flask session with fake Xero auth data to bypass the real OAuth flow for browser/Playwright testing. Requires `PLAYWRIGHT_TENANT_ID` and `PLAYWRIGHT_TENANT_NAME` environment variables to be set. On success, redirects to `/tenant_management`. This route is never registered in non-local environments, so it cannot be called in staging or production.
     - **Cookie consent gate**: Protected routes and `/login` require the browser cookie `cookie_consent=true`. If consent is missing, UI routes redirect to `/cookies`; API routes return `401` JSON with `{"error": "cookie_consent_required", "redirect": "/cookies"}`.
     - **Session-state UI cookie**: Authenticated UI responses set `session_is_set=true` (short-lived helper cookie) so frontend JavaScript can toggle the final navbar item between `Login` and `Logout` without template-time session checks.
     - **Server-side auth sessions (Valkey/ElastiCache)**:
       - Backend/session store now uses Flask-Session with Redis (`SESSION_TYPE='redis'`, `SESSION_REDIS=redis.from_url(VALKEY_URL)`), so browser cookies carry only a signed session identifier while OAuth tokens remain server-side.
       - The app intentionally uses the same explicit session-config style as Numerint (`app.config[...]` assignments followed by `Session(app)`) for consistency and simpler operational debugging.
       - `VALKEY_URL` (default `redis://127.0.0.1:6379/0`) is loaded from environment in `service/config.py`; production deployments should point it at the ElastiCache/Valkey endpoint.
-      - Cookie controls remain configured in `service/app.py`: `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_HTTPONLY=True`, `SESSION_COOKIE_SAMESITE='Lax'`, and `SESSION_REFRESH_EACH_REQUEST=True`.
+      - Cookie controls remain configured in `service/app.py`: `SESSION_COOKIE_SECURE` (conditional — `True` in all environments except `local`, where it is `False` to allow plain HTTP on localhost; without this the browser silently drops the session cookie over HTTP and every request appears unauthenticated), `SESSION_COOKIE_HTTPONLY=True`, `SESSION_COOKIE_SAMESITE='Lax'`, and `SESSION_REFRESH_EACH_REQUEST=True`.
       - `SESSION_TTL_SECONDS` (default `900`) is still used to set `PERMANENT_SESSION_LIFETIME`.
       - Required auth/session secrets are now `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET`, and `FLASK_SECRET_KEY` (no `SESSION_FERNET_KEY`).
       - In AWS, `cdk/deploy_stack.sh` resolves those values from SSM secure parameters at deployment and passes them into CDK for Lambda environment injection. This keeps deployment-time secret sourcing while reducing cold-start latency by removing runtime secret fetches.
