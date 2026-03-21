@@ -56,3 +56,7 @@ Keep returned payloads realistic so tests validate production-shaped data.
 - No real network calls in unit tests.
 - Control clocks/time where logic depends on expiration or polling.
 - Avoid randomness unless seeded and intentional.
+
+## Browser Testing
+
+For interactive browser testing with Playwright MCP, see `agent_docs/browser_testing.md`.
