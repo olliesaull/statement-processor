@@ -13,3 +13,4 @@
 *.json
 *.xlsx
 .worktrees/
+.playwright-mcp/
