@@ -3,7 +3,7 @@
 # Runs tooling in the current directory so symlinked copies behave locally.
 #
 
-.PHONY: help rebuild-venvs update-venvs format lint type-check security vulture test test-verbose clean
+.PHONY: help rebuild-venvs update-venvs format lint type-check security vulture test test-verbose clean run-app
 
 # Common exclusions for Python tooling.
 PY_EXCLUDES := -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/__pycache__/*'
@@ -38,6 +38,9 @@ help:
 	@echo "🧹 Cleanup:"
 	@printf "  %-16s %s\n" "clean" "Remove Python caches and build artifacts"
 	@printf "  %-16s %s\n" "dev" "Run format, lint, type-check, test, security"
+	@echo ""
+	@echo "🚀 Run:"
+	@printf "  %-16s %s\n" "run-app" "Start app with Gunicorn on port 8080"
 	@echo ""
 	@echo "Quick: make dev"
 
@@ -96,6 +99,11 @@ clean:
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.zip" -delete
 	@echo "✅ Cleanup complete"
+
+# Run the app locally with Gunicorn (auto-reload enabled).
+run-app:
+	@echo "🚀 Starting app with Gunicorn on port 8080..."
+	@bash -c "source venv/bin/activate && python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app"
 
 # Development workflow
 dev: format lint type-check test security
