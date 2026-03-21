@@ -3,6 +3,7 @@
 import json
 import os
 import secrets
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from io import BytesIO
@@ -78,7 +79,7 @@ app.config.update(
     SESSION_REDIS=redis.from_url(VALKEY_URL),
     SESSION_PERMANENT=False,
     SESSION_USE_SIGNER=True,
-    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SECURE=STAGE != "local",
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     PERMANENT_SESSION_LIFETIME=timedelta(seconds=1860),
@@ -1836,3 +1837,39 @@ def checkout_failed():
 def chrome_devtools_ping(path):
     """Respond to Chrome DevTools well-known probes without logging 404s."""
     return "", 204  # No content, indicates "OK but nothing here"
+
+
+if STAGE == "local":
+
+    @app.route("/test-login")
+    def test_login():
+        """Seed the Flask session with fake auth for local browser testing.
+
+        Only exists when STAGE=local. Bypasses Xero OAuth so Claude Code
+        (or a developer) can browse authenticated pages without credentials.
+
+        Requires PLAYWRIGHT_TENANT_ID and PLAYWRIGHT_TENANT_NAME env vars
+        pointing to a previously-synced tenant.
+        """
+        tenant_id = os.environ.get("PLAYWRIGHT_TENANT_ID")
+        tenant_name = os.environ.get("PLAYWRIGHT_TENANT_NAME")
+
+        if not tenant_id or not tenant_name:
+            return "Set PLAYWRIGHT_TENANT_ID and PLAYWRIGHT_TENANT_NAME env vars", 400
+
+        session["xero_oauth2_token"] = {
+            "access_token": "test-token-local",
+            "token_type": "Bearer",
+            "expires_in": 86400,
+            "expires_at": time.time() + 86400,
+        }
+        session["xero_tenant_id"] = tenant_id
+        session["xero_tenant_name"] = tenant_name
+        session["xero_tenants"] = [{"tenantId": tenant_id, "tenantName": tenant_name}]
+        session["xero_user_email"] = "claude@local-test.dev"
+        logger.info("Test login session seeded", tenant_id=tenant_id)
+
+        response = redirect(url_for("tenant_management"))
+        response.set_cookie("cookie_consent", "true", max_age=86400, path="/")
+        response.set_cookie("session_is_set", "true", max_age=86400, path="/")
+        return response
