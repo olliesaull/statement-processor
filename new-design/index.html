@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Statement Processor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="site-nav">
+    <div class="container">
+      <a href="index.html" class="nav-brand">
+        <span class="nav-brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="9" y1="15" x2="15" y2="15"/>
+          </svg>
+        </span>
+        Statement Processor
+      </a>
+
+      <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Toggle menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+
+      <div class="nav-links">
+        <a href="index.html" class="active">Home</a>
+        <a href="about.html">About</a>
+        <a href="#">Pricing</a>
+        <a href="instructions.html">Instructions</a>
+        <a href="#" class="nav-cta">Get Started</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-grid">
+        <div>
+          <p class="hero-kicker">Statement Matching For Finance Teams</p>
+          <h1>Reconcile supplier statements with confidence.</h1>
+          <p class="hero-lead">
+            Upload supplier statement PDFs, compare each line against Xero, resolve differences, and export a clear record in one place.
+          </p>
+          <div class="hero-actions">
+            <a href="#" class="btn btn-primary btn-lg">Get Started</a>
+            <a href="instructions.html" class="btn btn-secondary btn-lg">View Step-By-Step Guide</a>
+          </div>
+        </div>
+
+        <div class="hero-visual">
+          <div class="hero-card">
+            <div class="hero-card-header">
+              <span class="hero-card-title">Reconciliation Summary</span>
+              <span class="hero-card-badge">4/5 Matched</span>
+            </div>
+            <div class="hero-card-row">
+              <span class="hero-card-dot match"></span>
+              <span class="hero-card-label">INV-2024-0891</span>
+              <span class="hero-card-value">&pound;2,450.00</span>
+            </div>
+            <div class="hero-card-row">
+              <span class="hero-card-dot match"></span>
+              <span class="hero-card-label">INV-2024-0903</span>
+              <span class="hero-card-value">&pound;1,120.50</span>
+            </div>
+            <div class="hero-card-row">
+              <span class="hero-card-dot mismatch"></span>
+              <span class="hero-card-label">INV-2024-0917</span>
+              <span class="hero-card-value">&pound;875.00</span>
+            </div>
+            <div class="hero-card-row">
+              <span class="hero-card-dot match"></span>
+              <span class="hero-card-label">CN-2024-0042</span>
+              <span class="hero-card-value">-&pound;340.00</span>
+            </div>
+            <div class="hero-card-row">
+              <span class="hero-card-dot match"></span>
+              <span class="hero-card-label">INV-2024-0928</span>
+              <span class="hero-card-value">&pound;3,680.25</span>
+            </div>
+          </div>
+
+          <div class="hero-float hero-float-1">
+            <div class="hero-float-number">97.4%</div>
+            <div class="hero-float-label">Match Rate</div>
+          </div>
+
+          <div class="hero-float hero-float-2">
+            <div class="hero-float-number">12</div>
+            <div class="hero-float-label">Statements This Month</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- At A Glance -->
+  <section class="section section-alt">
+    <div class="container">
+      <div class="section-header reveal">
+        <p class="section-kicker">At A Glance</p>
+        <h2 class="section-title">Why use Statement Processor</h2>
+      </div>
+      <ul class="value-list reveal reveal-delay-1">
+        <li>Upload supplier PDF statements and compare each row with Xero invoices, credit notes, and payments.</li>
+        <li>Spot matches, mismatches, and anomalies quickly so your team can focus on exceptions.</li>
+        <li>Track completion clearly and export to Excel when you need a shareable record.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Use Cases -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header reveal">
+        <p class="section-kicker">Typical Use Cases</p>
+        <h2 class="section-title">How it helps day to day</h2>
+      </div>
+      <div class="value-grid">
+        <div class="value-card reveal reveal-delay-1">
+          <div class="value-card-icon">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+          </div>
+          <h3>Monthly Reconciliation</h3>
+          <p>Upload statements as they arrive and compare them against Xero without switching between multiple tools.</p>
+        </div>
+
+        <div class="value-card reveal reveal-delay-2">
+          <div class="value-card-icon">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </div>
+          <h3>Issue Cleanup</h3>
+          <p>Quickly find mismatches and anomalies so your team can focus on exceptions instead of scanning every line manually.</p>
+        </div>
+
+        <div class="value-card reveal reveal-delay-3">
+          <div class="value-card-icon">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+          </div>
+          <h3>Audit Preparation</h3>
+          <p>Use completion status and exports to provide a clear, structured snapshot of what has been reconciled.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Reassurance -->
+  <div class="reassurance">
+    <div class="container">
+      <div class="reassurance-grid">
+        <div class="reassurance-item reveal">
+          <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+          Guided workflow from tenant selection to export.
+        </div>
+        <div class="reassurance-item reveal reveal-delay-1">
+          <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          Built for finance teams, including non-technical users.
+        </div>
+        <div class="reassurance-item reveal reveal-delay-2">
+          <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+          New here? Start with the step-by-step instructions page.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CTA -->
+  <section class="section">
+    <div class="container">
+      <div class="cta-panel reveal">
+        <div>
+          <h2>Ready to get started?</h2>
+          <p>Open Tenant Management to begin, or use the step-by-step guide first.</p>
+        </div>
+        <div class="cta-actions">
+          <a href="#" class="btn btn-primary">Open Tenant Management</a>
+          <a href="instructions.html" class="btn btn-secondary">View Step-By-Step Guide</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div>
+          <div class="footer-brand">Statement Processor</div>
+          <p class="footer-desc">
+            Statement Processor helps finance teams reconcile supplier statements against Xero with a clear, step-by-step workflow and exportable results.
+          </p>
+        </div>
+        <div>
+          <div class="footer-heading">Contact</div>
+          <div class="footer-links">
+            <a href="mailto:hello@example.com">hello@example.com</a>
+          </div>
+        </div>
+        <div>
+          <div class="footer-heading">Legal</div>
+          <div class="footer-links">
+            <span class="placeholder">Privacy Policy</span>
+            <span class="placeholder">Terms &amp; Conditions</span>
+            <a href="#">Cookie Policy</a>
+          </div>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <small>Copyright &copy; 2026 Statement Processor. All rights reserved.</small>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Scroll reveal
+    const reveals = document.querySelectorAll('.reveal');
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+    reveals.forEach(el => observer.observe(el));
+  </script>
+
+</body>
+</html>

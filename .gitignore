@@ -15,3 +15,5 @@
 .worktrees/
 .playwright-mcp/
 plans/
+openshell/secrets/*
+!openshell/secrets/.gitkeep
