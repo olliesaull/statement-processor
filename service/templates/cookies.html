@@ -1,41 +1,59 @@
 {% extends "base.html" %}
 {% block title %}Cookie Policy | Statement Processor{% endblock %}
 
+{% block container_class %}p-0{% endblock %}
+
 {% block content %}
-<div class="page-main">
-  <header class="page-header">
-    <p class="page-kicker mb-1">Cookie Policy</p>
-    <h1 class="mb-2">Essential cookies are required for authenticated features.</h1>
-    <p class="page-subtitle mb-0">
-      Statement Processor uses essential cookies only for login/session functionality and secure request handling.
-    </p>
+  <!-- Page Header -->
+  <header class="page-header page-header-hero">
+    <div class="container">
+      <p class="section-kicker reveal">Cookie Policy</p>
+      <h1 class="reveal reveal-delay-1">Essential cookies are required for authenticated features.</h1>
+      <p class="page-subtitle reveal reveal-delay-2">
+        Statement Processor uses essential cookies only for login/session functionality and secure request handling.
+      </p>
+    </div>
   </header>
 
-  <section class="page-panel page-panel-muted mb-4">
-    <h2 class="h5 mb-2">Why we use cookies</h2>
-    <ul class="mb-0">
-      <li>To keep your Xero login session active while you use protected pages.</li>
-      <li>To store that you accepted this cookie policy.</li>
-      <li>To show login/logout state in the navigation while you are signed in.</li>
-    </ul>
-  </section>
-
-  <section class="page-panel mb-4">
-    <h2 class="h5 mb-2">What happens if you do not accept</h2>
-    <p class="mb-0">
-      You can still view public pages, but any authenticated or session-based routes will redirect back to this page.
-    </p>
-  </section>
-
-  <section class="home-cta-panel">
-    <div>
-      <h2 class="h4 mb-1">Continue to Tenant Management</h2>
-      <p class="mb-0">Click "Accept Cookies" to accept essential cookies and continue to the authenticated workflow.</p>
-    </div>
-    <div class="d-flex flex-column flex-sm-row gap-2">
-      <a id="cookie-accept-button" class="btn btn-primary home-btn home-btn-primary" href="{{ url_for('tenant_management') }}" data-automation="cookie-accept-button">Accept Cookies</a>
-      <a class="btn btn-outline-secondary home-btn home-btn-secondary" href="{{ url_for('index') }}">Back to Home</a>
+  <!-- Why we use cookies -->
+  <section class="section">
+    <div class="container">
+      <div class="page-panel page-panel-muted reveal">
+        <h2>Why we use cookies</h2>
+        <ul>
+          <li>To keep your Xero login session active while you use protected pages.</li>
+          <li>To store that you accepted this cookie policy.</li>
+          <li>To show login/logout state in the navigation while you are signed in.</li>
+        </ul>
+      </div>
     </div>
   </section>
-</div>
+
+  <!-- What happens if you do not accept -->
+  <section class="section section-alt">
+    <div class="container">
+      <div class="page-panel reveal">
+        <h2>What happens if you do not accept</h2>
+        <p>
+          You can still view public pages, but any authenticated or session-based routes will redirect back to this page.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="section">
+    <div class="container">
+      <div class="cta-panel reveal">
+        <div>
+          <h2>Continue to Tenant Management</h2>
+          <p>Click "Accept Cookies" to accept essential cookies and continue to the authenticated workflow.</p>
+        </div>
+        <div class="cta-actions">
+          <a id="cookie-accept-button" class="btn btn-primary" href="{{ url_for('tenant_management') }}" data-automation="cookie-accept-button">Accept Cookies</a>
+          <a class="btn btn-secondary" href="{{ url_for('index') }}">Back to Home</a>
+        </div>
+      </div>
+    </div>
+  </section>
 {% endblock %}

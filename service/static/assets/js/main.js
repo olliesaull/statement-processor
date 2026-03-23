@@ -143,6 +143,18 @@ window.addEventListener("load", () => {
   updateNavbarAuthLink();
   setupStickyActionDocks();
 
+  // Scroll-reveal animations
+  document.querySelectorAll('.reveal, .reveal-subtle').forEach(el => {
+    new IntersectionObserver((entries, obs) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('visible');
+          obs.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' }).observe(el);
+  });
+
   if (window.location.pathname === "/tenant_management") {
       // Event listeners to check for inactivity 
 			document.addEventListener("mousemove", throttle(resetActivityTimer, 1000)); // 1000ms delay between events

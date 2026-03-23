@@ -153,7 +153,8 @@
 
 - **App structure**
   - Main application: `service/app.py` (Flask app factory, route handlers, template rendering, orchestration).
-  - Templates and UI assets: `service/templates/` (Jinja2 views) and `service/static/` (static assets).
+  - Templates and UI assets: `service/templates/` (Jinja2 views) and `service/static/` (static assets). See **Frontend Design System** below for details on the CSS architecture.
+  - Frontend design reference: static mockups in `new-design/` (index.html, about.html, instructions.html, styles.css) served as the design source of truth during the UI overhaul.
   - Configuration + AWS clients: `service/config.py` (environment-variable loading, boto3 clients/resources).
     - `service/config.py` now uses a local `get_envar(...)` helper that mirrors the Numerint Flask app: required env vars fail fast during import, while a small set of local-development defaults (`DOMAIN_NAME`, `STAGE`, `VALKEY_URL`) remain explicit. AWS clients/resources are now created directly via `boto3.client(...)` / `boto3.resource(...)` rather than a custom `boto3.session.Session(...)`. Rationale: this matches the working Numerint pattern, removes conditional session logic, and makes missing runtime configuration obvious during worker startup.
   - Gunicorn startup: `service/start.sh`.
@@ -263,6 +264,26 @@
     - Uploads PDF to S3 (`upload_statement_to_s3` → `service/utils/storage.py`).
     - Computes JSON output key (`statement_json_s3_key`) and starts Step Functions (`start_textraction_state_machine` → `service/utils/workflows.py`).
     - If the upload handoff fails after reservation, `service/billing_service.py:release_statement_reservation` returns the tokens and the service deletes the partially created statement row/S3 artefacts.
+
+## Frontend Design System
+
+The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer in `service/static/assets/css/main.css`. The design is intentionally approachable and trustworthy — targeting SMB finance teams who use Xero.
+
+- **Fonts**: Source Serif 4 (display/headings) + Outfit (body), loaded via Google Fonts CDN in `base.html`.
+- **Colour palette**: Blue-600 primary (`#2563eb`), teal-600 accent (`#0d9488`), slate scale for text/borders, light white backgrounds. All colours are CSS custom properties in `:root`.
+- **Bootstrap integration**: Bootstrap's `--bs-*` variables are mapped to the custom tokens, so Bootstrap components (forms, tables, alerts, badges, buttons) automatically use the palette. Custom component classes (`.page-panel`, `.page-kicker`, `.value-card`, etc.) layer on top.
+- **Navbar**: Bootstrap navbar markup restyled with frosted-glass `backdrop-filter: blur(12px)`. The `navbar-scrolled` class is toggled by `main.js` on scroll but styled as a subtle no-op (no colour inversion).
+- **Page headers**: `.page-header` provides serif h1 + spacing. `.page-header-hero` modifier adds a gradient background (`blue-50 → white`) for marketing pages. Statement detail page is excluded (uses its own `container-fluid` layout).
+- **Panels**: `.page-panel` is the universal panel class (clean white, subtle border+shadow). `.page-panel-muted` adds a slate-50 background. `.page-panel-flat` is an alias kept for backwards compatibility.
+- **Scroll-reveal**: `.reveal` (marketing pages — 0.6s, 20px translateY, staggered delays) and `.reveal-subtle` (functional pages — 0.3s, 8px) are animated via IntersectionObserver in `main.js`.
+- **CTA panels**: `.cta-panel` uses a dark slate-900 background with inverted button colours. Used at the bottom of marketing pages.
+- **Statement row colours**: Row colouring on the statement detail page uses `--statement-row-*` CSS custom properties injected by Jinja from `app.py`. These are not part of the design token layer — they are dynamic per-tenant configuration.
+
+### Design decisions
+- **Bootstrap kept**: Authenticated pages (forms, tables, modals) depend heavily on Bootstrap grid and components. Replacing Bootstrap would be a disproportionate effort. Instead, Bootstrap's colour system is overridden via `--bs-*` custom properties.
+- **No CSS reset added**: The new design system does not add `* { margin:0; padding:0 }` or redefine `.container` — these would break Bootstrap's own layout assumptions.
+- **Sticky footer**: `body` uses `display: flex; flex-direction: column; min-height: 100dvh` with `.site-shell-main { flex: 1 }` to push the footer to the bottom on short-content pages (checkout success/cancel/failed).
+- **Google Fonts CDN over self-hosting**: Simpler to implement. Fonts are loaded via `<link>` tags in `base.html`, not `@import` in CSS (avoids render-blocking waterfall).
 
 ## Data Model
 

@@ -1,196 +1,278 @@
 {% extends "base.html" %}
 {% block title %}Instructions{% endblock %}
 
+{% block container_class %}p-0{% endblock %}
+
 {% block content %}
-<div class="page-main">
-  <header class="page-header">
-    <p class="page-kicker mb-1">How It Works</p>
-    <h1 class="mb-2">Getting Started</h1>
-    <p class="page-subtitle mb-0">New to the app? Follow these steps in order from setup to final export.</p>
+  <!-- Page Header -->
+  <header class="page-header page-header-hero">
+    <div class="container">
+      <p class="section-kicker reveal">How It Works</p>
+      <h1 class="reveal reveal-delay-1">Getting Started</h1>
+      <p class="page-subtitle reveal reveal-delay-2">New to the app? Follow these steps in order from setup to final export.</p>
+    </div>
   </header>
 
-  <section class="page-panel page-panel-muted mb-4">
-    <h2 class="h5 mb-2">Before you begin</h2>
-    <p class="mb-2">Statement Processor compares supplier statement rows against Xero data and guides your team through reconciliation.</p>
-    <ul class="instructions-intro-list">
-      <li><strong>Tenant</strong> means the Xero organisation (company) you are working in.</li>
-      <li><strong>Contact config</strong> means the supplier mapping rules (for example, which columns are date, number, and total).</li>
-      <li>First-time setup for a supplier is usually Steps 1 to 4. Regular processing usually starts at Step 5.</li>
-      <li>Some actions run in the background. If a statement is processing, keep the page open and it will refresh.</li>
-    </ul>
+  <!-- Before you begin -->
+  <section class="section">
+    <div class="container">
+      <div class="page-panel page-panel-muted reveal">
+        <h2>Before you begin</h2>
+        <p>Statement Processor compares supplier statement rows against Xero data and guides your team through reconciliation.</p>
+        <ul>
+          <li><strong>Tenant</strong> means the Xero organisation (company) you are working in.</li>
+          <li><strong>Contact config</strong> means the supplier mapping rules (for example, which columns are date, number, and total).</li>
+          <li>First-time setup for a supplier is usually Steps 1 to 4. Regular processing usually starts at Step 5.</li>
+          <li>Some actions run in the background. If a statement is processing, keep the page open and it will refresh.</li>
+        </ul>
+      </div>
+    </div>
   </section>
 
-  <div class="instructions-steps">
-    <section class="instructions-step">
-      <div class="row g-4 align-items-center">
-        <div class="col-12 col-lg-6">
-          <p class="instructions-step-kicker mb-1">Step 1</p>
-          <h2 class="h4 mb-2">Sign in and choose your Xero tenant</h2>
-          <p class="mb-0">Open <strong>Tenant Management</strong>, connect Xero if needed, then select the company you want to process.</p>
-        </div>
-        <div class="col-12 col-lg-6">
-          <figure class="instructions-step-media mb-0">
-            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 1 of supplier statement reconciliation in Statement Processor: select your Xero tenant in Tenant Management before processing statements" width="1600" height="1000" loading="lazy">
-            <figcaption class="instructions-step-caption">Placeholder screenshot: Tenant Management with an active tenant selected.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
+  <!-- Steps -->
+  <section class="section section-alt">
+    <div class="container">
+      <div class="steps-section">
 
-    <section class="instructions-step">
-      <div class="row g-4 align-items-center">
-        <div class="col-12 col-lg-6 order-lg-2">
-          <p class="instructions-step-kicker mb-1">Step 2</p>
-          <h2 class="h4 mb-2">Wait for first-time load to finish</h2>
-          <p class="mb-0">If the tenant status is <strong>LOADING</strong>, wait until contacts and transactions are imported before continuing.</p>
+        <!-- Step 1 -->
+        <div class="step reveal">
+          <div class="step-grid">
+            <div>
+              <p class="step-number">Step 1</p>
+              <h2>Sign in and choose your Xero tenant</h2>
+              <p>Open <strong>Tenant Management</strong>, connect Xero if needed, then select the company you want to process.</p>
+            </div>
+            <div class="step-media">
+              <div class="step-media-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Screenshot placeholder</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="col-12 col-lg-6 order-lg-1">
-          <figure class="instructions-step-media mb-0">
-            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 2 of supplier statement reconciliation in Statement Processor: wait for the selected Xero tenant to finish initial loading before continuing" width="1600" height="1000" loading="lazy">
-            <figcaption class="instructions-step-caption">Placeholder screenshot: Tenant status showing LOADING or ready state.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
 
-    <section class="instructions-step">
-      <div class="row g-4 align-items-center">
-        <div class="col-12 col-lg-6">
-          <p class="instructions-step-kicker mb-1">Step 3</p>
-          <h2 class="h4 mb-2">Load the supplier contact config</h2>
-          <p class="mb-0">Go to <strong>Configuration</strong>, choose the supplier contact, then click <strong>Load Config</strong> (or create one if it does not exist yet).</p>
+        <!-- Step 2 -->
+        <div class="step reveal">
+          <div class="step-grid">
+            <div>
+              <p class="step-number">Step 2</p>
+              <h2>Wait for first-time load to finish</h2>
+              <p>If the tenant status is <strong>LOADING</strong>, wait until contacts and transactions are imported before continuing.</p>
+            </div>
+            <div class="step-media">
+              <div class="step-media-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Screenshot placeholder</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="col-12 col-lg-6">
-          <figure class="instructions-step-media mb-0">
-            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 3 of supplier statement reconciliation in Statement Processor: load supplier contact configuration before uploading PDF statements" width="1600" height="1000" loading="lazy">
-            <figcaption class="instructions-step-caption">Placeholder screenshot: Contact selection and config load action.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
 
-    <section class="instructions-step">
-      <div class="row g-4 align-items-center">
-        <div class="col-12 col-lg-6 order-lg-2">
-          <p class="instructions-step-kicker mb-1">Step 4</p>
-          <h2 class="h4 mb-2">Map key fields and formats</h2>
-          <p class="mb-0">Set the supplier column mappings for <strong>Number</strong> and <strong>Total</strong>, then confirm date format and number separators match the statement.</p>
+        <!-- Step 3 -->
+        <div class="step reveal">
+          <div class="step-grid">
+            <div>
+              <p class="step-number">Step 3</p>
+              <h2>Load the supplier contact config</h2>
+              <p>Go to <strong>Configuration</strong>, choose the supplier contact, then click <strong>Load Config</strong> (or create one if it does not exist yet).</p>
+            </div>
+            <div class="step-media">
+              <div class="step-media-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Screenshot placeholder</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="col-12 col-lg-6 order-lg-1">
-          <figure class="instructions-step-media mb-0">
-            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 4 of supplier statement reconciliation in Statement Processor: map invoice number and total fields and set supplier date and number formats" width="1600" height="1000" loading="lazy">
-            <figcaption class="instructions-step-caption">Placeholder screenshot: Field mappings and formatting options.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
 
-    <section class="instructions-step">
-      <div class="row g-4 align-items-center">
-        <div class="col-12 col-lg-6">
-          <p class="instructions-step-kicker mb-1">Step 5</p>
-          <h2 class="h4 mb-2">Upload supplier statement PDFs</h2>
-          <p class="mb-0">Open <strong>Upload Statements</strong>, select one or more PDF files, and pair each file with the correct supplier contact.</p>
+        <!-- Step 4 -->
+        <div class="step reveal">
+          <div class="step-grid">
+            <div>
+              <p class="step-number">Step 4</p>
+              <h2>Map key fields and formats</h2>
+              <p>Set the supplier column mappings for <strong>Number</strong> and <strong>Total</strong>, then confirm date format and number separators match the statement.</p>
+            </div>
+            <div class="step-media">
+              <div class="step-media-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Screenshot placeholder</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="col-12 col-lg-6">
-          <figure class="instructions-step-media mb-0">
-            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 5 of supplier statement reconciliation in Statement Processor: upload supplier statement PDFs and assign each file to the correct contact" width="1600" height="1000" loading="lazy">
-            <figcaption class="instructions-step-caption">Placeholder screenshot: Upload form with file and contact columns.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
 
-    <section class="instructions-step">
-      <div class="row g-4 align-items-center">
-        <div class="col-12 col-lg-6 order-lg-2">
-          <p class="instructions-step-kicker mb-1">Step 6</p>
-          <h2 class="h4 mb-2">Open the statement when processing completes</h2>
-          <p class="mb-0">Go to <strong>Statements</strong>, then open the uploaded statement from the list once it is available.</p>
+        <!-- Step 5 -->
+        <div class="step reveal">
+          <div class="step-grid">
+            <div>
+              <p class="step-number">Step 5</p>
+              <h2>Upload supplier statement PDFs</h2>
+              <p>Open <strong>Upload Statements</strong>, select one or more PDF files, and pair each file with the correct supplier contact.</p>
+            </div>
+            <div class="step-media">
+              <div class="step-media-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Screenshot placeholder</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="col-12 col-lg-6 order-lg-1">
-          <figure class="instructions-step-media mb-0">
-            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 6 of supplier statement reconciliation in Statement Processor: open the statements list and select an uploaded statement once processing is complete" width="1600" height="1000" loading="lazy">
-            <figcaption class="instructions-step-caption">Placeholder screenshot: Statements table and Reconcile action.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
 
-    <section class="instructions-step">
-      <div class="row g-4 align-items-center">
-        <div class="col-12 col-lg-6">
-          <p class="instructions-step-kicker mb-1">Step 7</p>
-          <h2 class="h4 mb-2">Review matches, mismatches, and anomalies</h2>
-          <p class="mb-0">Use row colours and indicators to review each line and resolve anything that does not match Xero.</p>
+        <!-- Step 6 -->
+        <div class="step reveal">
+          <div class="step-grid">
+            <div>
+              <p class="step-number">Step 6</p>
+              <h2>Open the statement when processing completes</h2>
+              <p>Go to <strong>Statements</strong>, then open the uploaded statement from the list once it is available.</p>
+            </div>
+            <div class="step-media">
+              <div class="step-media-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Screenshot placeholder</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="col-12 col-lg-6">
-          <figure class="instructions-step-media mb-0">
-            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 7 of supplier statement reconciliation in Statement Processor: review statement rows against Xero transactions and resolve mismatches and anomalies" width="1600" height="1000" loading="lazy">
-            <figcaption class="instructions-step-caption">Placeholder screenshot: Statement vs Xero comparison grid with legend.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
 
-    <section class="instructions-step">
-      <div class="row g-4 align-items-center">
-        <div class="col-12 col-lg-6 order-lg-2">
-          <p class="instructions-step-kicker mb-1">Step 8</p>
-          <h2 class="h4 mb-2">Mark rows and statement as complete</h2>
-          <p class="mb-0">Use row-level actions where needed, then mark the full statement complete when your review is finished.</p>
+        <!-- Step 7 -->
+        <div class="step reveal">
+          <div class="step-grid">
+            <div>
+              <p class="step-number">Step 7</p>
+              <h2>Review matches, mismatches, and anomalies</h2>
+              <p>Use row colours and indicators to review each line and resolve anything that does not match Xero.</p>
+            </div>
+            <div class="step-media">
+              <div class="step-media-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Screenshot placeholder</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="col-12 col-lg-6 order-lg-1">
-          <figure class="instructions-step-media mb-0">
-            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 8 of supplier statement reconciliation in Statement Processor: mark rows complete and finish the statement reconciliation workflow" width="1600" height="1000" loading="lazy">
-            <figcaption class="instructions-step-caption">Placeholder screenshot: Completion actions and status badges.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
 
-    <section class="instructions-step">
-      <div class="row g-4 align-items-center">
-        <div class="col-12 col-lg-6">
-          <p class="instructions-step-kicker mb-1">Step 9</p>
-          <h2 class="h4 mb-2">Download the Excel export</h2>
-          <p class="mb-0">Use <strong>Download Excel</strong> to export the current reconciliation view for sharing or archiving.</p>
+        <!-- Step 8 -->
+        <div class="step reveal">
+          <div class="step-grid">
+            <div>
+              <p class="step-number">Step 8</p>
+              <h2>Mark rows and statement as complete</h2>
+              <p>Use row-level actions where needed, then mark the full statement complete when your review is finished.</p>
+            </div>
+            <div class="step-media">
+              <div class="step-media-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Screenshot placeholder</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="col-12 col-lg-6">
-          <figure class="instructions-step-media mb-0">
-            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 9 of supplier statement reconciliation in Statement Processor: download the reconciled supplier statement as an Excel export" width="1600" height="1000" loading="lazy">
-            <figcaption class="instructions-step-caption">Placeholder screenshot: Download Excel action on statement page.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
 
-    <section class="instructions-step">
-      <div class="row g-4 align-items-center">
-        <div class="col-12 col-lg-6 order-lg-2">
-          <p class="instructions-step-kicker mb-1">Step 10</p>
-          <h2 class="h4 mb-2">Re-upload only if config changes</h2>
-          <p class="mb-0">If you change supplier mapping rules, delete the old statement and upload it again so extraction uses the updated config.</p>
+        <!-- Step 9 -->
+        <div class="step reveal">
+          <div class="step-grid">
+            <div>
+              <p class="step-number">Step 9</p>
+              <h2>Download the Excel export</h2>
+              <p>Use <strong>Download Excel</strong> to export the current reconciliation view for sharing or archiving.</p>
+            </div>
+            <div class="step-media">
+              <div class="step-media-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Screenshot placeholder</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="col-12 col-lg-6 order-lg-1">
-          <figure class="instructions-step-media mb-0">
-            <img src="{{ url_for('static', filename='assets/images/instructions_step_placeholder.svg') }}" class="instructions-step-image" alt="Step 10 of supplier statement reconciliation in Statement Processor: delete and re-upload statements after changing supplier mapping configuration" width="1600" height="1000" loading="lazy">
-            <figcaption class="instructions-step-caption">Placeholder screenshot: Delete statement and upload replacement file.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
-  </div>
 
-  <section class="page-panel page-panel-muted mt-4">
-    <h2 class="h5 mb-3">Troubleshooting</h2>
-    <ul class="instructions-troubleshooting-list mb-0">
-      <li><strong>Unknown contact:</strong> check the contact name and ensure that contact exists in your selected tenant.</li>
-      <li><strong>Missing config:</strong> create or load the supplier config before attempting upload.</li>
-      <li><strong>Non-PDF upload:</strong> only PDF files are accepted on the upload page.</li>
-      <li><strong>Session expired:</strong> if redirected to login, sign in again and return to your workflow.</li>
-      <li><strong>Statement still processing:</strong> wait briefly and refresh; processing can take a few seconds up to several minutes.</li>
-    </ul>
+        <!-- Step 10 -->
+        <div class="step reveal">
+          <div class="step-grid">
+            <div>
+              <p class="step-number">Step 10</p>
+              <h2>Re-upload only if config changes</h2>
+              <p>If you change supplier mapping rules, delete the old statement and upload it again so extraction uses the updated config.</p>
+            </div>
+            <div class="step-media">
+              <div class="step-media-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Screenshot placeholder</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
   </section>
-</div>
+
+  <!-- Troubleshooting -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header reveal">
+        <p class="section-kicker">Need Help?</p>
+        <h2 class="section-title">Troubleshooting</h2>
+      </div>
+      <div class="troubleshooting-grid">
+        <div class="troubleshooting-item reveal reveal-delay-1">
+          <strong>Unknown contact</strong>
+          <p>Check the contact name and ensure that contact exists in your selected tenant.</p>
+        </div>
+        <div class="troubleshooting-item reveal reveal-delay-1">
+          <strong>Missing config</strong>
+          <p>Create or load the supplier config before attempting upload.</p>
+        </div>
+        <div class="troubleshooting-item reveal reveal-delay-2">
+          <strong>Non-PDF upload</strong>
+          <p>Only PDF files are accepted on the upload page.</p>
+        </div>
+        <div class="troubleshooting-item reveal reveal-delay-2">
+          <strong>Session expired</strong>
+          <p>If redirected to login, sign in again and return to your workflow.</p>
+        </div>
+        <div class="troubleshooting-item reveal reveal-delay-3">
+          <strong>Statement still processing</strong>
+          <p>Wait briefly and refresh; processing can take a few seconds up to several minutes.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="section section-alt">
+    <div class="container">
+      <div class="cta-panel reveal">
+        <div>
+          <h2>Ready to get started?</h2>
+          <p>Open Tenant Management to begin reconciling supplier statements.</p>
+        </div>
+        <div class="cta-actions">
+          <a href="{{ url_for('tenant_management') }}" class="btn btn-primary">Open Tenant Management</a>
+          <a href="{{ url_for('index') }}" class="btn btn-secondary">Back to Home</a>
+        </div>
+      </div>
+    </div>
+  </section>
 {% endblock %}
