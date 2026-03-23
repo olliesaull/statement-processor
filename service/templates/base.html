@@ -94,6 +94,14 @@
         </div>
     </nav>
 
+    {% if pending_config_review_count is defined and pending_config_review_count > 0 %}
+    <div class="alert alert-info alert-dismissible mx-3 mt-3 mb-0" role="alert">
+        <strong>{{ pending_config_review_count }} statement{{ 's' if pending_config_review_count != 1 else '' }} need{{ 's' if pending_config_review_count == 1 else '' }} config review.</strong>
+        <a href="{{ url_for('configs') }}" class="alert-link">Review now</a>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+
     <!-- Main content -->
     <main class="{% block container_class %}container mt-4{% endblock %} site-shell-main">
         {% block content %}{% endblock %}

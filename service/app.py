@@ -125,6 +125,36 @@ class StatementUploadStartError(RuntimeError):
     """Raised when a reserved statement cannot be handed off to processing."""
 
 
+@app.context_processor
+def inject_pending_review_count():
+    """Make pending config review count available to all templates.
+
+    Caches the count in the session for 60 seconds to avoid an S3 list
+    call on every page load.
+    """
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        return {"pending_config_review_count": 0}
+
+    cache_key = "_pending_review_count"
+    cache_ts_key = "_pending_review_count_ts"
+    now = time.time()
+
+    # Return cached value if fresh (< 60s old).
+    cached_ts = session.get(cache_ts_key, 0)
+    if now - cached_ts < 60:
+        return {"pending_config_review_count": session.get(cache_key, 0)}
+
+    try:
+        count = get_pending_suggestion_count(tenant_id)
+    except Exception:
+        count = 0
+
+    session[cache_key] = count
+    session[cache_ts_key] = now
+    return {"pending_config_review_count": count}
+
+
 @app.errorhandler(CSRFError)
 def handle_csrf_error(error: CSRFError):
     """Log CSRF failures with request context and return API-safe JSON.
