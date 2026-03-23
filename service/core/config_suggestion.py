@@ -105,23 +105,40 @@ def _extract_page_one(pdf_s3_key: str) -> tuple[list[str], list[list[str]], list
 def _parse_textract_table(response: dict) -> tuple[list[str], list[list[str]], list[str]]:
     """Parse Textract AnalyzeDocument response to extract table data.
 
+    Real Textract CELL blocks don't carry a ``Text`` field directly.
+    Instead, each cell has ``Relationships`` pointing to child WORD
+    blocks whose text must be joined. We build a block-ID-to-text
+    lookup first, then resolve each cell's text from its children.
+
     Returns:
         Tuple of (headers, data_rows, date_column_values).
         Headers are row 1 cells, data rows are subsequent rows.
         date_column_values are the values from the column identified as
         having date-like content (first column with "/" or "-" in values).
     """
-    cells = [b for b in response.get("Blocks", []) if b.get("BlockType") == "CELL"]
+    blocks = response.get("Blocks", [])
+    cells = [b for b in blocks if b.get("BlockType") == "CELL"]
 
     if not cells:
         return [], [], []
 
-    # Group cells by row index.
+    # Build a lookup from block ID → text for WORD and SELECTION_ELEMENT blocks.
+    word_map: dict[str, str] = {}
+    for block in blocks:
+        if block.get("BlockType") in ("WORD", "SELECTION_ELEMENT"):
+            word_map[block["Id"]] = block.get("Text", "")
+
+    # Group cells by row index, resolving text from child WORD blocks.
     rows_dict: dict[int, dict[int, str]] = {}
     for cell in cells:
         row_idx = cell.get("RowIndex", 0)
         col_idx = cell.get("ColumnIndex", 0)
-        text = cell.get("Text", "").strip()
+        # Resolve cell text: join child WORD block texts, or fall back to
+        # the cell's own Text field (used in unit test mocks).
+        text = cell.get("Text", "")
+        if not text:
+            child_ids = _get_child_ids(cell)
+            text = " ".join(word_map.get(cid, "") for cid in child_ids).strip()
         rows_dict.setdefault(row_idx, {})[col_idx] = text
 
     sorted_row_indices = sorted(rows_dict.keys())
@@ -147,6 +164,14 @@ def _parse_textract_table(response: dict) -> tuple[list[str], list[list[str]], l
         date_values = [row[date_col_idx] for row in data_rows if date_col_idx < len(row) and row[date_col_idx]]
 
     return headers, data_rows, date_values
+
+
+def _get_child_ids(block: dict) -> list[str]:
+    """Extract child block IDs from a Textract block's Relationships."""
+    for rel in block.get("Relationships", []):
+        if rel.get("Type") == "CHILD":
+            return rel.get("Ids", [])
+    return []
 
 
 def _find_date_column(headers: list[str], rows: list[list[str]]) -> int | None:
