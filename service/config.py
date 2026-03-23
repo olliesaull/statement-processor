@@ -18,6 +18,7 @@ The SSM parameter paths are themselves stored as environment variables
 import os
 
 import boto3
+import botocore.config
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -85,6 +86,11 @@ STRIPE_EVENT_STORE_TABLE_NAME: str = get_envar("STRIPE_EVENT_STORE_TABLE_NAME")
 s3_client = boto3.client("s3")
 stepfunctions_client = boto3.client("stepfunctions")
 ddb_client = boto3.client("dynamodb")
+
+# Adaptive retry for services with throttling risk (Textract, Bedrock).
+_adaptive_retry = botocore.config.Config(retries={"max_attempts": 3, "mode": "adaptive"})
+textract_client = boto3.client("textract", config=_adaptive_retry)
+bedrock_runtime_client = boto3.client("bedrock-runtime", config=_adaptive_retry)
 
 ddb = boto3.resource("dynamodb")
 tenant_statements_table = ddb.Table(TENANT_STATEMENTS_TABLE_NAME)
