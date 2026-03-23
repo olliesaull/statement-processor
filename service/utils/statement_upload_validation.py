@@ -65,6 +65,7 @@ class PreparedStatementUpload:
     contact_id: str
     contact_name: str
     page_count: int
+    needs_config_review: bool = False
 
 
 def validate_upload_payload(files: list[FileStorage], names: list[str]) -> bool:
@@ -112,19 +113,26 @@ def build_statement_upload_preflight(tenant_id: str | None, files: list[FileStor
     )
 
 
-def _ensure_contact_config(tenant_id: str | None, contact_id: str, contact_name: str, filename: str, error_messages: list[str]) -> bool:
-    """Ensure the contact has a config; on failure, log and append a user-facing error."""
+def _ensure_contact_config(tenant_id: str | None, contact_id: str, contact_name: str, filename: str, error_messages: list[str]) -> str:
+    """Check whether the contact has a saved config.
+
+    Returns:
+        ``"ok"`` if config exists, ``"needs_config_review"`` if missing
+        (upload can proceed for auto-suggestion), or ``"error"`` if
+        lookup itself failed (upload should be skipped).
+    """
     try:
         get_contact_config(tenant_id, contact_id)
     except KeyError:
-        logger.warning("Upload blocked; contact config missing", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=filename)
-        error_messages.append(f"Contact '{contact_name}' does not have a statement config yet. Please configure it before uploading.")
-        return False
+        # Config missing — the upload can still proceed; the auto-suggestion
+        # pipeline will attempt to generate one from the PDF.
+        logger.info("Config missing; upload will proceed for auto-suggestion", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=filename)
+        return "needs_config_review"
     except Exception as exc:
         logger.exception("Upload blocked; config lookup failed", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=filename, error=exc)
         error_messages.append(f"Could not load the config for '{contact_name}'. Please try again later.")
-        return False
-    return True
+        return "error"
+    return "ok"
 
 
 def prepare_statement_uploads(tenant_id: str | None, files: list[FileStorage], names: list[str], contact_lookup: dict[str, str], error_messages: list[str]) -> list[PreparedStatementUpload]:
@@ -151,9 +159,18 @@ def prepare_statement_uploads(tenant_id: str | None, files: list[FileStorage], n
             error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")  # nosec B608 - user-facing message only, no SQL execution
             continue
 
-        if not _ensure_contact_config(tenant_id, contact_id, contact_name, filename, error_messages):
+        config_status = _ensure_contact_config(tenant_id, contact_id, contact_name, filename, error_messages)
+        if config_status == "error":
             continue
 
-        prepared_uploads.append(PreparedStatementUpload(uploaded_file=uploaded_file, contact_id=contact_id, contact_name=contact_name, page_count=page_count_result.page_count or 0))
+        prepared_uploads.append(
+            PreparedStatementUpload(
+                uploaded_file=uploaded_file,
+                contact_id=contact_id,
+                contact_name=contact_name,
+                page_count=page_count_result.page_count or 0,
+                needs_config_review=(config_status == "needs_config_review"),
+            )
+        )
 
     return prepared_uploads
