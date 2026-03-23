@@ -14,7 +14,7 @@ def test_completed_backgrounds_are_derived_from_base_colors() -> None:
     Returns:
         None.
     """
-    expected_completed_backgrounds = {"match": "#DAF5DF", "mismatch": "#DF9595", "anomaly": "#FFF2BF"}
+    expected_completed_backgrounds = {"match": "#D3FAE0", "mismatch": "#FEDDDD", "anomaly": "#FEEFB3"}
 
     for state, expected_background in expected_completed_backgrounds.items():
         assert STATEMENT_ROW_PALETTE[state]["normal"]["background"] == STATEMENT_ROW_BASE_COLORS[state]["background"]
@@ -32,12 +32,12 @@ def test_css_variable_map_contains_all_row_state_keys() -> None:
         None.
     """
     css_variables = statement_row_palette_css_variables(STATEMENT_ROW_PALETTE)
-    assert css_variables["--statement-row-match-bg"] == "#C6EFCE"
-    assert css_variables["--statement-row-match-completed-bg"] == "#DAF5DF"
-    assert css_variables["--statement-row-mismatch-bg"] == "#CD5C5C"
-    assert css_variables["--statement-row-mismatch-completed-bg"] == "#DF9595"
-    assert css_variables["--statement-row-anomaly-bg"] == "#FFEB9C"
-    assert css_variables["--statement-row-anomaly-completed-bg"] == "#FFF2BF"
+    assert css_variables["--statement-row-match-bg"] == "#BBF7D0"
+    assert css_variables["--statement-row-match-completed-bg"] == "#D3FAE0"
+    assert css_variables["--statement-row-mismatch-bg"] == "#FECACA"
+    assert css_variables["--statement-row-mismatch-completed-bg"] == "#FEDDDD"
+    assert css_variables["--statement-row-anomaly-bg"] == "#FDE68A"
+    assert css_variables["--statement-row-anomaly-completed-bg"] == "#FEEFB3"
 
 
 def test_blend_hex_towards_target_rejects_invalid_alpha() -> None:

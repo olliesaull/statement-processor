@@ -7,15 +7,15 @@ Completed row colors are generated from base colors rather than hard-coded so we
 from typing import Final
 
 # Type shape (inside-out):
-# RowColorSet: {"background": "#C6EFCE", "text": "#0F3B1F"}
+# RowColorSet: {"background": "#BBF7D0", "text": "#166534"}
 # RowPaletteState: {"normal": RowColorSet, "completed": RowColorSet}
 # StatementRowPalette: {"match": RowPaletteState, "mismatch": RowPaletteState, "anomaly": RowPaletteState}
 
 # Example:
 #    palette: StatementRowPalette = {
 #       "match": {
-#           "normal": {"background": "#C6EFCE", "text": "#0F3B1F"},
-#           "completed": {"background": "#DAF5DF", "text": "#0F3B1F"},
+#           "normal": {"background": "#BBF7D0", "text": "#166534"},
+#           "completed": {"background": "#D3FAE0", "text": "#166534"},
 #       }
 #   }
 
@@ -24,9 +24,9 @@ type RowPaletteState = dict[str, RowColorSet]
 type StatementRowPalette = dict[str, RowPaletteState]
 
 STATEMENT_ROW_BASE_COLORS: Final[dict[str, RowColorSet]] = {
-    "match": {"background": "#C6EFCE", "text": "#0F3B1F"},
-    "mismatch": {"background": "#CD5C5C", "text": "#7F1D1D"},
-    "anomaly": {"background": "#FFEB9C", "text": "#713F12"},
+    "match": {"background": "#BBF7D0", "text": "#166534"},
+    "mismatch": {"background": "#FECACA", "text": "#991B1B"},
+    "anomaly": {"background": "#FDE68A", "text": "#78350F"},
 }
 STATEMENT_ROW_COMPLETED_ALPHA: Final[float] = 0.65
 STATEMENT_ROW_BLEND_TARGET: Final[str] = "#FFFFFF"
