@@ -334,9 +334,22 @@ class StatementProcessorStack(Stack):
                     "cloudwatch:PutMetricData",
                     "textract:StartDocumentAnalysis",
                     "textract:GetDocumentAnalysis",
+                    "textract:AnalyzeDocument",
                     "states:StartExecution",
                 ],
                 resources=["*"],
+            )
+        )
+        # Allow Bedrock Haiku invocation for auto config suggestion.
+        # Both foundation-model and cross-region inference profile ARNs are needed
+        # because newer models require inference profiles for on-demand invocation.
+        statement_processor_instance_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["bedrock:InvokeModel"],
+                resources=[
+                    f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-haiku-4-5-*",
+                    f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/eu.anthropic.claude-haiku-4-5-*",
+                ],
             )
         )
         tenant_statements_table.grant_read_write_data(statement_processor_instance_role)
