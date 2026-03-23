@@ -6,7 +6,7 @@ import secrets
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
 from typing import Any
 
@@ -652,7 +652,7 @@ def _create_review_statement_header(tenant_id: str | None, statement_id: str, up
             "OriginalStatementFilename": upload.uploaded_file.filename or "Unnamed PDF",
             "ContactID": upload.contact_id,
             "ContactName": upload.contact_name,
-            "UploadedAt": datetime.now().isoformat(),
+            "UploadedAt": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "Completed": "false",
             "RecordType": "statement",
             "PdfPageCount": upload.page_count,
@@ -812,7 +812,7 @@ def statements():
     if sort_key == "date_range":
         statement_rows.sort(key=lambda r: r.get("_latest_item_date") or date.min, reverse=reverse)
     elif sort_key == "uploaded":
-        statement_rows.sort(key=lambda r: r.get("_uploaded_at") or datetime.min, reverse=reverse)
+        statement_rows.sort(key=lambda r: r.get("_uploaded_at") or datetime.min.replace(tzinfo=UTC), reverse=reverse)
     else:
         # Contact: alphabetical or reverse, always keep missing/blank names last
         sort_key = "contact"
