@@ -24,44 +24,91 @@
         <div class="hero-visual reveal reveal-delay-2">
           <div class="hero-card">
             <div class="hero-card-header">
-              <span class="hero-card-title">Reconciliation Summary</span>
+              <span class="hero-card-title">Supplier Statement Review</span>
               <span class="hero-card-badge">4/5 Matched</span>
             </div>
-            <div class="hero-card-row">
-              <span class="hero-card-dot match"></span>
-              <span class="hero-card-label">INV-2024-0891</span>
-              <span class="hero-card-value">&pound;2,450.00</span>
+
+            <!-- Split column headers -->
+            <div class="hero-table-head">
+              <div class="hero-table-half hero-table-half-stmt">
+                <span class="hero-table-col-label">Statement</span>
+              </div>
+              <div class="hero-table-half">
+                <span class="hero-table-col-label">Xero</span>
+              </div>
             </div>
-            <div class="hero-card-row">
-              <span class="hero-card-dot match"></span>
-              <span class="hero-card-label">INV-2024-0903</span>
-              <span class="hero-card-value">&pound;1,120.50</span>
+            <div class="hero-table-subhead">
+              <span class="hero-table-sub">Date</span>
+              <span class="hero-table-sub">Ref</span>
+              <span class="hero-table-sub hero-table-sub-num">Total</span>
+              <span class="hero-table-split"></span>
+              <span class="hero-table-sub">Date</span>
+              <span class="hero-table-sub">Ref</span>
+              <span class="hero-table-sub hero-table-sub-num">Total</span>
             </div>
-            <div class="hero-card-row">
-              <span class="hero-card-dot mismatch"></span>
-              <span class="hero-card-label">INV-2024-0917</span>
-              <span class="hero-card-value">&pound;875.00</span>
+
+            <!-- Row 1: Match (INV) -->
+            <div class="hero-compare-row match">
+              <span class="hero-compare-cell">01/03</span>
+              <span class="hero-compare-cell">INV-4021</span>
+              <span class="hero-compare-cell hero-compare-num">&pound;2,450</span>
+              <span class="hero-table-split"></span>
+              <span class="hero-compare-cell">01/03</span>
+              <span class="hero-compare-cell">INV-4021</span>
+              <span class="hero-compare-cell hero-compare-num">&pound;2,450</span>
             </div>
-            <div class="hero-card-row">
-              <span class="hero-card-dot match"></span>
-              <span class="hero-card-label">CN-2024-0042</span>
-              <span class="hero-card-value">-&pound;340.00</span>
+
+            <!-- Row 2: Match (INV) -->
+            <div class="hero-compare-row match">
+              <span class="hero-compare-cell">15/03</span>
+              <span class="hero-compare-cell">INV-4035</span>
+              <span class="hero-compare-cell hero-compare-num">&pound;1,120</span>
+              <span class="hero-table-split"></span>
+              <span class="hero-compare-cell">15/03</span>
+              <span class="hero-compare-cell">INV-4035</span>
+              <span class="hero-compare-cell hero-compare-num">&pound;1,120</span>
             </div>
-            <div class="hero-card-row">
-              <span class="hero-card-dot match"></span>
-              <span class="hero-card-label">INV-2024-0928</span>
-              <span class="hero-card-value">&pound;3,680.25</span>
+
+            <!-- Row 3: Mismatch (totals differ) -->
+            <div class="hero-compare-row mismatch">
+              <span class="hero-compare-cell">22/03</span>
+              <span class="hero-compare-cell">INV-4048</span>
+              <span class="hero-compare-cell hero-compare-num">&pound;875</span>
+              <span class="hero-table-split"></span>
+              <span class="hero-compare-cell">22/03</span>
+              <span class="hero-compare-cell">INV-4048</span>
+              <span class="hero-compare-cell hero-compare-num">&pound;940</span>
+            </div>
+
+            <!-- Row 4: Anomaly (no Xero match) -->
+            <div class="hero-compare-row anomaly">
+              <span class="hero-compare-cell">28/03</span>
+              <span class="hero-compare-cell">PMT-0039</span>
+              <span class="hero-compare-cell hero-compare-num">&pound;3,570</span>
+              <span class="hero-table-split"></span>
+              <span class="hero-compare-cell hero-compare-empty">&mdash;</span>
+              <span class="hero-compare-cell hero-compare-empty">&mdash;</span>
+              <span class="hero-compare-cell hero-compare-empty">&mdash;</span>
+            </div>
+
+            <!-- Row 5: Match (CN) -->
+            <div class="hero-compare-row match">
+              <span class="hero-compare-cell">31/03</span>
+              <span class="hero-compare-cell">CN-0091</span>
+              <span class="hero-compare-cell hero-compare-num">-&pound;340</span>
+              <span class="hero-table-split"></span>
+              <span class="hero-compare-cell">31/03</span>
+              <span class="hero-compare-cell">CN-0091</span>
+              <span class="hero-compare-cell hero-compare-num">-&pound;340</span>
             </div>
           </div>
 
-          <div class="hero-float hero-float-1">
-            <div class="hero-float-number">97.4%</div>
-            <div class="hero-float-label">Match Rate</div>
-          </div>
-
-          <div class="hero-float hero-float-2">
-            <div class="hero-float-number">12</div>
-            <div class="hero-float-label">Statements This Month</div>
+          <div class="hero-float hero-float-2 hero-float-xero">
+            <img src="{{ url_for('static', filename='assets/images/xero-logo.svg') }}" alt="Xero" class="hero-float-xero-logo">
+            <div class="hero-float-xero-text">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="hero-float-check"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>Connected</span>
+            </div>
           </div>
         </div>
       </div>

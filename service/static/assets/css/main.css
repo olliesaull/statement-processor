@@ -800,6 +800,106 @@ a:focus-visible {
   color: var(--green-600);
 }
 
+/* Hero comparison table (Statement vs Xero split) */
+.hero-table-head {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--slate-200);
+}
+
+.hero-table-half {
+  padding: 8px 0;
+  text-align: center;
+}
+
+.hero-table-half-stmt {
+  border-right: 3px solid var(--slate-300);
+}
+
+.hero-table-col-label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--slate-500);
+}
+
+.hero-table-subhead {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 1fr 3px 1fr 1.4fr 1fr;
+  gap: 0;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--slate-200);
+}
+
+.hero-table-sub {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--slate-400);
+  padding: 0 6px;
+}
+
+.hero-table-sub-num {
+  text-align: right;
+}
+
+.hero-table-split {
+  background: var(--slate-300);
+  width: 3px;
+}
+
+.hero-compare-row {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 1fr 3px 1fr 1.4fr 1fr;
+  gap: 0;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--slate-100);
+  border-radius: 0;
+}
+
+.hero-compare-row:last-child {
+  border-bottom: none;
+}
+
+.hero-compare-row.match {
+  background: var(--green-100);
+  color: var(--green-600);
+}
+
+.hero-compare-row.mismatch {
+  background: var(--red-100);
+  color: var(--red-500);
+}
+
+.hero-compare-row.anomaly {
+  background: var(--amber-100);
+  color: var(--amber-500);
+}
+
+.hero-compare-cell {
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hero-compare-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.hero-compare-empty {
+  color: var(--slate-400);
+  text-align: center;
+}
+
 /* Floating stat cards */
 .hero-float {
   position: absolute;
@@ -834,6 +934,34 @@ a:focus-visible {
   color: var(--slate-500);
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+.hero-float-xero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 20px;
+}
+
+.hero-float-xero-logo {
+  height: 20px;
+  width: auto;
+}
+
+.hero-float-xero-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--green-600);
+  letter-spacing: 0.02em;
+}
+
+.hero-float-check {
+  width: 14px;
+  height: 14px;
 }
 
 @keyframes float {
