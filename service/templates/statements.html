@@ -50,6 +50,7 @@
               {% set item_date_range = stmt.get("ItemDateRangeDisplay") or "—" %}
               {% set statement_filename = stmt.get("OriginalStatementFilename") or "—" %}
               {% set is_reserved = (stmt.get("TokenReservationStatus") or "")|lower == "reserved" %}
+              {% set stmt_status = stmt.get("Status") or "" %}
               <tr data-statement-id="{{ stmt['StatementID'] }}" data-contact-name="{{ stmt.get('ContactName') or '' }}" data-automation="statement-row">
                 <td class="statements-col-contact">
                   <span class="cell-value-wrapper">
@@ -64,16 +65,27 @@
                 <td class="statements-col-filename">
                   <span class="cell-value-wrapper">
                     <span class="cell-value-truncate" title="{{ statement_filename|default('', true)|e }}">{{ statement_filename }}</span>
+                    {% if stmt_status == 'pending_config_review' %}
+                      <span class="badge bg-warning text-dark ms-2">Config Review Pending</span>
+                    {% elif stmt_status == 'config_suggestion_failed' %}
+                      <span class="badge bg-danger ms-2">Config Required</span>
+                    {% endif %}
                   </span>
                 </td>
                 <td class="text-center statements-col-action">
                   <div class="d-flex flex-wrap justify-content-center gap-2">
-                    <a href="{{ url_for('statement', statement_id=stmt['StatementID']) }}" class="btn btn-sm btn-primary" data-automation="statement-reconcile-link">
-                      Reconcile
-                    </a>
+                    {% if stmt_status == 'pending_config_review' %}
+                      <a href="{{ url_for('configs') }}" class="btn btn-sm btn-warning">Review Config</a>
+                    {% elif stmt_status == 'config_suggestion_failed' %}
+                      <a href="{{ url_for('configs', contact_name=contact_name) }}" class="btn btn-sm btn-danger">Configure</a>
+                    {% else %}
+                      <a href="{{ url_for('statement', statement_id=stmt['StatementID']) }}" class="btn btn-sm btn-primary" data-automation="statement-reconcile-link">
+                        Reconcile
+                      </a>
+                    {% endif %}
                     {% if is_reserved %}
                       <button type="button" class="btn btn-sm btn-outline-secondary" disabled>Processing</button>
-                    {% else %}
+                    {% elif stmt_status not in ('pending_config_review',) %}
                       <form method="post" action="{{ url_for('delete_statement', statement_id=stmt['StatementID']) }}" class="d-inline" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>

@@ -1214,6 +1214,13 @@ def statement(statement_id: str):
         logger.info("Statement record not found", tenant_id=tenant_id, statement_id=statement_id)
         abort(404)
 
+    # Redirect to /configs if the statement hasn't been configured yet
+    # (viewing the detail page would fail due to missing JSON).
+    record_status = str(record.get("Status") or "")
+    if record_status in ("pending_config_review", "config_suggestion_failed"):
+        contact_name_redirect = str(record.get("ContactName") or "").strip()
+        return redirect(url_for("configs", contact_name=contact_name_redirect))
+
     items_view = _parse_items_view(request.values.get("items_view"))
     show_payments = _parse_show_payments(request.values.get("show_payments"))
     logger.info("Statement detail requested", tenant_id=tenant_id, statement_id=statement_id, items_view=items_view, show_payments=show_payments, method=request.method)
