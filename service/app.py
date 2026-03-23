@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from io import BytesIO
@@ -18,7 +19,8 @@ from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
 from billing_service import LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
-from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, S3_BUCKET_NAME, STAGE, VALKEY_URL
+from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, S3_BUCKET_NAME, STAGE, VALKEY_URL, tenant_statements_table
+from core.config_suggestion import suggest_config_for_statement
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
@@ -105,7 +107,7 @@ oauth.register(
     client_kwargs={"scope": scope_str()},
 )
 
-_executor = ThreadPoolExecutor(max_workers=2)
+_executor = ThreadPoolExecutor(max_workers=5)
 
 # Stripe service instance — used by checkout routes.
 stripe_service = StripeService()
@@ -545,29 +547,88 @@ def _reserve_statement_uploads(tenant_id: str | None, prepared_uploads: list[Pre
     return []
 
 
-def _handle_upload_statements_post(tenant_id: str | None, *, contact_lookup: dict[str, str], error_messages: list[str]) -> int:
-    """Validate, reserve, and start workflow processing for one upload POST."""
+def _handle_upload_statements_post(tenant_id: str | None, *, contact_lookup: dict[str, str], error_messages: list[str]) -> tuple[int, int]:
+    """Validate, reserve, and start workflow processing for one upload POST.
+
+    Returns:
+        Tuple of (success_count, review_count) — how many uploads started
+        processing and how many were submitted for config review.
+    """
     files = [f for f in request.files.getlist("statements") if f and f.filename]
     names = request.form.getlist("contact_names")
     logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
 
     if not validate_upload_payload(files, names):
-        return 0
+        return 0, 0
 
     prepared_uploads = prepare_statement_uploads(tenant_id, files, names, contact_lookup, error_messages)
     if not prepared_uploads:
-        return 0
+        return 0, 0
 
-    reserved_uploads = _reserve_statement_uploads(tenant_id, prepared_uploads, error_messages)
+    # Split uploads into those with config (ready) and those needing review.
+    ready_uploads = [u for u in prepared_uploads if not u.needs_config_review]
+    review_uploads = [u for u in prepared_uploads if u.needs_config_review]
+
+    # Process ready uploads as before (reserve, upload, start step function).
     uploads_ok = 0
-    for reserved_upload in reserved_uploads:
-        try:
-            _process_statement_upload(tenant_id=tenant_id, reserved_upload=reserved_upload)
-            uploads_ok += 1
-        except StatementUploadStartError as exc:
-            _handle_reserved_upload_failure(tenant_id, reserved_upload, exc, error_messages)
+    if ready_uploads:
+        reserved_uploads = _reserve_statement_uploads(tenant_id, ready_uploads, error_messages)
+        for reserved_upload in reserved_uploads:
+            try:
+                _process_statement_upload(tenant_id=tenant_id, reserved_upload=reserved_upload)
+                uploads_ok += 1
+            except StatementUploadStartError as exc:
+                _handle_reserved_upload_failure(tenant_id, reserved_upload, exc, error_messages)
 
-    return uploads_ok
+    # Submit review uploads — no token reservation until user confirms config.
+    review_count = 0
+    for upload in review_uploads:
+        try:
+            statement_id = uuid.uuid4().hex
+            _create_review_statement_header(tenant_id, statement_id, upload)
+
+            pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
+            upload_statement_to_s3(fs_like=upload.uploaded_file, key=pdf_key)
+
+            _executor.submit(
+                suggest_config_for_statement,
+                tenant_id=tenant_id,
+                contact_id=upload.contact_id,
+                contact_name=upload.contact_name,
+                statement_id=statement_id,
+                pdf_s3_key=pdf_key,
+                filename=upload.uploaded_file.filename or "statement.pdf",
+                page_count=upload.page_count,
+            )
+            review_count += 1
+            logger.info("Submitted config suggestion job", tenant_id=tenant_id, statement_id=statement_id, contact_name=upload.contact_name)
+        except Exception as exc:
+            logger.exception("Failed to submit review upload", tenant_id=tenant_id, contact_name=upload.contact_name, error=exc)
+            error_messages.append(f"{upload.uploaded_file.filename or 'PDF'}: Failed to upload for config review.")
+
+    return uploads_ok, review_count
+
+
+def _create_review_statement_header(tenant_id: str | None, statement_id: str, upload: PreparedStatementUpload) -> None:
+    """Create a DynamoDB header row for a statement awaiting config review.
+
+    These rows have Status=pending_config_review and no billing reservation
+    fields — tokens are reserved later when the user confirms the config.
+    """
+    tenant_statements_table.put_item(
+        Item={
+            "TenantID": tenant_id,
+            "StatementID": statement_id,
+            "OriginalStatementFilename": upload.uploaded_file.filename or "Unnamed PDF",
+            "ContactID": upload.contact_id,
+            "ContactName": upload.contact_name,
+            "UploadedAt": datetime.now().isoformat(),
+            "Completed": "false",
+            "RecordType": "statement",
+            "PdfPageCount": upload.page_count,
+            "Status": "pending_config_review",
+        }
+    )
 
 
 @app.route("/api/upload-statements/preflight", methods=["POST"])
@@ -620,12 +681,17 @@ def upload_statements():
     logger.info("Rendering upload statements", tenant_id=tenant_id, available_contacts=len(contacts_list))
 
     uploads_ok = 0
+    review_count = 0
     if request.method == "POST":
-        uploads_ok = _handle_upload_statements_post(tenant_id, contact_lookup=contact_lookup, error_messages=error_messages)
+        uploads_ok, review_count = _handle_upload_statements_post(tenant_id, contact_lookup=contact_lookup, error_messages=error_messages)
 
         if uploads_ok:
             success_count = uploads_ok
-        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=list(error_messages))
+        if review_count:
+            # Invalidate the cached pending review count so the banner updates.
+            session.pop("_pending_review_count_ts", None)
+            error_messages.append(f"{review_count} statement{'s' if review_count != 1 else ''} need config review — go to Configuration to confirm.")
+        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, review=review_count, errors=list(error_messages))
 
     return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages)
 
@@ -1857,12 +1923,7 @@ if STAGE == "local":
         if not tenant_id or not tenant_name:
             return "Set PLAYWRIGHT_TENANT_ID and PLAYWRIGHT_TENANT_NAME env vars", 400
 
-        session["xero_oauth2_token"] = {
-            "access_token": "test-token-local",
-            "token_type": "Bearer",
-            "expires_in": 86400,
-            "expires_at": time.time() + 86400,
-        }
+        session["xero_oauth2_token"] = {"access_token": "test-token-local", "token_type": "Bearer", "expires_in": 86400, "expires_at": time.time() + 86400}
         session["xero_tenant_id"] = tenant_id
         session["xero_tenant_name"] = tenant_name
         session["xero_tenants"] = [{"tenantId": tenant_id, "tenantName": tenant_name}]
