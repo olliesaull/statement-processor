@@ -35,7 +35,7 @@
             <label class="form-label fw-semibold">Number <span class="text-danger">*</span></label>
             <select class="form-select review-field" data-field="number" data-card="{{ suggestion.statement_id }}">
               <option value="">— Select —</option>
-              {% for header in suggestion.detected_headers %}
+              {% for header in suggestion.all_headers %}
               <option value="{{ header }}" {% if suggestion.suggested_config.get('number') == header %}selected{% endif %}>{{ header }}</option>
               {% endfor %}
             </select>
@@ -46,7 +46,7 @@
             <label class="form-label fw-semibold">Date <span class="text-danger">*</span></label>
             <select class="form-select review-field" data-field="date" data-card="{{ suggestion.statement_id }}">
               <option value="">— Select —</option>
-              {% for header in suggestion.detected_headers %}
+              {% for header in suggestion.all_headers %}
               <option value="{{ header }}" {% if suggestion.suggested_config.get('date') == header %}selected{% endif %}>{{ header }}</option>
               {% endfor %}
             </select>
@@ -57,7 +57,7 @@
             <label class="form-label">Due Date</label>
             <select class="form-select review-field" data-field="due_date" data-card="{{ suggestion.statement_id }}">
               <option value="">— None —</option>
-              {% for header in suggestion.detected_headers %}
+              {% for header in suggestion.all_headers %}
               <option value="{{ header }}" {% if suggestion.suggested_config.get('due_date') == header %}selected{% endif %}>{{ header }}</option>
               {% endfor %}
             </select>
@@ -68,7 +68,7 @@
             <label class="form-label fw-semibold">Total column(s) <span class="text-danger">*</span></label>
             <select class="form-select review-field" data-field="total" data-card="{{ suggestion.statement_id }}" multiple size="3">
               {% set suggested_totals = suggestion.suggested_config.get('total', []) %}
-              {% for header in suggestion.detected_headers %}
+              {% for header in suggestion.all_headers %}
               <option value="{{ header }}" {% if header in suggested_totals %}selected{% endif %}>{{ header }}</option>
               {% endfor %}
             </select>

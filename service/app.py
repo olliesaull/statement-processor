@@ -1520,8 +1520,28 @@ def configs():
         context.update(_load_config_context(tenant_id, contact_lookup, selected_contact_name))
 
     # Load pending config suggestions for the review section.
+    # Merge detected headers with LLM-suggested values so dropdowns include
+    # column names the LLM identified from data rows (not just the Textract
+    # first row which may be a title rather than real headers).
     pending_suggestions = get_pending_suggestions(tenant_id)
-    context["pending_suggestions"] = [s.model_dump() for s in pending_suggestions]
+    suggestions_dicts: list[dict[str, Any]] = []
+    for s in pending_suggestions:
+        d = s.model_dump()
+        seen = set(d["detected_headers"])
+        extra: list[str] = []
+        cfg = d.get("suggested_config", {})
+        for field in ("number", "date", "due_date"):
+            val = cfg.get(field, "")
+            if val and val not in seen:
+                extra.append(val)
+                seen.add(val)
+        for val in cfg.get("total", []):
+            if val and val not in seen:
+                extra.append(val)
+                seen.add(val)
+        d["all_headers"] = [h for h in d["detected_headers"] if h] + extra
+        suggestions_dicts.append(d)
+    context["pending_suggestions"] = suggestions_dicts
 
     context.update(
         {
@@ -1562,6 +1582,9 @@ def confirm_config_suggestion():
     # Clean up the S3 suggestion file now that it's been confirmed.
     delete_suggestion(tenant_id, statement_id)
 
+    # Clear the pending status so the statement no longer shows review badges.
+    tenant_statements_table.update_item(Key={"TenantID": tenant_id, "StatementID": statement_id}, UpdateExpression="REMOVE #s", ExpressionAttributeNames={"#s": "Status"})
+
     # Start the extraction workflow — the PDF is already in S3 from upload.
     pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
     json_key = statement_json_s3_key(tenant_id, statement_id)
@@ -1599,6 +1622,9 @@ def confirm_all_config_suggestions():
         config = ContactConfig.model_validate(config_payload)
         set_contact_config(tenant_id, contact_id, config)
         delete_suggestion(tenant_id, statement_id)
+
+        # Clear pending status before starting the workflow.
+        tenant_statements_table.update_item(Key={"TenantID": tenant_id, "StatementID": statement_id}, UpdateExpression="REMOVE #s", ExpressionAttributeNames={"#s": "Status"})
 
         pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
         json_key = statement_json_s3_key(tenant_id, statement_id)
