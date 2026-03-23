@@ -79,7 +79,10 @@
     ├── xero_repository.py
     ├── core/
     │   ├── __init__.py
+    │   ├── bedrock_client.py
+    │   ├── config_suggestion.py
     │   ├── contact_config_metadata.py
+    │   ├── date_disambiguation.py
     │   ├── date_utils.py
     │   ├── get_contact_config.py
     │   ├── item_classification.py
@@ -492,11 +495,46 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
   - Updated by: `service/app.py:_persist_classification_updates` (re‑uploads JSON after item type changes).
   - Deleted by: `service/utils/dynamo.py:delete_statement_data`.
 - Key sanitisation: `_statement_s3_key` rejects path separators in `tenant_id`/`statement_id` to avoid path traversal in keys (`service/utils/storage.py`).
+- Config suggestions: `{tenant_id}/config-suggestions/{statement_id}.json`
+  - Written by: `service/core/config_suggestion.py:suggest_config_for_statement` after Textract + Bedrock analysis.
+  - Read by: `service/core/config_suggestion.py:get_pending_suggestions` (loaded on `/configs` page).
+  - Deleted by: `service/core/config_suggestion.py:delete_suggestion` (after user confirms config).
+  - Contents: `ConfigSuggestion` model — contact metadata, detected headers, suggested column mappings, and confidence notes.
 
 **Key structure for cached Xero datasets**
 - `{tenant_id}/data/{resource}.json` where `resource` is one of `contacts`, `invoices`, `credit_notes`, `payments` (`service/xero_repository.py`, `service/sync.py`).
   - Written by: `service/sync.py` after fetching from Xero.
   - Read by: `service/xero_repository.py` (download to local cache when missing).
+
+## Auto Config Suggestion
+
+When a statement is uploaded for a contact that has no saved config, the system auto-detects column mappings instead of blocking the upload.
+
+### How it works
+1. **Upload**: The PDF is uploaded to S3 and a DynamoDB header row is created with `Status=pending_config_review`. No tokens are reserved at this stage.
+2. **Textract**: A background thread extracts page 1 as a single-page PDF (to avoid the sync API's multi-page limitation) and runs `AnalyzeDocument` with `FeatureTypes=["TABLES"]`.
+3. **Bedrock Haiku 4.5**: The detected headers and sample rows are sent to Bedrock via the Converse API with a forced tool call (`suggest_config`). The prompt includes a full SDF token reference table so the LLM returns date formats in the correct syntax.
+4. **Date disambiguation**: A post-processing step scans date values for components > 12 to confirm or reject the LLM's DD/MM vs MM/DD proposal. If all values are ambiguous (both components <= 12), the date format is left empty for the user to fill in.
+5. **S3 save**: The suggestion (including detected headers, suggested config, and confidence notes) is saved to `{tenant_id}/config-suggestions/{statement_id}.json`.
+6. **User confirmation**: The `/configs` page shows pending review cards with dropdowns pre-filled from the detected headers. Users can adjust mappings and confirm. On confirmation, the config is saved to DynamoDB, the suggestion file is deleted, and the extraction step function is started.
+
+### Status values
+- `pending_config_review`: Suggestion generated successfully, awaiting user confirmation.
+- `config_suggestion_failed`: Textract or Bedrock failed — the user must configure manually via the full config editor.
+
+### Bedrock model access
+The Bedrock Converse API requires model access to be enabled in the AWS console. The EU cross-region inference profile `eu.anthropic.claude-haiku-4-5-20251001-v1:0` must be enabled in the deployment region. This is a manual console step — CDK only grants the IAM permissions.
+
+### New files
+| File | Purpose |
+|------|---------|
+| `service/core/date_disambiguation.py` | DD/MM vs MM/DD disambiguation from date values |
+| `service/core/bedrock_client.py` | Bedrock Converse API wrapper with tool use for config suggestion |
+| `service/core/config_suggestion.py` | Orchestrator: Textract → Bedrock → S3 → DynamoDB status |
+
+### API endpoints
+- `POST /api/configs/confirm` — Confirm a single suggested config and start extraction.
+- `POST /api/configs/confirm-all` — Confirm multiple configs in one request. Skips invalid ones.
 
 ## Anomaly Detection Logic
 
