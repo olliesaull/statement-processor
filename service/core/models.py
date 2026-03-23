@@ -88,6 +88,23 @@ class ContactConfig(BaseModel):
         return [str(item).strip() for item in value if str(item).strip()]
 
 
+class ConfigSuggestion(BaseModel):
+    """LLM-suggested config stored in S3 for user confirmation.
+
+    Saved at ``<tenant_id>/config-suggestions/<statement_id>.json`` and
+    loaded by the /configs page to render pending review cards.
+    """
+
+    contact_id: str
+    contact_name: str
+    statement_id: str
+    filename: str
+    page_count: int
+    suggested_config: dict[str, Any]
+    detected_headers: list[str]
+    confidence_notes: str = ""
+
+
 @dataclass(frozen=True)
 class CellComparison:
     """Represents the comparison of a single statement cell versus the Xero value."""
