@@ -14,3 +14,4 @@
 *.xlsx
 .worktrees/
 .playwright-mcp/
+plans/
