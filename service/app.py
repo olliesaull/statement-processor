@@ -20,7 +20,7 @@ from flask_wtf.csrf import CSRFError, CSRFProtect
 
 from billing_service import LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
 from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, S3_BUCKET_NAME, STAGE, VALKEY_URL, tenant_statements_table
-from core.config_suggestion import suggest_config_for_statement
+from core.config_suggestion import delete_suggestion, get_pending_suggestion_count, get_pending_suggestions, suggest_config_for_statement
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
@@ -1490,6 +1490,96 @@ def configs():
     )
 
     return render_template("configs.html", **context)
+
+
+@app.route("/api/configs/confirm", methods=["POST"])
+@active_tenant_required("Please select a tenant.")
+@xero_token_required
+@route_handler_logging
+def confirm_config_suggestion():
+    """Confirm an LLM-suggested config and kick off full extraction."""
+    tenant_id = session.get("xero_tenant_id")
+    data = request.get_json()
+
+    contact_id = data.get("contact_id", "")
+    statement_id = data.get("statement_id", "")
+    config_payload = data.get("config", {})
+
+    # Validate mandatory fields (server-side source of truth).
+    errors = _validate_config_mandatory_fields(config_payload)
+    if errors:
+        return jsonify({"ok": False, "errors": errors}), 400
+
+    # Save config to DynamoDB.
+    config = ContactConfig.model_validate(config_payload)
+    set_contact_config(tenant_id, contact_id, config)
+
+    # Clean up the S3 suggestion file now that it's been confirmed.
+    delete_suggestion(tenant_id, statement_id)
+
+    # Start the extraction workflow — the PDF is already in S3 from upload.
+    pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
+    json_key = statement_json_s3_key(tenant_id, statement_id)
+    start_textraction_state_machine(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_key, json_key=json_key)
+
+    # Invalidate cached pending review count.
+    session.pop("_pending_review_count_ts", None)
+
+    logger.info("Config suggestion confirmed", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id)
+    return jsonify({"ok": True, "statement_id": statement_id})
+
+
+@app.route("/api/configs/confirm-all", methods=["POST"])
+@active_tenant_required("Please select a tenant.")
+@xero_token_required
+@route_handler_logging
+def confirm_all_config_suggestions():
+    """Confirm multiple suggested configs. Skips invalid ones."""
+    tenant_id = session.get("xero_tenant_id")
+    items = request.get_json().get("items", [])
+
+    confirmed: list[str] = []
+    skipped: list[dict[str, Any]] = []
+
+    for item in items:
+        config_payload = item.get("config", {})
+        errors = _validate_config_mandatory_fields(config_payload)
+        if errors:
+            skipped.append({"statement_id": item.get("statement_id"), "errors": errors})
+            continue
+
+        contact_id = item.get("contact_id", "")
+        statement_id = item.get("statement_id", "")
+
+        config = ContactConfig.model_validate(config_payload)
+        set_contact_config(tenant_id, contact_id, config)
+        delete_suggestion(tenant_id, statement_id)
+
+        pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
+        json_key = statement_json_s3_key(tenant_id, statement_id)
+        start_textraction_state_machine(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_key, json_key=json_key)
+
+        confirmed.append(statement_id)
+
+    # Invalidate cached pending review count.
+    session.pop("_pending_review_count_ts", None)
+
+    logger.info("Bulk config confirm", tenant_id=tenant_id, confirmed=len(confirmed), skipped=len(skipped))
+    return jsonify({"confirmed": confirmed, "skipped": skipped})
+
+
+def _validate_config_mandatory_fields(config: dict) -> list[str]:
+    """Validate mandatory config fields, return list of error messages."""
+    errors: list[str] = []
+    if not config.get("number"):
+        errors.append("'number' (document number column) is required.")
+    if not config.get("date"):
+        errors.append("'date' (transaction date column) is required.")
+    if not config.get("total") or not any(config["total"]):
+        errors.append("At least one 'total' column is required.")
+    if not config.get("date_format"):
+        errors.append("'date_format' is required.")
+    return errors
 
 
 @app.route("/login")
