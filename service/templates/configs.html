@@ -9,6 +9,119 @@
     <p class="page-subtitle mb-0">Map supplier statement columns and formatting so uploads parse consistently.</p>
   </header>
 
+  {# ── Section 1: Pending Config Reviews ── #}
+  {% if pending_suggestions %}
+  <div class="mb-4" id="pending-reviews-section">
+    <h2 class="h5 mb-3">Pending Config Reviews <span class="badge bg-warning text-dark">{{ pending_suggestions|length }}</span></h2>
+    <p class="text-muted small mb-3">These statements were uploaded without a saved config. Review the auto-detected column mappings below and confirm or edit them.</p>
+
+    {% for suggestion in pending_suggestions %}
+    <div class="card page-panel-flat mb-3 pending-review-card" id="review-card-{{ suggestion.statement_id }}" data-statement-id="{{ suggestion.statement_id }}" data-contact-id="{{ suggestion.contact_id }}">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <strong>{{ suggestion.contact_name }}</strong>
+          <span class="text-muted ms-2">{{ suggestion.filename }}</span>
+        </div>
+        <span class="badge bg-secondary">{{ loop.index }}/{{ pending_suggestions|length }}</span>
+      </div>
+      <div class="card-body">
+        {% if suggestion.confidence_notes %}
+        <div class="alert alert-info py-2 small mb-3">{{ suggestion.confidence_notes }}</div>
+        {% endif %}
+
+        <div class="row g-3">
+          {# Number column #}
+          <div class="col-md-6 col-lg-4">
+            <label class="form-label fw-semibold">Number <span class="text-danger">*</span></label>
+            <select class="form-select review-field" data-field="number" data-card="{{ suggestion.statement_id }}">
+              <option value="">— Select —</option>
+              {% for header in suggestion.detected_headers %}
+              <option value="{{ header }}" {% if suggestion.suggested_config.get('number') == header %}selected{% endif %}>{{ header }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          {# Date column #}
+          <div class="col-md-6 col-lg-4">
+            <label class="form-label fw-semibold">Date <span class="text-danger">*</span></label>
+            <select class="form-select review-field" data-field="date" data-card="{{ suggestion.statement_id }}">
+              <option value="">— Select —</option>
+              {% for header in suggestion.detected_headers %}
+              <option value="{{ header }}" {% if suggestion.suggested_config.get('date') == header %}selected{% endif %}>{{ header }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          {# Due Date column #}
+          <div class="col-md-6 col-lg-4">
+            <label class="form-label">Due Date</label>
+            <select class="form-select review-field" data-field="due_date" data-card="{{ suggestion.statement_id }}">
+              <option value="">— None —</option>
+              {% for header in suggestion.detected_headers %}
+              <option value="{{ header }}" {% if suggestion.suggested_config.get('due_date') == header %}selected{% endif %}>{{ header }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          {# Total columns (multi-select) #}
+          <div class="col-md-6 col-lg-4">
+            <label class="form-label fw-semibold">Total column(s) <span class="text-danger">*</span></label>
+            <select class="form-select review-field" data-field="total" data-card="{{ suggestion.statement_id }}" multiple size="3">
+              {% set suggested_totals = suggestion.suggested_config.get('total', []) %}
+              {% for header in suggestion.detected_headers %}
+              <option value="{{ header }}" {% if header in suggested_totals %}selected{% endif %}>{{ header }}</option>
+              {% endfor %}
+            </select>
+            <div class="form-text">Hold Ctrl/Cmd to select multiple.</div>
+          </div>
+
+          {# Date format #}
+          <div class="col-md-6 col-lg-4">
+            <label class="form-label fw-semibold">Date Format <span class="text-danger">*</span></label>
+            {% set date_fmt = suggestion.suggested_config.get('date_format', '') %}
+            <input type="text" class="form-control review-field {% if not date_fmt %}border-danger{% endif %}" data-field="date_format" data-card="{{ suggestion.statement_id }}" value="{{ date_fmt }}" placeholder="e.g. DD/MM/YYYY">
+            {% if not date_fmt %}
+            <div class="form-text text-danger">Ambiguous — please specify the date format.</div>
+            {% endif %}
+          </div>
+
+          {# Decimal separator #}
+          <div class="col-md-6 col-lg-4">
+            <label class="form-label">Decimal Separator</label>
+            <select class="form-select review-field" data-field="decimal_separator" data-card="{{ suggestion.statement_id }}">
+              {% for value, label in decimal_separator_options %}
+              <option value="{{ value }}" {% if suggestion.suggested_config.get('decimal_separator', '.') == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          {# Thousands separator #}
+          <div class="col-md-6 col-lg-4">
+            <label class="form-label">Thousands Separator</label>
+            <select class="form-select review-field" data-field="thousands_separator" data-card="{{ suggestion.statement_id }}">
+              {% for value, label in thousands_separator_options %}
+              <option value="{{ value }}" {% if suggestion.suggested_config.get('thousands_separator', ',') == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="mt-3 d-flex gap-2">
+          <button type="button" class="btn btn-success btn-confirm-single" data-statement-id="{{ suggestion.statement_id }}" data-contact-id="{{ suggestion.contact_id }}">Confirm</button>
+          <a href="{{ url_for('configs') }}?contact_name={{ suggestion.contact_name | urlencode }}" class="btn btn-outline-secondary btn-sm">Edit in full config page</a>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+
+    {% if pending_suggestions|length > 1 %}
+    <button type="button" class="btn btn-primary mb-4" id="btn-confirm-all">Confirm All Valid</button>
+    {% endif %}
+  </div>
+  <hr class="mb-4">
+  {% endif %}
+
+  {# ── Section 2: Existing Config Editor (preserved) ── #}
   <div class="mb-4">
     <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#exampleConfig" aria-expanded="false" aria-controls="exampleConfig">
       View example config
@@ -273,5 +386,134 @@ function removeInput(button, field) {
   }
   wrapper.remove();
 }
+
+/* ── Pending review card logic ── */
+
+/** Collect config values from a single review card. */
+function getCardConfig(cardEl) {
+  const config = {};
+  cardEl.querySelectorAll('.review-field').forEach(el => {
+    const field = el.dataset.field;
+    if (el.tagName === 'SELECT' && el.multiple) {
+      config[field] = Array.from(el.selectedOptions).map(o => o.value);
+    } else {
+      config[field] = el.value;
+    }
+  });
+  return config;
+}
+
+/** Check whether mandatory fields are filled for a card. */
+function isCardValid(cardEl) {
+  const config = getCardConfig(cardEl);
+  return !!(config.number && config.date && config.date_format &&
+            config.total && config.total.length > 0 && config.total.some(v => v));
+}
+
+/** Confirm a single suggestion card via the API. */
+async function confirmSingle(btn) {
+  const statementId = btn.dataset.statementId;
+  const contactId = btn.dataset.contactId;
+  const card = document.getElementById('review-card-' + statementId);
+  if (!card) return;
+
+  if (!isCardValid(card)) {
+    alert('Please fill in all mandatory fields (number, date, total, date format).');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Confirming…';
+
+  const config = getCardConfig(card);
+  const csrfToken = document.querySelector('input[name="csrf_token"]')?.value || '';
+
+  try {
+    const resp = await fetch('/api/configs/confirm', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
+      body: JSON.stringify({contact_id: contactId, statement_id: statementId, config: config}),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      card.classList.add('border-success');
+      card.querySelector('.card-body').innerHTML = '<div class="alert alert-success mb-0">Confirmed — extraction started.</div>';
+      // Remove card after brief delay.
+      setTimeout(() => { card.remove(); updateReviewSection(); }, 1500);
+    } else {
+      alert('Validation errors:\n' + (data.errors || []).join('\n'));
+      btn.disabled = false;
+      btn.textContent = 'Confirm';
+    }
+  } catch (err) {
+    alert('Failed to confirm: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = 'Confirm';
+  }
+}
+
+/** Confirm all valid cards. */
+async function confirmAll() {
+  const cards = document.querySelectorAll('.pending-review-card');
+  const items = [];
+  cards.forEach(card => {
+    if (isCardValid(card)) {
+      items.push({
+        statement_id: card.dataset.statementId,
+        contact_id: card.dataset.contactId,
+        config: getCardConfig(card),
+      });
+    }
+  });
+
+  if (items.length === 0) {
+    alert('No cards have all mandatory fields filled.');
+    return;
+  }
+
+  const btn = document.getElementById('btn-confirm-all');
+  if (btn) { btn.disabled = true; btn.textContent = 'Confirming…'; }
+
+  const csrfToken = document.querySelector('input[name="csrf_token"]')?.value || '';
+  try {
+    const resp = await fetch('/api/configs/confirm-all', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
+      body: JSON.stringify({items: items}),
+    });
+    const data = await resp.json();
+    const confirmedSet = new Set(data.confirmed || []);
+    cards.forEach(card => {
+      if (confirmedSet.has(card.dataset.statementId)) {
+        card.classList.add('border-success');
+        card.querySelector('.card-body').innerHTML = '<div class="alert alert-success mb-0">Confirmed — extraction started.</div>';
+        setTimeout(() => { card.remove(); updateReviewSection(); }, 1500);
+      }
+    });
+    if (data.skipped && data.skipped.length > 0) {
+      alert(data.skipped.length + ' card(s) skipped due to validation errors.');
+    }
+  } catch (err) {
+    alert('Failed to confirm: ' + err.message);
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Confirm All Valid'; }
+}
+
+/** Hide the review section if all cards are gone. */
+function updateReviewSection() {
+  const section = document.getElementById('pending-reviews-section');
+  if (section && section.querySelectorAll('.pending-review-card').length === 0) {
+    section.remove();
+  }
+}
+
+/* Bind event listeners. */
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.btn-confirm-single').forEach(btn => {
+    btn.addEventListener('click', () => confirmSingle(btn));
+  });
+  const confirmAllBtn = document.getElementById('btn-confirm-all');
+  if (confirmAllBtn) confirmAllBtn.addEventListener('click', confirmAll);
+});
 </script>
 {% endblock %}

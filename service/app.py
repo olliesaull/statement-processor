@@ -1477,6 +1477,14 @@ def configs():
         elif action == "save_map":
             # Save edited mapping.
             context.update(_save_config_context(tenant_id, request.form))
+    elif request.args.get("contact_name"):
+        # Support ?contact_name= query param for pre-selection (e.g. redirected from failed statement).
+        selected_contact_name = request.args["contact_name"].strip()
+        context.update(_load_config_context(tenant_id, contact_lookup, selected_contact_name))
+
+    # Load pending config suggestions for the review section.
+    pending_suggestions = get_pending_suggestions(tenant_id)
+    context["pending_suggestions"] = [s.model_dump() for s in pending_suggestions]
 
     context.update(
         {
