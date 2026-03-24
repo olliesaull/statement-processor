@@ -186,3 +186,62 @@ def test_adjust_token_balance_rejects_zero_delta() -> None:
         assert str(exc) == "TokenDelta must be non-zero."
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("Expected an exception for zero token delta")
+
+
+# --- reserve_confirmed_statement ---
+
+
+def test_reserve_confirmed_statement_builds_atomic_transaction(monkeypatch) -> None:
+    """Confirming a config-suggestion statement should deduct tokens, create
+    a ledger entry, and stamp reservation metadata on the existing header."""
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_transact_write_items(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(BillingService, "_ddb_client", type("FakeClient", (), {"transact_write_items": staticmethod(_fake_transact_write_items)}))
+
+    reservation_id = BillingService.reserve_confirmed_statement("tenant-1", "stmt-abc", page_count=3)
+
+    assert reservation_id == "reserve#stmt-abc"
+    assert len(calls) == 1
+
+    transact_items = calls[0]["TransactItems"]
+    assert isinstance(transact_items, list)
+    # 3 items: billing update, ledger put, statement header update.
+    assert len(transact_items) == 3
+
+    # Billing snapshot: deducts 3 pages.
+    billing_update = transact_items[0]["Update"]
+    assert billing_update["ExpressionAttributeValues"][":pages"] == {"N": "3"}
+    assert "TokenBalance >= :pages" in billing_update["ConditionExpression"]
+
+    # Ledger entry: reserve type, negative delta.
+    ledger_put = transact_items[1]["Put"]
+    assert ledger_put["Item"]["EntryType"] == {"S": ENTRY_TYPE_RESERVE}
+    assert ledger_put["Item"]["TokenDelta"] == {"N": "-3"}
+    assert ledger_put["Item"]["RelatedStatementID"] == {"S": "stmt-abc"}
+
+    # Statement header: stamps reservation metadata (Update, not Put).
+    header_update = transact_items[2]["Update"]
+    assert header_update["ExpressionAttributeValues"][":rid"] == {"S": "reserve#stmt-abc"}
+    assert header_update["ExpressionAttributeValues"][":status"] == {"S": TOKEN_RESERVATION_STATUS_RESERVED}
+
+
+def test_reserve_confirmed_statement_raises_on_insufficient_tokens(monkeypatch) -> None:
+    """Insufficient balance should raise InsufficientTokensError."""
+
+    exc = ClientError({"Error": {"Code": "TransactionCanceledException", "Message": "cancelled"}, "CancellationReasons": [{"Code": "ConditionalCheckFailed"}]}, "TransactWriteItems")
+
+    def _raise(**kwargs: object) -> None:
+        raise exc
+
+    monkeypatch.setattr(BillingService, "_ddb_client", type("FakeClient", (), {"transact_write_items": staticmethod(_raise)}))
+
+    try:
+        BillingService.reserve_confirmed_statement("tenant-1", "stmt-abc", page_count=5)
+    except InsufficientTokensError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("Expected InsufficientTokensError")

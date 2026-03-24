@@ -1575,6 +1575,19 @@ def confirm_config_suggestion():
     if errors:
         return jsonify({"ok": False, "errors": errors}), 400
 
+    # Reserve tokens now — the review-upload path deferred reservation until
+    # the user confirmed the config (design spec: "tokens are reserved later
+    # when the user confirms the config and the full Step Function kicks off").
+    page_count = _get_statement_page_count(tenant_id, statement_id)
+    try:
+        BillingService.reserve_confirmed_statement(tenant_id, statement_id, page_count)
+    except InsufficientTokensError:
+        logger.info("Config confirm blocked; insufficient tokens", tenant_id=tenant_id, statement_id=statement_id, page_count=page_count)
+        return jsonify({"ok": False, "errors": ["Not enough tokens to process this statement. Please purchase more tokens."]}), 400
+    except BillingServiceError as exc:
+        logger.exception("Config confirm blocked; billing error", tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
+        return jsonify({"ok": False, "errors": ["Could not reserve tokens. Please try again."]}), 500
+
     # Save config to DynamoDB.
     config = ContactConfig.model_validate(config_payload)
     set_contact_config(tenant_id, contact_id, config)
@@ -1619,6 +1632,18 @@ def confirm_all_config_suggestions():
         contact_id = item.get("contact_id", "")
         statement_id = item.get("statement_id", "")
 
+        # Reserve tokens for this statement before processing.
+        page_count = _get_statement_page_count(tenant_id, statement_id)
+        try:
+            BillingService.reserve_confirmed_statement(tenant_id, statement_id, page_count)
+        except InsufficientTokensError:
+            skipped.append({"statement_id": statement_id, "errors": ["Not enough tokens to process this statement."]})
+            continue
+        except BillingServiceError as exc:
+            logger.exception("Bulk confirm billing error", tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
+            skipped.append({"statement_id": statement_id, "errors": ["Could not reserve tokens. Please try again."]})
+            continue
+
         config = ContactConfig.model_validate(config_payload)
         set_contact_config(tenant_id, contact_id, config)
         delete_suggestion(tenant_id, statement_id)
@@ -1637,6 +1662,14 @@ def confirm_all_config_suggestions():
 
     logger.info("Bulk config confirm", tenant_id=tenant_id, confirmed=len(confirmed), skipped=len(skipped))
     return jsonify({"confirmed": confirmed, "skipped": skipped})
+
+
+def _get_statement_page_count(tenant_id: str | None, statement_id: str) -> int:
+    """Fetch PdfPageCount from the statement header row in DynamoDB."""
+    resp = tenant_statements_table.get_item(Key={"TenantID": tenant_id, "StatementID": statement_id}, ProjectionExpression="PdfPageCount")
+    item = resp.get("Item", {})
+    raw = item.get("PdfPageCount", 0)
+    return int(raw) if raw else 0
 
 
 def _validate_config_mandatory_fields(config: dict) -> list[str]:

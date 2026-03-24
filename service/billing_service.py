@@ -292,6 +292,98 @@ class BillingService:
         return reserved_uploads
 
     @classmethod
+    def reserve_confirmed_statement(cls, tenant_id: str, statement_id: str, page_count: int) -> str:
+        """Reserve tokens for a statement confirmed through config suggestion.
+
+        Unlike ``reserve_statement_uploads`` (which creates the statement header),
+        this updates an existing header row — the one created at upload time by
+        ``_create_review_statement_header`` — with billing reservation fields so
+        the Lambda can settle the reservation after processing.
+
+        Args:
+            tenant_id: Tenant the statement belongs to.
+            statement_id: Statement whose header should be updated.
+            page_count: Number of PDF pages to deduct from the token balance.
+
+        Returns:
+            The reservation ledger entry id.
+
+        Raises:
+            InsufficientTokensError: The tenant balance cannot cover the pages.
+            BillingServiceError: Any other transactional write failure.
+        """
+        if not tenant_id:
+            raise BillingServiceError("TenantID is required for token reservation.")
+        if page_count <= 0:
+            raise BillingServiceError("page_count must be a positive integer.")
+
+        reservation_id = cls._reservation_ledger_entry_id(statement_id)
+        reserved_at = cls._utc_now_iso()
+
+        transact_items: list[dict[str, Any]] = [
+            # Deduct tokens from the billing snapshot.
+            {
+                "Update": {
+                    "TableName": cls._tenant_billing_table_name,
+                    "Key": cls._serialize_key(TenantID=tenant_id),
+                    "UpdateExpression": (
+                        "SET TokenBalance = TokenBalance - :pages, "
+                        "UpdatedAt = :updated_at, "
+                        "LastLedgerEntryID = :last_ledger_entry_id, "
+                        "LastMutationType = :last_mutation_type, "
+                        "LastMutationSource = :last_mutation_source"
+                    ),
+                    "ConditionExpression": "attribute_exists(TenantID) AND attribute_exists(TokenBalance) AND TokenBalance >= :pages",
+                    "ExpressionAttributeValues": cls._serialize_expression_values(
+                        {
+                            ":pages": page_count,
+                            ":updated_at": reserved_at,
+                            ":last_ledger_entry_id": reservation_id,
+                            ":last_mutation_type": LAST_MUTATION_TYPE_RESERVE,
+                            ":last_mutation_source": LAST_MUTATION_SOURCE_UPLOAD_SUBMIT,
+                        }
+                    ),
+                }
+            },
+            # Immutable reservation audit row in the ledger.
+            {
+                "Put": {
+                    "TableName": cls._tenant_token_ledger_table_name,
+                    "Item": cls._serialize_item(
+                        {
+                            "TenantID": tenant_id,
+                            "LedgerEntryID": reservation_id,
+                            "EntryType": ENTRY_TYPE_RESERVE,
+                            "TokenDelta": -page_count,
+                            "CreatedAt": reserved_at,
+                            "Source": SOURCE_UPLOAD_SUBMIT,
+                            "RelatedStatementID": statement_id,
+                        }
+                    ),
+                    "ConditionExpression": "attribute_not_exists(TenantID) AND attribute_not_exists(LedgerEntryID)",
+                }
+            },
+            # Stamp reservation metadata on the existing statement header.
+            {
+                "Update": {
+                    "TableName": cls._tenant_statements_table_name,
+                    "Key": cls._serialize_key(TenantID=tenant_id, StatementID=statement_id),
+                    "UpdateExpression": "SET ReservationLedgerEntryID = :rid, TokenReservationStatus = :status",
+                    "ConditionExpression": "attribute_exists(TenantID) AND attribute_exists(StatementID)",
+                    "ExpressionAttributeValues": cls._serialize_expression_values({":rid": reservation_id, ":status": TOKEN_RESERVATION_STATUS_RESERVED}),
+                }
+            },
+        ]
+
+        try:
+            cls._ddb_client.transact_write_items(TransactItems=transact_items, ClientRequestToken=cls._client_request_token("reserve-confirm", tenant_id, statement_id))
+            logger.info("Reserved tokens for confirmed statement", tenant_id=tenant_id, statement_id=statement_id, page_count=page_count, reservation_ledger_entry_id=reservation_id)
+        except ClientError as exc:
+            cls._raise_for_transaction_failure(exc, tenant_id=tenant_id, context="reserve_confirmed_statement")
+
+        return reservation_id
+
+    @classmethod
     def adjust_token_balance(cls, tenant_id: str, token_delta: int, *, source: str = LAST_MUTATION_SOURCE_MANUAL_ADJUSTMENT, ledger_entry_id: str | None = None) -> TokenAdjustmentResult:
         """Apply a manual token adjustment atomically to snapshot and ledger.
 

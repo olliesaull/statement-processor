@@ -516,7 +516,7 @@ When a statement is uploaded for a contact that has no saved config, the system 
 3. **Bedrock Haiku 4.5**: The detected headers and sample rows are sent to Bedrock via the Converse API with a forced tool call (`suggest_config`). The prompt includes a full SDF token reference table so the LLM returns date formats in the correct syntax.
 4. **Date disambiguation**: A post-processing step scans date values for components > 12 to confirm or reject the LLM's DD/MM vs MM/DD proposal. If all values are ambiguous (both components <= 12), the date format is left empty for the user to fill in.
 5. **S3 save**: The suggestion (including detected headers, suggested config, and confidence notes) is saved to `{tenant_id}/config-suggestions/{statement_id}.json`.
-6. **User confirmation**: The `/configs` page shows pending review cards with dropdowns pre-filled from the detected headers. Users can adjust mappings and confirm. On confirmation, the config is saved to DynamoDB, the suggestion file is deleted, and the extraction step function is started.
+6. **User confirmation**: The `/configs` page shows pending review cards with dropdowns pre-filled from the detected headers. Users can adjust mappings and confirm. On confirmation, tokens are reserved via `BillingService.reserve_confirmed_statement()` (deducting from the tenant balance and stamping reservation metadata on the statement header), the config is saved to DynamoDB, the suggestion file is deleted, and the extraction step function is started. Token reservation is deferred to this point (rather than upload time) to avoid locking tokens for abandoned suggestions.
 
 ### Status values
 - `pending_config_review`: Suggestion generated successfully, awaiting user confirmation.

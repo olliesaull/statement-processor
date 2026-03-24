@@ -323,12 +323,18 @@ def _map_row_to_item(  # pylint: disable=too-many-arguments,too-many-positional-
 
 def select_relevant_tables_per_page(tables_with_pages: list["TableOnPage"], candidates: list[str], small_table_penalty: float = 2.5) -> list["TableOnPage"]:  # pylint: disable=too-many-locals
     """
-    Choose the best table per page when multiple candidates exist.
+    Choose tables to process from Textract output.
 
-    Tables are scored using:
-    - header candidate matches
-    - how many early rows look like dates
-    - overall table size
+    **Page 1:** picks the single best-scoring table using header candidate
+    matches, date-like rows, and overall size.  This avoids pulling in
+    unrelated header/footer tables on the first page.
+
+    **Pages 2+:** includes *all* non-empty tables.  Continuation pages
+    often repeat the data table without repeating its header row, which
+    causes header-based scoring to favour small summary/balance tables
+    over the main data.  Including every table is safe because downstream
+    ``_prepare_header_context`` carries the primary header forward and
+    empty/irrelevant rows are either skipped or anomaly-flagged.
     """
     if not tables_with_pages:
         return []
@@ -340,27 +346,40 @@ def select_relevant_tables_per_page(tables_with_pages: list["TableOnPage"], cand
     selected: list[TableOnPage] = []
     for page, grids in sorted(by_page.items()):
         logger.debug("Evaluating tables for page", page=page, table_count=len(grids))
-        best_grid, best_score = None, float("-inf")
-        for grid_idx, grid in enumerate(grids):
-            if not grid:
-                continue
-            hdr_idx, header_row = best_header_row(grid, list(cand_set))
-            data_rows = grid[hdr_idx + 1 :]
-            header_norm = [_norm(h) for h in header_row]
-            header_hits = sum(1 for h in header_norm if h in cand_set or any(c in h or h in c for c in cand_set))
-            date_hits = sum(1 for r in data_rows[:10] if r and date_re.match((r[0] or "").strip()))
-            rows = len(grid)
-            cols = len(grid[0]) if grid and grid[0] else 0
-            size_bonus = rows * cols
-            penalty = small_table_penalty if len(data_rows) <= 1 else 0.0
-            score = header_hits * 10 + date_hits * 2 + size_bonus * 0.001 - penalty
-            logger.debug("Table score", page=page, table_index=grid_idx, rows=rows, cols=cols, header_hits=header_hits, date_hits=date_hits, penalty=penalty, score=score)
-            if score > best_score:
-                best_score, best_grid = score, grid
-        if best_grid is None:
-            best_grid = max(grids, key=lambda g: (len(g), len(g[0]) if g else 0))
-        selected.append({"page": page, "grid": best_grid})
-        logger.debug("Selected table for page", page=page, rows=len(best_grid), cols=len(best_grid[0]) if best_grid and best_grid[0] else 0, best_score=best_score)
+
+        if not selected:
+            # First page: pick the single best table via scoring.
+            best_grid, best_score = None, float("-inf")
+            for grid_idx, grid in enumerate(grids):
+                if not grid:
+                    continue
+                hdr_idx, header_row = best_header_row(grid, list(cand_set))
+                data_rows = grid[hdr_idx + 1 :]
+                header_norm = [_norm(h) for h in header_row]
+                header_hits = sum(1 for h in header_norm if h in cand_set or any(c in h or h in c for c in cand_set))
+                date_hits = sum(1 for r in data_rows[:10] if r and date_re.match((r[0] or "").strip()))
+                rows = len(grid)
+                cols = len(grid[0]) if grid and grid[0] else 0
+                size_bonus = rows * cols
+                penalty = small_table_penalty if len(data_rows) <= 1 else 0.0
+                score = header_hits * 10 + date_hits * 2 + size_bonus * 0.001 - penalty
+                logger.debug("Table score", page=page, table_index=grid_idx, rows=rows, cols=cols, header_hits=header_hits, date_hits=date_hits, penalty=penalty, score=score)
+                if score > best_score:
+                    best_score, best_grid = score, grid
+            if best_grid is None:
+                best_grid = max(grids, key=lambda g: (len(g), len(g[0]) if g else 0))
+            selected.append({"page": page, "grid": best_grid})
+            logger.debug("Selected table for page", page=page, rows=len(best_grid), cols=len(best_grid[0]) if best_grid and best_grid[0] else 0, best_score=best_score)
+        else:
+            # Subsequent pages: include all non-empty tables so that
+            # continuation data is not lost when scoring favours a
+            # smaller summary table over a headerless data table.
+            for grid_idx, grid in enumerate(grids):
+                if not grid or not any(any((c or "").strip() for c in row) for row in grid):
+                    continue
+                selected.append({"page": page, "grid": grid})
+                logger.debug("Included table for page", page=page, table_index=grid_idx, rows=len(grid), cols=len(grid[0]) if grid[0] else 0)
+
     return selected
 
 
