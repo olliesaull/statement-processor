@@ -137,7 +137,7 @@
 - **CloudWatch + SNS**
   - `StatementProcessorAppRunnerErrorMetricFilter` + `StatementProcessorAppRunnerErrorAlarm`: parses App Runner application logs for `ERROR` and raises an alarm.
   - `TextractionLambdaErrorMetricFilter` + `TextractionLambdaErrorAlarm`: parses Textraction Lambda logs for `ERROR` or timeout strings and raises an alarm.
-  - `StatementProcessorAppRunnerErrorTopic`: SNS topic that both alarms publish to. It has email subscriptions for `ollie@dotelastic.com` and `james@dotelastic.com`, and an SMS subscription for `+447468518143` (Ollie only). The SMS subscription is added directly in CDK rather than through a separate email-to-SMS relay, because SNS supports SMS natively and this keeps all alarm routing in one place.
+  - `StatementProcessorAppRunnerErrorTopic`: SNS topic that both alarms publish to. It has email subscriptions for `ollie@dotelastic.com` and `james@dotelastic.com`.
 
 ## Monitoring and Notifications
 
@@ -152,12 +152,9 @@ Two CloudWatch metric filters + alarms watch for errors in production:
 Both alarms publish to the same SNS topic (`StatementProcessorAppRunnerErrorTopic`).
 
 ### Alarm notifications
-The SNS topic has three subscriptions:
-- Email → `ollie@dotelastic.com`
-- Email → `james@dotelastic.com`
-- SMS → `+447468518143` (Ollie's phone)
-
-The SMS subscription exists because CloudWatch alarms do not wake anyone up if they only send email. Adding a direct SMS subscription to the same SNS topic keeps all alarm routing in CDK and avoids a separate paging service.
+The SNS topic has two email subscriptions:
+- `ollie@dotelastic.com`
+- `james@dotelastic.com`
 
 ### Login notification emails
 After every successful Xero OAuth callback, the Flask service sends a login notification email via AWS SES (`service/utils/email.py`):
@@ -181,16 +178,6 @@ aws ses verify-email-identity --email-address info@dotelastic.com --region eu-we
 ```
 
 Check the inbox for `info@dotelastic.com` and click the verification link. Until this step is complete, all `send_email` calls for login notifications will fail with `MessageRejected`.
-
-**SNS SMS sandbox verification**
-New AWS accounts start in the SNS SMS sandbox. In sandbox mode, SMS messages can only be sent to phone numbers that have been individually verified.
-
-To verify `+447468518143`:
-1. Go to **AWS Console → SNS → Text messaging (SMS) → Sandbox destination phone numbers**.
-2. Add `+447468518143` and request the OTP.
-3. Enter the OTP to complete verification.
-
-Alternatively, request production SMS access (SNS → Text messaging → Get out of SMS sandbox) to remove the restriction entirely. Until sandbox exit or number verification, SMS alarm notifications will be silently dropped.
 
 ## Orchestration (Step Functions & Textract)
 **State machine definitions and entry points**

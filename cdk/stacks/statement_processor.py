@@ -54,7 +54,6 @@ class StatementProcessorStack(Stack):
         CLOUDFRONT_ORIGIN_REQUEST_POLICY_ID = "27f26a87-73c7-4734-9f02-b10dbda0774c"
 
         NOTIFICATION_EMAILS = ["ollie@dotelastic.com", "james@dotelastic.com"]
-        SMS_PHONE_NUMBER = "+447468518143"
 
         # region ---------- DynamoDB ----------
 
@@ -493,7 +492,6 @@ class StatementProcessorStack(Stack):
         )
         for email in NOTIFICATION_EMAILS:
             runtime_error_topic.add_subscription(subs.EmailSubscription(email))
-        runtime_error_topic.add_subscription(subs.SmsSubscription(SMS_PHONE_NUMBER))
 
         service_id = cfn_service.attr_service_id
         app_logs_group = logs.LogGroup.from_log_group_name(
