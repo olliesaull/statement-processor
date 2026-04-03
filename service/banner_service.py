@@ -12,6 +12,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from billing_service import WELCOME_GRANT_TOKENS
 from core.config_suggestion import get_pending_suggestion_count
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ def config_review_banner_provider(tenant_id: str) -> Banner | None:
     try:
         count = get_pending_suggestion_count(tenant_id)
     except Exception:
-        logger.exception("Failed to fetch pending suggestion count", extra={"tenant_id": tenant_id})
+        logger.exception("Failed to fetch pending suggestion count", tenant_id=tenant_id)
         return None
 
     if count <= 0:
@@ -116,7 +117,7 @@ def welcome_grant_banner_provider(_tenant_id: str) -> Banner:
         Success banner with welcome message and upload link.
     """
     return Banner(
-        message="Welcome! You've been granted 5 free tokens to try things out.",
+        message=f"Welcome! You've been granted {WELCOME_GRANT_TOKENS} free tokens to try things out.",
         alert_type="success",
         link_text="Upload a statement",
         link_url="/upload-statements",

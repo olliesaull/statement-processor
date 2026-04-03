@@ -160,13 +160,14 @@ def inject_banners():
 
     cached_ts = session.get(cache_ts_key, 0)
     if now - cached_ts < 60:
-        dismissed_keys = session.get(cache_key, set())
+        # Stored as a list for JSON-safe session serialization.
+        dismissed_keys = set(session.get(cache_key, []))
     else:
         try:
             dismissed_keys = TenantDataRepository.get_dismissed_banners(tenant_id)
         except Exception:
             dismissed_keys = set()
-        session[cache_key] = dismissed_keys
+        session[cache_key] = list(dismissed_keys)
         session[cache_ts_key] = now
 
     return {"banners": get_banners(tenant_id, dismissed_keys)}
@@ -790,8 +791,6 @@ def upload_statements():
         if uploads_ok:
             success_count = uploads_ok
         if review_count:
-            # Invalidate the cached pending review count so the banner updates.
-            session.pop("_pending_review_count_ts", None)
             error_messages.append(f"{review_count} statement{'s' if review_count != 1 else ''} need config review — go to Configuration to confirm.")
         logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, review=review_count, errors=list(error_messages))
 
@@ -1591,9 +1590,7 @@ def configs():
             context.update(save_result)
 
             # If pending suggestions were auto-confirmed, update the message
-            # and invalidate the cached review count.
             if auto_confirmed > 0:
-                session.pop("_pending_review_count_ts", None)
                 parts = [context.get("message") or ""]
                 parts.append(f"{auto_confirmed} pending statement(s) auto-confirmed and queued for extraction.")
                 if auto_skipped > 0:
@@ -1689,9 +1686,6 @@ def confirm_config_suggestion():
     json_key = statement_json_s3_key(tenant_id, statement_id)
     start_textraction_state_machine(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_key, json_key=json_key)
 
-    # Invalidate cached pending review count.
-    session.pop("_pending_review_count_ts", None)
-
     logger.info("Config suggestion confirmed", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id)
     return jsonify({"ok": True, "statement_id": statement_id})
 
@@ -1742,9 +1736,6 @@ def confirm_all_config_suggestions():
         start_textraction_state_machine(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_key, json_key=json_key)
 
         confirmed.append(statement_id)
-
-    # Invalidate cached pending review count.
-    session.pop("_pending_review_count_ts", None)
 
     logger.info("Bulk config confirm", tenant_id=tenant_id, confirmed=len(confirmed), skipped=len(skipped))
     return jsonify({"confirmed": confirmed, "skipped": skipped})
@@ -1799,8 +1790,9 @@ def api_dismiss_banner():
 
     # Update the session cache so the banner disappears immediately
     # without waiting for the 60s cache expiry.
-    cached: set[str] = session.get("_dismissed_banners", set())
-    cached.add(dismiss_key)
+    cached: list[str] = session.get("_dismissed_banners", [])
+    if dismiss_key not in cached:
+        cached.append(dismiss_key)
     session["_dismissed_banners"] = cached
 
     return "", 204
