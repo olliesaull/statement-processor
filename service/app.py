@@ -1772,6 +1772,40 @@ def _validate_config_mandatory_fields(config: dict) -> list[str]:
     return errors
 
 
+@app.route("/api/banner/dismiss", methods=["POST"])
+def api_dismiss_banner():
+    """Permanently dismiss a banner for the active tenant.
+
+    Expects JSON: {"dismiss_key": "<key>"}. Writes to the
+    DismissedBanners string set on TenantData and updates
+    the session cache so the banner disappears immediately.
+    """
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id:
+        return jsonify({"error": "not_authenticated"}), 401
+
+    data = request.get_json(silent=True) or {}
+    dismiss_key = data.get("dismiss_key", "")
+    if not isinstance(dismiss_key, str) or not dismiss_key.strip():
+        return jsonify({"error": "dismiss_key is required"}), 400
+
+    dismiss_key = dismiss_key.strip()
+
+    try:
+        TenantDataRepository.dismiss_banner(tenant_id, dismiss_key)
+    except Exception:
+        logger.exception("Failed to dismiss banner", tenant_id=tenant_id, dismiss_key=dismiss_key)
+        return jsonify({"error": "internal_error"}), 500
+
+    # Update the session cache so the banner disappears immediately
+    # without waiting for the 60s cache expiry.
+    cached: set[str] = session.get("_dismissed_banners", set())
+    cached.add(dismiss_key)
+    session["_dismissed_banners"] = cached
+
+    return "", 204
+
+
 @app.route("/login")
 @route_handler_logging
 def login():
