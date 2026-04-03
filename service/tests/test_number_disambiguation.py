@@ -87,6 +87,79 @@ def test_trailing_minus_accounting_style() -> None:
     assert thou == ","
 
 
+def test_trailing_minus_only_values() -> None:
+    """All values have trailing minus — should still detect decimal correctly."""
+    dec, thou = disambiguate_number_separators(["126.50-", "57.50-", "166.75-", "320.10-"], ".", ",")
+    assert dec == "."
+    assert thou == ","
+
+
+def test_trailing_minus_with_thousands() -> None:
+    """Trailing minus on value with thousands separator: '38,201.21-'."""
+    dec, thou = disambiguate_number_separators(["38,201.21-"], ".", ",")
+    assert dec == "."
+    assert thou == ","
+
+
+def test_peninsula_beverages_total_column() -> None:
+    """Real data from Peninsula Beverages statement Total column.
+
+    Mix of values with/without thousands separators and trailing minus signs.
+    All use US/UK convention: comma=thousands, dot=decimal.
+    """
+    values = [
+        "3,848.97", "126.50-", "260.29", "57.50-", "2,583.95",
+        "166.75-", "2,202.26", "320.10-", "88.53", "4,783.47",
+        "80.50-", "2,544.29", "126.50-", "1,640.46",
+    ]
+    dec, thou = disambiguate_number_separators(values, ".", ",")
+    assert dec == "."
+    assert thou == ","
+
+
+def test_peninsula_beverages_llm_swapped() -> None:
+    """Same real data but LLM returns swapped separators — should correct."""
+    values = [
+        "3,848.97", "126.50-", "260.29", "57.50-", "2,583.95",
+        "166.75-", "2,202.26", "320.10-", "88.53", "4,783.47",
+        "80.50-", "2,544.29", "126.50-", "1,640.46",
+    ]
+    dec, thou = disambiguate_number_separators(values, ",", ".")
+    assert dec == "."
+    assert thou == ","
+
+
+def test_all_zero_values() -> None:
+    """All '0.00' values — should still detect decimal='.'."""
+    dec, thou = disambiguate_number_separators(["0.00", "0.00", "0.00"], ".", ",")
+    assert dec == "."
+    assert thou == ","
+
+
+def test_mix_of_zero_and_nonzero() -> None:
+    """Mix of '0.00' and real values."""
+    values = ["0.00", "3,848.97", "0.00", "126.50-"]
+    dec, thou = disambiguate_number_separators(values, ".", ",")
+    assert dec == "."
+    assert thou == ","
+
+
+def test_small_values_no_thousands() -> None:
+    """All values under 1000 — no thousands separator present."""
+    values = ["260.29", "57.50", "88.53", "80.50"]
+    dec, thou = disambiguate_number_separators(values, ".", ",")
+    assert dec == "."
+    # No thousands evidence, keep LLM default.
+    assert thou == ","
+
+
+def test_trailing_plus_sign() -> None:
+    """Trailing plus sign like '126.50+'."""
+    dec, thou = disambiguate_number_separators(["126.50+", "3,848.97"], ".", ",")
+    assert dec == "."
+    assert thou == ","
+
+
 def test_corrects_swapped_llm_suggestion() -> None:
     """LLM says decimal='.', thousands=',' but data shows European style."""
     dec, thou = disambiguate_number_separators(["1.234,56", "2.345,67"], ".", ",")

@@ -46,6 +46,17 @@ def suggest_config_for_statement(tenant_id: str, contact_id: str, contact_name: 
         # 3b. Number separator disambiguation — verify decimal/thousands from data.
         total_cols = suggested_config.get("total", [])
         monetary_values = extract_monetary_values(headers, rows, total_cols)
+        logger.info(
+            "Number separator disambiguation input",
+            tenant_id=tenant_id,
+            statement_id=statement_id,
+            total_cols=total_cols,
+            detected_headers=headers,
+            monetary_value_count=len(monetary_values),
+            monetary_values_sample=monetary_values[:5],
+            llm_decimal=suggested_config.get("decimal_separator"),
+            llm_thousands=suggested_config.get("thousands_separator"),
+        )
         if monetary_values:
             dec, thou = disambiguate_number_separators(
                 monetary_values,
