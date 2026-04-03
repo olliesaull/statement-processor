@@ -68,8 +68,23 @@ from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoi
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 
-# Enable CSRF protection globally
+
+# Extract CSRF tokens from JSON bodies BEFORE CSRFProtect registers its
+# before_request handler — Flask runs hooks in registration order, so this
+# must be first.  CloudFront strips custom headers (X-CSRFToken), so
+# JavaScript POSTs include the token in the JSON body instead.
+@app.before_request
+def _extract_csrf_from_json_body():
+    """Copy CSRF token from JSON body to WSGI environ for Flask-WTF."""
+    if request.is_json and not request.headers.get("X-CSRFToken"):
+        data = request.get_json(silent=True)
+        if isinstance(data, dict) and data.get("csrf_token"):
+            request.environ["HTTP_X_CSRFTOKEN"] = data["csrf_token"]
+
+
+# Enable CSRF protection globally — must be AFTER the JSON body hook above.
 csrf = CSRFProtect(app)
+
 
 MAX_UPLOAD_MB = os.getenv("MAX_UPLOAD_MB", "10")
 MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB) * 1024 * 1024

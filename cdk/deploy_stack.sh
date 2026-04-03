@@ -236,6 +236,20 @@ deploy() {
     # Push static assets after infra/app deploy so CloudFront serves latest files.
     echo "Syncing static assets to s3://${ASSETS_BUCKET_NAME}/static/..."
     aws s3 sync ../service/static "s3://${ASSETS_BUCKET_NAME}/static/" --delete --profile "$PROFILE"
+
+    # Invalidate CloudFront cache so updated CSS/JS is served immediately.
+    STAGE_LOWER="${STAGE_BUCKET_SUFFIX}"
+    DIST_ID=$(aws cloudfront list-distributions --profile "$PROFILE" \
+        --query "DistributionList.Items[?Comment=='Statement Processor ${STAGE_LOWER} distribution'].Id" \
+        --output text)
+
+    if [ -n "$DIST_ID" ] && [ "$DIST_ID" != "None" ]; then
+        echo "Invalidating CloudFront cache (distribution ${DIST_ID}) for /static/*..."
+        aws cloudfront create-invalidation --distribution-id "$DIST_ID" \
+            --paths "/static/*" --profile "$PROFILE" --no-cli-pager
+    else
+        echo "Warning: Could not find CloudFront distribution for cache invalidation."
+    fi
 }
 
 # Keep an explicit manual confirmation step for production deploys.

@@ -327,32 +327,32 @@
       </div>
     </div>
 
-    <div class="page-panel page-panel-muted mt-4">
-      <h2 class="h5">Supplier Date Format (SDF) reference</h2>
-      <p>Use the following tokens when describing how your supplier prints dates:</p>
-      <ul class="mb-3">
-        <li><code>YYYY</code> / <code>YY</code> - four-digit year / two-digit year (assumed 2000-2099)</li>
-        <li><code>M</code>, <code>MM</code> - month number (1-12 / 01-12, zero-padded)</li>
-        <li><code>MMM</code>, <code>MMMM</code> - abbreviated / full month name</li>
-        <li><code>D</code>, <code>DD</code> - day of month (1-31 / 01-31, zero-padded)</li>
-        <li><code>Do</code> - day with ordinal suffix (1st, 2nd, …)</li>
-      </ul>
-      <p class="mb-3">Wrap optional literals in square brackets to ignore them if present (for example, <code>[dddd, ]D MMM YYYY</code> matches both <code>Friday, 01 Aug 2025</code> and <code>01 Aug 2025</code>). Separators such as spaces, slashes, dashes, dots, and commas can be written directly.</p>
-      <p class="mb-1 fw-semibold">Examples</p>
-      <ul class="mb-3">
-        <li><code>01 Aug 2025 / 1 Aug 2025</code> → <code>DD MMM YYYY / D MMM YYYY</code></li>
-        <li><code>08/01/25</code> → <code>MM/DD/YY</code></li>
-        <li><code>2025-08-01</code> → <code>YYYY-MM-DD</code></li>
-        <li><code>1st Aug, 2025</code> → <code>Do MMM, YYYY</code></li>
-        <li><code>Fri, 01 Aug 2025</code> → <code>[dddd, ]D MMM YYYY</code></li>
-        <li><code>01.08.2025</code> → <code>DD.MM.YYYY</code></li>
-      </ul>
-    </div>
-
     <button type="submit" class="btn btn-success mt-4" id="config-save-button" data-automation="config-save-button">Save</button>
     </fieldset>
   </form>
   {% endif %}
+
+  <div class="page-panel page-panel-muted mt-4">
+    <h2 class="h5">Supplier Date Format (SDF) reference</h2>
+    <p>Use the following tokens when describing how your supplier prints dates:</p>
+    <ul class="mb-3">
+      <li><code>YYYY</code> / <code>YY</code> - four-digit year / two-digit year (assumed 2000-2099)</li>
+      <li><code>M</code>, <code>MM</code> - month number (1-12 / 01-12, zero-padded)</li>
+      <li><code>MMM</code>, <code>MMMM</code> - abbreviated / full month name</li>
+      <li><code>D</code>, <code>DD</code> - day of month (1-31 / 01-31, zero-padded)</li>
+      <li><code>Do</code> - day with ordinal suffix (1st, 2nd, …)</li>
+    </ul>
+    <p class="mb-3">Wrap optional literals in square brackets to ignore them if present (for example, <code>[dddd, ]D MMM YYYY</code> matches both <code>Friday, 01 Aug 2025</code> and <code>01 Aug 2025</code>). Separators such as spaces, slashes, dashes, dots, and commas can be written directly.</p>
+    <p class="mb-1 fw-semibold">Examples</p>
+    <ul class="mb-3">
+      <li><code>01 Aug 2025 / 1 Aug 2025</code> → <code>DD MMM YYYY / D MMM YYYY</code></li>
+      <li><code>08/01/25</code> → <code>MM/DD/YY</code></li>
+      <li><code>2025-08-01</code> → <code>YYYY-MM-DD</code></li>
+      <li><code>1st Aug, 2025</code> → <code>Do MMM, YYYY</code></li>
+      <li><code>Fri, 01 Aug 2025</code> → <code>[dddd, ]D MMM YYYY</code></li>
+      <li><code>01.08.2025</code> → <code>DD.MM.YYYY</code></li>
+    </ul>
+  </div>
 
 </div>
 
@@ -431,8 +431,8 @@ async function confirmSingle(btn) {
   try {
     const resp = await fetch('/api/configs/confirm', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
-      body: JSON.stringify({contact_id: contactId, statement_id: statementId, config: config}),
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({contact_id: contactId, statement_id: statementId, config: config, csrf_token: csrfToken}),
     });
     const data = await resp.json();
     if (data.ok) {
@@ -478,8 +478,8 @@ async function confirmAll() {
   try {
     const resp = await fetch('/api/configs/confirm-all', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
-      body: JSON.stringify({items: items}),
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({items: items, csrf_token: csrfToken}),
     });
     const data = await resp.json();
     const confirmedSet = new Set(data.confirmed || []);

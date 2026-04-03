@@ -347,7 +347,10 @@ class StatementProcessorStack(Stack):
             iam.PolicyStatement(
                 actions=["bedrock:InvokeModel"],
                 resources=[
-                    f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-haiku-4-5-*",
+                    # Wildcard region for foundation model: cross-region inference
+                    # profiles route to any EU region (e.g. eu-north-1), not just
+                    # the deployment region.
+                    "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-*",
                     f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/eu.anthropic.claude-haiku-4-5-*",
                 ],
             )

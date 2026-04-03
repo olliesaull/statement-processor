@@ -103,7 +103,7 @@ clean:
 # Run the app locally with Gunicorn (auto-reload enabled).
 run-app:
 	@echo "🚀 Starting app with Gunicorn on port 8080..."
-	@bash -c "cd service && source venv/bin/activate && python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app"
+	@bash -c "cd service && source venv/bin/activate && python3.13 -m gunicorn --reload --timeout 600 --bind 0.0.0.0:8080 app:app"
 
 # Development workflow
 dev: format lint type-check test security
