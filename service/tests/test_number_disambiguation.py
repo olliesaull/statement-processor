@@ -2,7 +2,6 @@
 
 from core.number_disambiguation import disambiguate_number_separators, extract_monetary_values
 
-
 # ── disambiguate_number_separators ──
 
 
@@ -107,11 +106,7 @@ def test_peninsula_beverages_total_column() -> None:
     Mix of values with/without thousands separators and trailing minus signs.
     All use US/UK convention: comma=thousands, dot=decimal.
     """
-    values = [
-        "3,848.97", "126.50-", "260.29", "57.50-", "2,583.95",
-        "166.75-", "2,202.26", "320.10-", "88.53", "4,783.47",
-        "80.50-", "2,544.29", "126.50-", "1,640.46",
-    ]
+    values = ["3,848.97", "126.50-", "260.29", "57.50-", "2,583.95", "166.75-", "2,202.26", "320.10-", "88.53", "4,783.47", "80.50-", "2,544.29", "126.50-", "1,640.46"]
     dec, thou = disambiguate_number_separators(values, ".", ",")
     assert dec == "."
     assert thou == ","
@@ -119,11 +114,7 @@ def test_peninsula_beverages_total_column() -> None:
 
 def test_peninsula_beverages_llm_swapped() -> None:
     """Same real data but LLM returns swapped separators — should correct."""
-    values = [
-        "3,848.97", "126.50-", "260.29", "57.50-", "2,583.95",
-        "166.75-", "2,202.26", "320.10-", "88.53", "4,783.47",
-        "80.50-", "2,544.29", "126.50-", "1,640.46",
-    ]
+    values = ["3,848.97", "126.50-", "260.29", "57.50-", "2,583.95", "166.75-", "2,202.26", "320.10-", "88.53", "4,783.47", "80.50-", "2,544.29", "126.50-", "1,640.46"]
     dec, thou = disambiguate_number_separators(values, ",", ".")
     assert dec == "."
     assert thou == ","
@@ -238,9 +229,71 @@ def test_extract_monetary_values_case_insensitive() -> None:
     assert values == ["1,234.56"]
 
 
-def test_extract_monetary_values_missing_column() -> None:
-    """Missing column name returns no values for that column."""
-    headers = ["Invoice", "Amount"]
-    rows = [["INV-001", "1,234.56"]]
+def test_extract_monetary_values_missing_column_no_fallback_data() -> None:
+    """Missing column with no monetary-looking values returns empty."""
+    headers = ["Invoice", "Status"]
+    rows = [["INV-001", "Active"]]
     values = extract_monetary_values(headers, rows, ["Total"])
     assert values == []
+
+
+def test_extract_fallback_when_headers_dont_match() -> None:
+    """When total column names don't match headers, scan all cells."""
+    # Textract picked up title row instead of real column headers.
+    headers = ["ITEMS NOT", "YET PAID", "AS AT DATE", "THIS STATEMENT", "", "", ""]
+    rows = [["03.07.2023", "76977177", "SKC CLM ORDER", "208078519", "", "3,848.97", "0.00"], ["03.07.2023", "76982233", "0076977177", "208078520", "", "0.00", "126.50-"]]
+    values = extract_monetary_values(headers, rows, ["Invoices", "Credit Notes", "Total"])
+    # Should find monetary values via fallback scan.
+    assert "3,848.97" in values
+    assert "126.50-" in values
+
+
+def test_extract_fallback_excludes_date_columns() -> None:
+    """Fallback scan skips columns matching exclude_columns."""
+    headers = ["TITLE ROW", "", "", ""]
+    rows = [["03.07.2023", "76977177", "3,848.97", "0.00"]]
+    # "Doc date" doesn't match any header, so exclude_columns won't filter
+    # by index — but date values are filtered by _looks_monetary rejecting
+    # date-like patterns.
+    values = extract_monetary_values(headers, rows, ["Total"], exclude_columns=["Doc date"])
+    assert "3,848.97" in values
+    assert "03.07.2023" not in values
+
+
+def test_extract_fallback_excludes_dates_by_pattern() -> None:
+    """Date-like values (DD/MM/YYYY) are excluded from fallback."""
+    headers = ["A", "B", "C"]
+    rows = [["03/07/2023", "3,848.97", "text"], ["2023-07-03", "126.50-", "more text"]]
+    values = extract_monetary_values(headers, rows, ["Total"])
+    assert "3,848.97" in values
+    assert "126.50-" in values
+    assert "03/07/2023" not in values
+    assert "2023-07-03" not in values
+
+
+def test_extract_fallback_skips_plain_integers_and_text() -> None:
+    """Plain integers and text without separators are excluded."""
+    headers = ["A", "B", "C", "D"]
+    rows = [["76977177", "SKC ORDER", "3,848.97", "1234"]]
+    values = extract_monetary_values(headers, rows, ["Total"])
+    assert values == ["3,848.97"]
+
+
+def test_extract_fallback_peninsula_beverages_real_data() -> None:
+    """Full Peninsula Beverages scenario: title row headers, real data."""
+    headers = ["ITEMS NOT", "YET PAID/CLEARED", "AS AT DATE OF", "THIS STATEMENT", "", "", "", "", "", "", "", ""]
+    rows = [
+        ["Doc date", "Invoice No.", "Cross Ref", "Doc Ref", "Branch", "Invoices", "Credit Notes", "Clearing", "Payment Not", "Total", "Remittance Advice"],
+        ["03.07.2023", "76977177", "SKC CLM ORDER", "208078519", "", "3,848.97", "0.00", "0.00", "0.00", "3,848.97", ""],
+        ["03.07.2023", "76982233", "0076977177", "208078520", "", "0.00", "126.50-", "0.00", "0.00", "126.50-", ""],
+        ["04.07.2023", "76982497", "SKC ORDER - TABL", "208083269", "", "260.29", "0.00", "0.00", "0.00", "260.29", ""],
+    ]
+    values = extract_monetary_values(headers, rows, ["Invoices", "Credit Notes", "Total"], exclude_columns=["Doc date"])
+    # Should find monetary values via fallback.
+    assert len(values) > 0
+    assert "3,848.97" in values
+    assert "126.50-" in values
+    assert "260.29" in values
+    # Dates should be excluded.
+    assert "03.07.2023" not in values
+    assert "04.07.2023" not in values

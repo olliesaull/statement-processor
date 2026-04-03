@@ -18,21 +18,21 @@ _STRIP_RE = re.compile(r"[^\d.,'\s-]")
 _SEPARATOR_CHARS = {".", ",", "'", " "}
 
 
-def extract_monetary_values(
-    headers: list[str],
-    rows: list[list[str]],
-    total_columns: list[str],
-) -> list[str]:
+def extract_monetary_values(headers: list[str], rows: list[list[str]], total_columns: list[str], exclude_columns: list[str] | None = None) -> list[str]:
     """Collect raw monetary cell values from the total column(s).
 
-    Finds the column index for each total column name in ``headers``
-    and returns all non-empty cell values from those columns across
-    all data rows.
+    First tries to match ``total_columns`` against ``headers`` by name.
+    If no columns match (e.g. Textract picked up a title row instead of
+    real headers), falls back to scanning all cells for monetary-looking
+    values — skipping columns that match ``exclude_columns`` (typically
+    date columns whose separators would pollute the analysis).
 
     Args:
         headers: Column headers from the statement table.
         rows: Data rows (list of cell values per row).
         total_columns: Header name(s) the LLM identified as totals.
+        exclude_columns: Column names to skip in the fallback scan
+            (e.g. date, due_date columns).
 
     Returns:
         List of raw monetary value strings.
@@ -52,14 +52,66 @@ def extract_monetary_values(
         for idx in indices:
             if idx < len(row) and row[idx].strip():
                 values.append(row[idx].strip())
+
+    if values:
+        return values
+
+    # Fallback: column names didn't match headers. Scan all cells for
+    # monetary-looking values, skipping excluded columns (dates).
+    exclude_indices: set[int] = set()
+    if exclude_columns:
+        for col_name in exclude_columns:
+            if not col_name:
+                continue
+            needle = col_name.lower().strip()
+            for idx, h in enumerate(header_lower):
+                if h == needle:
+                    exclude_indices.add(idx)
+                    break
+
+    for row in rows:
+        for idx, cell in enumerate(row):
+            if idx in exclude_indices:
+                continue
+            stripped = cell.strip()
+            if stripped and _looks_monetary(stripped):
+                values.append(stripped)
+
     return values
 
 
-def disambiguate_number_separators(
-    monetary_values: list[str],
-    llm_decimal: str,
-    llm_thousands: str,
-) -> tuple[str, str]:
+# Date-like pattern: digits separated by "/", "-", or "."
+# (e.g. "03/07/2023", "2023-07-03", "03.07.2023").
+_DATE_LIKE_RE = re.compile(r"^\d{1,4}[/\-\.]\d{1,2}[/\-\.]\d{1,4}$")
+
+
+def _looks_monetary(value: str) -> bool:
+    """Check if a cell value looks like a monetary amount.
+
+    A monetary value contains digits and at least one separator character
+    (period, comma, apostrophe, or space between digits). Plain integers
+    and date-like strings are excluded.
+
+    Args:
+        value: Stripped cell value.
+
+    Returns:
+        True if the value looks monetary.
+    """
+    # Must contain at least one digit.
+    if not any(c.isdigit() for c in value):
+        return False
+
+    # Exclude date-like patterns (e.g. 03/07/2023, 2023-07-03).
+    if _DATE_LIKE_RE.match(value):
+        return False
+
+    # Must contain at least one separator character among digits.
+    has_separator = any(c in _SEPARATOR_CHARS for c in value)
+    return has_separator
+
+
+def disambiguate_number_separators(monetary_values: list[str], llm_decimal: str, llm_thousands: str) -> tuple[str, str]:
     """Confirm or correct LLM-suggested number separators from actual values.
 
     Analyses monetary values to determine which character is the decimal
@@ -180,11 +232,7 @@ def _analyse_value(raw: str, evidence: dict[str, set[str]]) -> None:
                 evidence.setdefault(sep, set()).add("thousands")
 
 
-def _resolve(
-    evidence: dict[str, set[str]],
-    llm_decimal: str,
-    llm_thousands: str,
-) -> tuple[str, str]:
+def _resolve(evidence: dict[str, set[str]], llm_decimal: str, llm_thousands: str) -> tuple[str, str]:
     """Resolve evidence into a final (decimal, thousands) pair.
 
     Args:
@@ -207,34 +255,20 @@ def _resolve(
 
     # If we have clear evidence for both, use it.
     if definite_decimal and definite_thousands:
-        logger.info(
-            "Number separators disambiguated",
-            decimal=definite_decimal,
-            thousands=definite_thousands,
-            llm_decimal=llm_decimal,
-            llm_thousands=llm_thousands,
-        )
+        logger.info("Number separators disambiguated", decimal=definite_decimal, thousands=definite_thousands, llm_decimal=llm_decimal, llm_thousands=llm_thousands)
         return definite_decimal, definite_thousands
 
     # If we only have evidence for one, infer the other.
     if definite_decimal and not definite_thousands:
         # Keep LLM's thousands unless it conflicts with our decimal.
         resolved_thousands = llm_thousands if llm_thousands != definite_decimal else llm_decimal
-        logger.info(
-            "Number separators partially disambiguated (decimal only)",
-            decimal=definite_decimal,
-            thousands=resolved_thousands,
-        )
+        logger.info("Number separators partially disambiguated (decimal only)", decimal=definite_decimal, thousands=resolved_thousands)
         return definite_decimal, resolved_thousands
 
     if definite_thousands and not definite_decimal:
         # Keep LLM's decimal unless it conflicts with our thousands.
         resolved_decimal = llm_decimal if llm_decimal != definite_thousands else llm_thousands
-        logger.info(
-            "Number separators partially disambiguated (thousands only)",
-            decimal=resolved_decimal,
-            thousands=definite_thousands,
-        )
+        logger.info("Number separators partially disambiguated (thousands only)", decimal=resolved_decimal, thousands=definite_thousands)
         return resolved_decimal, definite_thousands
 
     # Ambiguous evidence — keep LLM suggestion.
