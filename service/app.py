@@ -18,9 +18,10 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, ses
 from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
+from banner_service import get_banners
 from billing_service import LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
 from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, S3_BUCKET_NAME, STAGE, VALKEY_URL, tenant_statements_table
-from core.config_suggestion import delete_suggestion, get_pending_suggestion_count, get_pending_suggestions, suggest_config_for_statement
+from core.config_suggestion import delete_suggestion, get_pending_suggestions, suggest_config_for_statement
 from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
 from core.get_contact_config import get_contact_config, set_contact_config
 from core.item_classification import guess_statement_item_type
@@ -141,33 +142,34 @@ class StatementUploadStartError(RuntimeError):
 
 
 @app.context_processor
-def inject_pending_review_count():
-    """Make pending config review count available to all templates.
+def inject_banners():
+    """Make active banners available to all templates.
 
-    Caches the count in the session for 60 seconds to avoid an S3 list
-    call on every page load.
+    Reads the tenant's dismissed banner keys from DynamoDB (cached in the
+    session for 60 seconds) and collects banners from all registered
+    providers.
     """
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
-        return {"pending_config_review_count": 0}
+        return {"banners": []}
 
-    cache_key = "_pending_review_count"
-    cache_ts_key = "_pending_review_count_ts"
+    # Cache dismissed keys in the session to avoid a DynamoDB read on every page load.
+    cache_key = "_dismissed_banners"
+    cache_ts_key = "_dismissed_banners_ts"
     now = time.time()
 
-    # Return cached value if fresh (< 60s old).
     cached_ts = session.get(cache_ts_key, 0)
     if now - cached_ts < 60:
-        return {"pending_config_review_count": session.get(cache_key, 0)}
+        dismissed_keys = session.get(cache_key, set())
+    else:
+        try:
+            dismissed_keys = TenantDataRepository.get_dismissed_banners(tenant_id)
+        except Exception:
+            dismissed_keys = set()
+        session[cache_key] = dismissed_keys
+        session[cache_ts_key] = now
 
-    try:
-        count = get_pending_suggestion_count(tenant_id)
-    except Exception:
-        count = 0
-
-    session[cache_key] = count
-    session[cache_ts_key] = now
-    return {"pending_config_review_count": count}
+    return {"banners": get_banners(tenant_id, dismissed_keys)}
 
 
 @app.errorhandler(CSRFError)
