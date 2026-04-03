@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from banner_service import Banner, config_review_banner_provider, get_banners, register_banner_provider
+from banner_service import Banner, config_review_banner_provider, get_banners, register_banner_provider, welcome_grant_banner_provider
 
 
 def test_banner_dataclass_defaults() -> None:
@@ -96,3 +96,15 @@ def test_config_review_provider_singular_grammar(monkeypatch) -> None:
 
     assert banner is not None
     assert "1 statement needs" in banner.message
+
+
+def test_welcome_grant_provider_always_returns_banner() -> None:
+    """Provider always returns; filtering is handled by get_banners."""
+    banner = welcome_grant_banner_provider("tenant-1")
+
+    assert banner is not None
+    assert banner.alert_type == "success"
+    assert "5 free tokens" in banner.message
+    assert banner.link_url == "/upload-statements"
+    assert banner.dismissible is True
+    assert banner.dismiss_key == "welcome-grant"

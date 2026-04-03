@@ -100,3 +100,29 @@ def config_review_banner_provider(tenant_id: str) -> Banner | None:
 
 
 register_banner_provider(config_review_banner_provider)
+
+
+def welcome_grant_banner_provider(_tenant_id: str) -> Banner:
+    """Banner provider for the new-tenant welcome token notification.
+
+    This provider unconditionally returns the banner. Dismiss filtering
+    is handled by get_banners() — once the tenant dismisses it,
+    the dismiss_key "welcome-grant" prevents it from appearing again.
+
+    Args:
+        _tenant_id: Unused; included to satisfy the BannerProvider protocol.
+
+    Returns:
+        Success banner with welcome message and upload link.
+    """
+    return Banner(
+        message="Welcome! You've been granted 5 free tokens to try things out.",
+        alert_type="success",
+        link_text="Upload a statement",
+        link_url="/upload-statements",
+        dismissible=True,
+        dismiss_key="welcome-grant",
+    )
+
+
+register_banner_provider(welcome_grant_banner_provider)
