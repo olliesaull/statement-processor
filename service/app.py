@@ -56,6 +56,7 @@ from utils.dynamo import (
     set_all_statement_items_completed,
     set_statement_item_completed,
 )
+from utils.email import send_login_notification_email
 from utils.statement_rows import format_item_type_label as _format_item_type_label
 from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
 from utils.statement_upload_validation import PreparedStatementUpload, build_statement_upload_preflight, prepare_statement_uploads, validate_upload_payload
@@ -1902,6 +1903,13 @@ def callback():  # pylint: disable=too-many-return-statements
         _set_active_tenant(None)
 
     logger.info("OAuth callback processed", tenants=len(tenants))
+
+    # Fire-and-forget login notification — never blocks the login flow.
+    active_tenant = next((t for t in tenants if t["tenantId"] == session.get("xero_tenant_id")), None)
+    send_login_notification_email(
+        tenant_name=active_tenant["tenantName"] if active_tenant else "Unknown", user_name=session.get("xero_user_email", "Unknown"), user_email=session.get("xero_user_email", "")
+    )
+
     response = redirect(url_for("tenant_management"))
     return set_session_is_set_cookie(response)
 
