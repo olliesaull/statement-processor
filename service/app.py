@@ -391,10 +391,69 @@ def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
             logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name, config=combined.model_dump())
             updates["message"] = "Config updated successfully."
             updates["mapping_rows"] = _build_config_rows(combined)
+
+            # Auto-confirm any pending review suggestions for this contact.
+            confirmed, skipped = _auto_confirm_pending_suggestions(tenant_id, selected_contact_id)
+            updates["auto_confirmed"] = confirmed
+            updates["auto_skipped"] = skipped
     except Exception as exc:
         updates["error"] = f"Failed to save config: {exc}"
         logger.info("Config save failed", tenant_id=tenant_id, contact_id=selected_contact_id, error=exc)
     return updates
+
+
+def _auto_confirm_pending_suggestions(tenant_id: str | None, contact_id: str) -> tuple[int, int]:
+    """Auto-confirm pending config suggestions for a contact after manual save.
+
+    Reserves tokens, deletes the S3 suggestion, clears DynamoDB pending
+    status, and starts the extraction workflow for each matching statement.
+    Statements are skipped if token reservation fails.
+
+    Returns:
+        Tuple of (confirmed_count, skipped_count).
+    """
+    suggestions = get_pending_suggestions(tenant_id)
+    matching = [s for s in suggestions if s.contact_id == contact_id]
+
+    if not matching:
+        return 0, 0
+
+    confirmed = 0
+    skipped = 0
+
+    for suggestion in matching:
+        statement_id = suggestion.statement_id
+
+        # Reserve tokens — skip this statement on billing failure.
+        page_count = _get_statement_page_count(tenant_id, statement_id)
+        try:
+            BillingService.reserve_confirmed_statement(tenant_id, statement_id, page_count)
+        except InsufficientTokensError:
+            logger.info("Auto-confirm skipped; insufficient tokens", tenant_id=tenant_id, statement_id=statement_id, page_count=page_count)
+            skipped += 1
+            continue
+        except BillingServiceError as exc:
+            logger.exception("Auto-confirm skipped; billing error", tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
+            skipped += 1
+            continue
+
+        # Clean up suggestion and clear pending status.
+        delete_suggestion(tenant_id, statement_id)
+        tenant_statements_table.update_item(
+            Key={"TenantID": tenant_id, "StatementID": statement_id},
+            UpdateExpression="REMOVE #s",
+            ExpressionAttributeNames={"#s": "Status"},
+        )
+
+        # Start extraction workflow.
+        pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
+        json_key = statement_json_s3_key(tenant_id, statement_id)
+        start_textraction_state_machine(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_key, json_key=json_key)
+
+        confirmed += 1
+        logger.info("Auto-confirmed pending suggestion", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id)
+
+    return confirmed, skipped
 
 
 @app.route("/api/tenant-statuses", methods=["GET"])
@@ -1528,16 +1587,30 @@ def configs():
             context.update(_load_config_context(tenant_id, contact_lookup, selected_contact_name))
         elif action == "save_map":
             # Save edited mapping.
-            context.update(_save_config_context(tenant_id, request.form))
+            save_result = _save_config_context(tenant_id, request.form)
+            auto_confirmed = save_result.pop("auto_confirmed", 0)
+            auto_skipped = save_result.pop("auto_skipped", 0)
+            context.update(save_result)
+
+            # If pending suggestions were auto-confirmed, update the message
+            # and invalidate the cached review count.
+            if auto_confirmed > 0:
+                session.pop("_pending_review_count_ts", None)
+                parts = [context.get("message") or ""]
+                parts.append(f"{auto_confirmed} pending statement(s) auto-confirmed and queued for extraction.")
+                if auto_skipped > 0:
+                    parts.append(f"{auto_skipped} statement(s) skipped due to insufficient tokens.")
+                context["message"] = " ".join(p for p in parts if p)
     elif request.args.get("contact_name"):
         # Support ?contact_name= query param for pre-selection (e.g. redirected from failed statement).
         selected_contact_name = request.args["contact_name"].strip()
         context.update(_load_config_context(tenant_id, contact_lookup, selected_contact_name))
 
     # Load pending config suggestions for the review section.
-    # Merge detected headers with LLM-suggested values so dropdowns include
-    # column names the LLM identified from data rows (not just the Textract
-    # first row which may be a title rather than real headers).
+    # Merge detected headers with LLM-suggested values so autocomplete
+    # suggestions include column names the LLM identified from data rows
+    # (not just the Textract first row which may be a title rather than
+    # real headers).
     pending_suggestions = get_pending_suggestions(tenant_id)
     suggestions_dicts: list[dict[str, Any]] = []
     for s in pending_suggestions:

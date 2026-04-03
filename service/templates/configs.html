@@ -25,54 +25,56 @@
         <span class="badge bg-secondary">{{ loop.index }}/{{ pending_suggestions|length }}</span>
       </div>
       <div class="card-body">
-        {% if suggestion.confidence_notes %}
-        <div class="alert alert-info py-2 small mb-3">{{ suggestion.confidence_notes }}</div>
-        {% endif %}
+        {# Shared datalist of detected headers for autocomplete #}
+        <datalist id="headers-list-{{ suggestion.statement_id }}">
+          {% for header in suggestion.all_headers %}
+          <option value="{{ header }}">
+          {% endfor %}
+        </datalist>
 
         <div class="row g-3">
           {# Number column #}
           <div class="col-md-6 col-lg-4">
             <label class="form-label fw-semibold">Number <span class="text-danger">*</span></label>
-            <select class="form-select review-field" data-field="number" data-card="{{ suggestion.statement_id }}">
-              <option value="">— Select —</option>
-              {% for header in suggestion.all_headers %}
-              <option value="{{ header }}" {% if suggestion.suggested_config.get('number') == header %}selected{% endif %}>{{ header }}</option>
-              {% endfor %}
-            </select>
+            <input type="text" class="form-control review-field" data-field="number" data-card="{{ suggestion.statement_id }}"
+                   list="headers-list-{{ suggestion.statement_id }}"
+                   value="{{ suggestion.suggested_config.get('number', '') }}"
+                   placeholder="Enter column heading">
           </div>
 
           {# Date column #}
           <div class="col-md-6 col-lg-4">
             <label class="form-label fw-semibold">Date <span class="text-danger">*</span></label>
-            <select class="form-select review-field" data-field="date" data-card="{{ suggestion.statement_id }}">
-              <option value="">— Select —</option>
-              {% for header in suggestion.all_headers %}
-              <option value="{{ header }}" {% if suggestion.suggested_config.get('date') == header %}selected{% endif %}>{{ header }}</option>
-              {% endfor %}
-            </select>
+            <input type="text" class="form-control review-field" data-field="date" data-card="{{ suggestion.statement_id }}"
+                   list="headers-list-{{ suggestion.statement_id }}"
+                   value="{{ suggestion.suggested_config.get('date', '') }}"
+                   placeholder="Enter column heading">
           </div>
 
           {# Due Date column #}
           <div class="col-md-6 col-lg-4">
             <label class="form-label">Due Date</label>
-            <select class="form-select review-field" data-field="due_date" data-card="{{ suggestion.statement_id }}">
-              <option value="">— None —</option>
-              {% for header in suggestion.all_headers %}
-              <option value="{{ header }}" {% if suggestion.suggested_config.get('due_date') == header %}selected{% endif %}>{{ header }}</option>
-              {% endfor %}
-            </select>
+            <input type="text" class="form-control review-field" data-field="due_date" data-card="{{ suggestion.statement_id }}"
+                   list="headers-list-{{ suggestion.statement_id }}"
+                   value="{{ suggestion.suggested_config.get('due_date', '') }}"
+                   placeholder="Enter column heading">
           </div>
 
-          {# Total columns (multi-select) #}
+          {# Total columns (add/remove pattern) #}
           <div class="col-md-6 col-lg-4">
             <label class="form-label fw-semibold">Total column(s) <span class="text-danger">*</span></label>
-            <select class="form-select review-field" data-field="total" data-card="{{ suggestion.statement_id }}" multiple size="3">
-              {% set suggested_totals = suggestion.suggested_config.get('total', []) %}
-              {% for header in suggestion.all_headers %}
-              <option value="{{ header }}" {% if header in suggested_totals %}selected{% endif %}>{{ header }}</option>
+            {% set suggested_totals = suggestion.suggested_config.get('total', []) or [''] %}
+            <div id="review-container-total-{{ suggestion.statement_id }}">
+              {% for val in suggested_totals %}
+              <div class="input-group mb-2">
+                <input type="text" class="form-control review-field" data-field="total" data-card="{{ suggestion.statement_id }}"
+                       list="headers-list-{{ suggestion.statement_id }}"
+                       value="{{ val }}" placeholder="Enter column heading">
+                <button type="button" class="btn btn-outline-danger" onclick="removeReviewInput(this, '{{ suggestion.statement_id }}')">Remove</button>
+              </div>
               {% endfor %}
-            </select>
-            <div class="form-text">Hold Ctrl/Cmd to select multiple.</div>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addReviewInput('{{ suggestion.statement_id }}')">Add another column</button>
           </div>
 
           {# Date format #}
@@ -106,9 +108,8 @@
           </div>
         </div>
 
-        <div class="mt-3 d-flex gap-2">
+        <div class="mt-3">
           <button type="button" class="btn btn-success btn-confirm-single" data-statement-id="{{ suggestion.statement_id }}" data-contact-id="{{ suggestion.contact_id }}">Confirm</button>
-          <a href="{{ url_for('configs') }}?contact_name={{ suggestion.contact_name | urlencode }}" class="btn btn-outline-secondary btn-sm">Edit in full config page</a>
         </div>
       </div>
     </div>
@@ -389,13 +390,45 @@ function removeInput(button, field) {
 
 /* ── Pending review card logic ── */
 
+/** Add a new total input to a review card. */
+function addReviewInput(statementId) {
+  const container = document.getElementById('review-container-total-' + statementId);
+  if (!container) return;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'input-group mb-2';
+  wrapper.innerHTML = `
+    <input type="text" class="form-control review-field" data-field="total" data-card="${statementId}"
+           list="headers-list-${statementId}" placeholder="Enter column heading">
+    <button type="button" class="btn btn-outline-danger" onclick="removeReviewInput(this, '${statementId}')">Remove</button>
+  `;
+  container.appendChild(wrapper);
+}
+
+/** Remove a total input from a review card (clear if last one). */
+function removeReviewInput(button, statementId) {
+  const wrapper = button.closest('.input-group');
+  if (!wrapper) return;
+  const container = document.getElementById('review-container-total-' + statementId);
+  if (container) {
+    const inputs = container.querySelectorAll('input[data-field="total"]');
+    if (inputs.length <= 1) {
+      inputs[0].value = "";
+      inputs[0].focus();
+      return;
+    }
+  }
+  wrapper.remove();
+}
+
 /** Collect config values from a single review card. */
 function getCardConfig(cardEl) {
   const config = {};
   cardEl.querySelectorAll('.review-field').forEach(el => {
     const field = el.dataset.field;
-    if (el.tagName === 'SELECT' && el.multiple) {
-      config[field] = Array.from(el.selectedOptions).map(o => o.value);
+    if (field === 'total') {
+      // Accumulate multiple total inputs into an array.
+      config[field] = config[field] || [];
+      if (el.value) config[field].push(el.value);
     } else {
       config[field] = el.value;
     }
