@@ -95,7 +95,7 @@
     </nav>
 
     {% for banner in banners %}
-    <div class="alert alert-{{ banner.alert_type }}{% if banner.dismissible %} alert-dismissible{% endif %} mx-3 mt-3 mb-0" role="alert">
+    <div class="alert alert-{{ banner.alert_type }}{% if banner.dismissible %} alert-dismissible{% endif %} mx-3 mt-3 mb-3" role="alert">
         <strong>{{ banner.message }}</strong>
         {% if banner.link_text and banner.link_url %}
         <a href="{{ banner.link_url }}" class="alert-link">{{ banner.link_text }}</a>
