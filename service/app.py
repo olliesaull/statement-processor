@@ -439,11 +439,7 @@ def _auto_confirm_pending_suggestions(tenant_id: str | None, contact_id: str) ->
 
         # Clean up suggestion and clear pending status.
         delete_suggestion(tenant_id, statement_id)
-        tenant_statements_table.update_item(
-            Key={"TenantID": tenant_id, "StatementID": statement_id},
-            UpdateExpression="REMOVE #s",
-            ExpressionAttributeNames={"#s": "Status"},
-        )
+        tenant_statements_table.update_item(Key={"TenantID": tenant_id, "StatementID": statement_id}, UpdateExpression="REMOVE #s", ExpressionAttributeNames={"#s": "Status"})
 
         # Start extraction workflow.
         pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
