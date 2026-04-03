@@ -196,11 +196,7 @@ def check_load_required(tenant_id: str) -> bool:
 
                 # Grant welcome tokens so new users can try the system immediately.
                 try:
-                    BillingService.adjust_token_balance(
-                        tenant_id,
-                        WELCOME_GRANT_TOKENS,
-                        source=LAST_MUTATION_SOURCE_WELCOME_GRANT,
-                    )
+                    BillingService.adjust_token_balance(tenant_id, WELCOME_GRANT_TOKENS, source=LAST_MUTATION_SOURCE_WELCOME_GRANT)
                     logger.info("Granted welcome tokens", tenant_id=tenant_id, token_count=WELCOME_GRANT_TOKENS)
                 except Exception:
                     logger.exception("Failed to grant welcome tokens — login continues", tenant_id=tenant_id)

@@ -66,6 +66,8 @@
 │       └── requirements.txt
 └── service/
     ├── app.py
+    ├── banner_service.py
+    ├── billing_service.py
     ├── config.py
     ├── Dockerfile
     ├── logger.py
@@ -184,6 +186,7 @@
   - Stripe integration: `service/stripe_service.py` and `service/stripe_repository.py`
     - `service/stripe_service.py` — all Stripe SDK calls (`stripe.Customer.create`, `stripe.checkout.Session.create/retrieve`). Uses dynamic `price_data` (not fixed Price objects) because token count is a free-form integer; the single Stripe Product (`prod_UBMoFkqStKFcjg`) is referenced by `STRIPE_PRODUCT_ID` env var so purchase history is attributed correctly in Stripe reporting. A fresh Stripe Customer is created per checkout with the user-provided billing details so each invoice reflects exactly what was entered for that purchase.
     - `service/stripe_repository.py` — DynamoDB ops for checkout state: idempotency records on `StripeEventStoreTable` only. Imports pre-constructed table objects from `service/config.py` (consistent with all other repositories) rather than constructing its own `ddb.Table` instances.
+  - Banner system: `service/banner_service.py` (see **Banner system** below)
   - Xero integration + caching: `service/xero_repository.py`
   - Background sync job: `service/sync.py`
   - Tenant metadata: `service/tenant_data_repository.py`
@@ -219,6 +222,7 @@
   - **Tenant APIs**
     - `/api/tenant-statuses` (GET): returns tenant sync statuses for polling UI.
     - `/api/tenants/<tenant_id>/sync` (POST): triggers background Xero sync for a tenant.
+    - `/api/banner/dismiss` (POST): permanently dismiss a banner for the current tenant. Accepts `{"dismiss_key": "<key>"}` and writes the key to the tenant's `DismissedBanners` set in `TenantDataTable` via `TenantDataRepository.dismiss_banner`. Returns `204` on success.
     - **Auth behavior for API routes**: When `@xero_token_required` protects a `/api/...` endpoint and the session token is missing or expired, the decorator returns `401` JSON (`{"error": "auth_required"}`) instead of redirecting. The frontend polling/sync code (`service/static/assets/js/main.js`) treats either a 401 response or a redirected login response as a signal to navigate to `/login`, so passive actions still force a full re-login.
   - **Stripe / token purchasing**
     - `/pricing` (GET): public-facing pricing page — no auth required, explains token pricing (£0.10/token, min 10 tokens).
@@ -449,6 +453,16 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
 - The grant runs inside the `put_item` success path (after seeding the tenant row with `ConditionExpression="attribute_not_exists(TenantID)"`), so it only fires for genuinely new tenants.
 - Grant failure is non-fatal — a nested `try/except` logs the error and allows login to continue. This means a new tenant who hits a transient DynamoDB issue during the grant will still be able to log in but will have zero tokens until manually adjusted.
 - The `adjust_token_balance` call uses `if_not_exists(TokenBalance, :zero) + :token_delta` so it handles the case where no billing row exists yet.
+
+**Banner system**
+- `service/banner_service.py` implements a reusable provider-registry pattern for site-wide notification banners. Each provider is a `(tenant_id) -> Banner | None` callable registered at module import time.
+- `service/app.py` injects banners into every authenticated page via the `inject_banners` context processor, which calls `get_banners()` with the tenant's dismissed-key set loaded from `TenantDataRepository.get_dismissed_banners`.
+- `service/templates/base.html` renders the banner list as Bootstrap alerts, with an optional dismiss button that POSTs to `/api/banner/dismiss`.
+- Dismissed banners are persisted as a string set (`DismissedBanners`) on the tenant's `TenantDataTable` row via `TenantDataRepository.dismiss_banner`, so dismissals survive across sessions.
+- Current providers:
+  - `config_review_banner_provider` — shows an info banner when the tenant has pending config review suggestions (count > 0), with a link to `/configs`. Not dismissible because the count is dynamic.
+  - `welcome_grant_banner_provider` — unconditionally returns a success banner telling the tenant they received 5 free tokens, with a link to `/upload-statements`. Dismissible via `dismiss_key="welcome-grant"`.
+- Adding a new banner: write a function matching the `BannerProvider` protocol, call `register_banner_provider(fn)` at module level, and import the module during app startup.
 
 **Manual token adjustments**
 - Script: `scripts/manual_token_adjustment/manual_token_adjustment.py`

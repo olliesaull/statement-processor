@@ -39,10 +39,7 @@ class StatementProcessorStack(Stack):
         apex_domain = configured_domain[4:] if configured_domain.startswith("www.") else configured_domain
         cloudfront_aliases: list[str] = [apex_domain, f"www.{apex_domain}"] if apex_domain else []
         if is_production and not apex_domain:
-            raise ValueError(
-                "domain_name must be set for prod deployments so CloudFront aliases "
-                "and OAuth callback routing are configured for the public site."
-            )
+            raise ValueError("domain_name must be set for prod deployments so CloudFront aliases and OAuth callback routing are configured for the public site.")
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
         TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
@@ -437,9 +434,7 @@ class StatementProcessorStack(Stack):
         app_runner_service_domain = cfn_service.attr_service_url
 
         cloudfront_cache_policy = cloudfront.CachePolicy.from_cache_policy_id(self, "StatementProcessorCloudFrontCachePolicy", CLOUDFRONT_CACHE_POLICY_ID)
-        cloudfront_origin_request_policy = cloudfront.OriginRequestPolicy.from_origin_request_policy_id(
-            self, "StatementProcessorCloudFrontOriginRequestPolicy", CLOUDFRONT_ORIGIN_REQUEST_POLICY_ID
-        )
+        cloudfront_origin_request_policy = cloudfront.OriginRequestPolicy.from_origin_request_policy_id(self, "StatementProcessorCloudFrontOriginRequestPolicy", CLOUDFRONT_ORIGIN_REQUEST_POLICY_ID)
         cloudfront_default_behavior = cloudfront.BehaviorOptions(
             # App Runner is a custom HTTPS origin; CloudFront OAC is not supported for this origin type.
             origin=origins.HttpOrigin(

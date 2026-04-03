@@ -20,9 +20,7 @@ def test_check_load_required_grants_welcome_tokens_for_new_tenant(monkeypatch) -
     result = sync.check_load_required("new-tenant")
 
     assert result is True
-    mock_billing.adjust_token_balance.assert_called_once_with(
-        "new-tenant", 5, source="welcome-grant"
-    )
+    mock_billing.adjust_token_balance.assert_called_once_with("new-tenant", 5, source="welcome-grant")
 
 
 def test_check_load_required_does_not_grant_for_existing_tenant(monkeypatch) -> None:
