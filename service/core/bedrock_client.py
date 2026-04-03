@@ -28,8 +28,8 @@ SUGGEST_CONFIG_TOOL: dict[str, Any] = {
                 "due_date": {"type": "string", "description": "Header name for the due date column. Empty string if not applicable."},
                 "total": {"type": "array", "items": {"type": "string"}, "description": "Header name(s) for monetary amount columns (e.g. ['Amount'] or ['Debit', 'Credit'])."},
                 "date_format": {"type": "string", "description": "SDF date format string for the date column (e.g. 'DD/MM/YYYY'). Use ONLY SDF tokens."},
-                "decimal_separator": {"type": "string", "description": "Character used as decimal separator in amounts ('.' or ',')."},
-                "thousands_separator": {"type": "string", "description": "Character used as thousands separator in amounts (',' or '.' or '' for none)."},
+                "decimal_separator": {"type": "string", "description": "Character separating the whole number from the fractional part (e.g. 1234.56 uses '.', 1234,56 uses ',')."},
+                "thousands_separator": {"type": "string", "description": "Character grouping thousands (e.g. 1,234 uses ',', 1.234 uses '.', empty string if no grouping separator)."},
                 "confidence_notes": {"type": "string", "description": "Brief notes about mapping confidence or ambiguities."},
             },
             "required": ["number", "date", "due_date", "total", "date_format", "decimal_separator", "thousands_separator", "confidence_notes"],
@@ -100,8 +100,8 @@ Map the headers to the following fields:
 - **due_date**: The due/payment date column (empty string if not present)
 - **total**: One or more monetary amount columns (e.g. ["Amount"] or ["Debit", "Credit"])
 - **date_format**: The SDF format string matching the date values in the data
-- **decimal_separator**: The decimal separator used in monetary amounts ("." or ",")
-- **thousands_separator**: The thousands separator used in monetary amounts ("," or "." or "" for none)
+- **decimal_separator**: The character separating the whole number from the fractional part (e.g. 1234.56 uses ".", 1234,56 uses ",")
+- **thousands_separator**: The character grouping thousands (e.g. 1,234 uses ",", 1.234 uses ".", "" if no grouping separator)
 - **confidence_notes**: Any notes about uncertain or ambiguous mappings
 
 Return empty string for any field you cannot confidently map. Use the suggest_config tool to return your answer."""
