@@ -60,6 +60,33 @@ class TenantDataRepository:
         return fetch_items_by_tenant_id(cls.get_item, tenant_ids, max_workers=max_workers)
 
     @classmethod
+    def get_dismissed_banners(cls, tenant_id: str) -> set[str]:
+        """Fetch the set of permanently dismissed banner keys for a tenant.
+
+        Returns:
+            Set of dismiss_key strings. Empty set if no row or no attribute.
+        """
+        item = cls.get_item(tenant_id)
+        if not item:
+            return set()
+        raw = item.get("DismissedBanners")
+        if isinstance(raw, set):
+            return raw
+        return set()
+
+    @classmethod
+    def dismiss_banner(cls, tenant_id: str, dismiss_key: str) -> None:
+        """Permanently dismiss a banner for a tenant.
+
+        Uses DynamoDB ADD on a string set, which is atomic and idempotent.
+
+        Args:
+            tenant_id: Tenant dismissing the banner.
+            dismiss_key: Unique banner identifier to dismiss.
+        """
+        cls._table.update_item(Key={"TenantID": tenant_id}, UpdateExpression="ADD DismissedBanners :dismiss_key", ExpressionAttributeValues={":dismiss_key": {dismiss_key}})
+
+    @classmethod
     def get_tenant_statuses(cls, tenant_ids: Iterable[str], max_workers: int = 4) -> dict[str, TenantStatus]:
         """
         Fetch multiple tenant records concurrently and return their status.
