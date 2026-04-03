@@ -1865,10 +1865,15 @@ def callback():  # pylint: disable=too-many-return-statements
         logger.exception("Failed to validate id_token", error=str(exc))
         return "Invalid id_token", 400
 
-    # Store the authenticated user's email for Stripe Customer creation —
-    # Authlib has already validated the token above so claims are trustworthy.
+    # Store the authenticated user's email and name for Stripe Customer
+    # creation and login notifications. The "profile" OIDC scope provides
+    # given_name/family_name claims. Authlib has already validated the
+    # token above so claims are trustworthy.
     if claims is not None:
         session["xero_user_email"] = claims.get("email", "")
+        given = claims.get("given_name", "")
+        family = claims.get("family_name", "")
+        session["xero_user_name"] = f"{given} {family}".strip() or ""
 
     save_xero_oauth2_token(tokens)
     access_token = tokens.get("access_token")
@@ -1907,7 +1912,9 @@ def callback():  # pylint: disable=too-many-return-statements
     # Fire-and-forget login notification — never blocks the login flow.
     active_tenant = next((t for t in tenants if t["tenantId"] == session.get("xero_tenant_id")), None)
     send_login_notification_email(
-        tenant_name=active_tenant["tenantName"] if active_tenant else "Unknown", user_name=session.get("xero_user_email", "Unknown"), user_email=session.get("xero_user_email", "")
+        tenant_name=active_tenant["tenantName"] if active_tenant else "Unknown",
+        user_name=session.get("xero_user_name") or session.get("xero_user_email", "Unknown"),
+        user_email=session.get("xero_user_email", ""),
     )
 
     response = redirect(url_for("tenant_management"))

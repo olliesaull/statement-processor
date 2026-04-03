@@ -51,5 +51,5 @@ def send_login_notification_email(tenant_name: str, user_name: str, user_email: 
             Message={"Subject": {"Data": "Statement Processor Login", "Charset": "UTF-8"}, "Body": {"Html": {"Data": html_body, "Charset": "UTF-8"}}},
         )
         logger.info("Login notification email sent", user_email=user_email, tenant_name=tenant_name)
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught
         logger.exception("Failed to send login notification email", user_email=user_email, tenant_name=tenant_name)
