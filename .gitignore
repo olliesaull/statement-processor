@@ -15,5 +15,7 @@
 .worktrees/
 .playwright-mcp/
 plans/
+.superpowers/
+superpowers/
 openshell/secrets/*
 !openshell/secrets/.gitkeep
