@@ -275,22 +275,34 @@ a:focus-visible {
 }
 
 /* ---------- 5. Alerts, badges, cards, tables, forms ---------- */
+/* White background + coloured left accent so banners contrast on both
+   white pages and the blue-gradient homepage. */
 .alert-success {
   --bs-alert-color: #0f3b1f;
-  --bs-alert-bg: var(--green-100);
+  --bs-alert-bg: var(--white);
   --bs-alert-border-color: #b6e3c2;
+  border-left: 4px solid var(--green-600);
 }
 
 .alert-danger {
   --bs-alert-color: #7f1d1d;
-  --bs-alert-bg: var(--red-100);
+  --bs-alert-bg: var(--white);
   --bs-alert-border-color: #fca5a5;
+  border-left: 4px solid var(--red-500);
 }
 
 .alert-info {
   --bs-alert-color: #0f3f52;
-  --bs-alert-bg: var(--blue-50);
+  --bs-alert-bg: var(--white);
   --bs-alert-border-color: var(--blue-100);
+  border-left: 4px solid var(--blue-500);
+}
+
+.alert-warning {
+  --bs-alert-color: #78350f;
+  --bs-alert-bg: var(--white);
+  --bs-alert-border-color: var(--amber-100);
+  border-left: 4px solid var(--amber-500);
 }
 
 .badge.bg-secondary {
