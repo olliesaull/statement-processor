@@ -80,6 +80,13 @@ def test_parenthetical_negative() -> None:
     assert thou == ","
 
 
+def test_trailing_minus_accounting_style() -> None:
+    """Accounting-style negatives like '126.50-' with trailing minus."""
+    dec, thou = disambiguate_number_separators(["126.50-", "3,848.97"], ".", ",")
+    assert dec == "."
+    assert thou == ","
+
+
 def test_corrects_swapped_llm_suggestion() -> None:
     """LLM says decimal='.', thousands=',' but data shows European style."""
     dec, thou = disambiguate_number_separators(["1.234,56", "2.345,67"], ".", ",")

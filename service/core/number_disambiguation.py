@@ -123,9 +123,11 @@ def _analyse_value(raw: str, evidence: dict[str, set[str]]) -> None:
     if not cleaned:
         return
 
-    # Remove leading negative sign so it doesn't interfere.
+    # Remove leading/trailing sign characters so they don't interfere.
     if cleaned.startswith("-"):
         cleaned = cleaned[1:]
+    if cleaned.endswith(("-", "+")):
+        cleaned = cleaned[:-1]
 
     # Find all separator characters present in the value.
     separators_found: list[str] = []
