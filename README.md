@@ -136,7 +136,61 @@
   - Textract permissions added to both Lambda and state machine roles to allow `StartDocumentAnalysis` and `GetDocumentAnalysis`.
 - **CloudWatch + SNS**
   - `StatementProcessorAppRunnerErrorMetricFilter` + `StatementProcessorAppRunnerErrorAlarm`: parses App Runner application logs for `ERROR` and raises an alarm.
-  - `StatementProcessorAppRunnerErrorTopic`: SNS topic with email subscriptions for alarm notifications.
+  - `TextractionLambdaErrorMetricFilter` + `TextractionLambdaErrorAlarm`: parses Textraction Lambda logs for `ERROR` or timeout strings and raises an alarm.
+  - `StatementProcessorAppRunnerErrorTopic`: SNS topic that both alarms publish to. It has email subscriptions for `ollie@dotelastic.com` and `james@dotelastic.com`, and an SMS subscription for `+447468518143` (Ollie only). The SMS subscription is added directly in CDK rather than through a separate email-to-SMS relay, because SNS supports SMS natively and this keeps all alarm routing in one place.
+
+## Monitoring and Notifications
+
+### CloudWatch Alarms
+Two CloudWatch metric filters + alarms watch for errors in production:
+
+| Alarm | Log group | Trigger |
+|---|---|---|
+| `StatementProcessorAppRunnerErrorAlarm` | App Runner application logs | Any log line containing `ERROR` |
+| `TextractionLambdaErrorAlarm` | Textraction Lambda logs | Any log line containing `ERROR` or a timeout string |
+
+Both alarms publish to the same SNS topic (`StatementProcessorAppRunnerErrorTopic`).
+
+### Alarm notifications
+The SNS topic has three subscriptions:
+- Email → `ollie@dotelastic.com`
+- Email → `james@dotelastic.com`
+- SMS → `+447468518143` (Ollie's phone)
+
+The SMS subscription exists because CloudWatch alarms do not wake anyone up if they only send email. Adding a direct SMS subscription to the same SNS topic keeps all alarm routing in CDK and avoids a separate paging service.
+
+### Login notification emails
+After every successful Xero OAuth callback, the Flask service sends a login notification email via AWS SES (`service/utils/email.py`):
+- **Sender:** `info@dotelastic.com`
+- **Recipient:** `ollie@dotelastic.com`
+- **Subject:** `Statement Processor Login`
+- **Content:** tenant name, user's full name, and user's Xero email address, rendered from `service/templates/email/login_notification.html` using a standalone Jinja2 environment (not Flask's `render_template`, so it works without an active Flask app context).
+- **Behaviour:** fire-and-forget — failures are caught and logged at ERROR level but never block the login flow.
+- **Skipped outside production:** `email.py` reads `STAGE` from `os.environ` at module import time (not from `config.py`, to avoid triggering the SSM secrets fetch in tests). When `STAGE != "prod"`, the function returns early without calling SES.
+
+Rationale: a login notification gives immediate visibility into who is accessing the application in production without relying solely on CloudWatch log tailing.
+
+### Manual post-deploy steps
+These one-time steps are required before notifications work in a new AWS environment:
+
+**SES sender identity verification**
+AWS SES requires every sender address to be verified before it can be used to send email. The sender is `info@dotelastic.com`.
+
+```bash
+aws ses verify-email-identity --email-address info@dotelastic.com --region eu-west-1
+```
+
+Check the inbox for `info@dotelastic.com` and click the verification link. Until this step is complete, all `send_email` calls for login notifications will fail with `MessageRejected`.
+
+**SNS SMS sandbox verification**
+New AWS accounts start in the SNS SMS sandbox. In sandbox mode, SMS messages can only be sent to phone numbers that have been individually verified.
+
+To verify `+447468518143`:
+1. Go to **AWS Console → SNS → Text messaging (SMS) → Sandbox destination phone numbers**.
+2. Add `+447468518143` and request the OTP.
+3. Enter the OTP to complete verification.
+
+Alternatively, request production SMS access (SNS → Text messaging → Get out of SMS sandbox) to remove the restriction entirely. Until sandbox exit or number verification, SMS alarm notifications will be silently dropped.
 
 ## Orchestration (Step Functions & Textract)
 **State machine definitions and entry points**
