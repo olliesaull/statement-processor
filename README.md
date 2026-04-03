@@ -230,7 +230,7 @@
     - **Preflight shortfall link**: when `/api/upload-statements/preflight` returns `shortfall > 0`, the response JSON now includes `buy_tokens_url: "/buy-tokens"` so the upload page JS can render a "Buy Tokens" link in the red shortfall summary.
   - **Auth**
     - `/login` (GET): start Xero OAuth flow.
-    - `/callback` (GET): OAuth callback (token validation + tenant load).
+    - `/callback` (GET): OAuth callback (token validation + tenant load). For first-time tenants, also grants welcome tokens (see **Welcome token grant** below).
     - `/logout` (GET): clear session.
     - `/tenants/select` (POST): set active tenant in session.
     - `/tenants/disconnect` (POST): disconnect tenant from Xero.
@@ -393,7 +393,7 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
   - Tracks tenant‑level sync and load state only. Billing balance no longer lives here because this item is already updated by sync/load flows, so mixing mutable token balance into the same row would make atomic ledger+balance writes harder to reason about.
 - **Writers**
   - `service/sync.py:update_tenant_status` (sets `TenantStatus`, `LastSyncTime`).
-  - `service/sync.py:check_load_required` (seeds a row with `TenantStatus=LOADING`).
+  - `service/sync.py:check_load_required` (seeds a row with `TenantStatus=LOADING`; also grants welcome tokens via `BillingService.adjust_token_balance` so new tenants can try the system immediately).
 - **Readers**
   - `service/tenant_data_repository.py` and `service/app.py` (tenant status APIs/UI gating only).
 - **Example item**:
@@ -443,6 +443,12 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
 - `source="stripe-checkout"` (`LAST_MUTATION_SOURCE_STRIPE_CHECKOUT` in `service/billing_service.py`) identifies purchase credits in the ledger.
 - `LedgerEntryID` for purchases follows the pattern `purchase#<session_id>` (e.g. `purchase#cs_test_xxx`), which cross-references the matching `StripeEventStoreTable` record for audit lookups.
 - The `adjust_token_balance()` method accepts an optional `ledger_entry_id` kwarg; when supplied it is used directly instead of generating a random UUID, enabling conditional idempotency on the ledger write via `attribute_not_exists`.
+
+**Welcome token grant**
+- When a new tenant is first seen during the OAuth callback, `service/sync.py:check_load_required` grants `WELCOME_GRANT_TOKENS` (5) via `BillingService.adjust_token_balance` with `source="welcome-grant"` (`LAST_MUTATION_SOURCE_WELCOME_GRANT` in `service/billing_service.py`).
+- The grant runs inside the `put_item` success path (after seeding the tenant row with `ConditionExpression="attribute_not_exists(TenantID)"`), so it only fires for genuinely new tenants.
+- Grant failure is non-fatal — a nested `try/except` logs the error and allows login to continue. This means a new tenant who hits a transient DynamoDB issue during the grant will still be able to log in but will have zero tokens until manually adjusted.
+- The `adjust_token_balance` call uses `if_not_exists(TokenBalance, :zero) + :token_delta` so it handles the case where no billing row exists yet.
 
 **Manual token adjustments**
 - Script: `scripts/manual_token_adjustment/manual_token_adjustment.py`

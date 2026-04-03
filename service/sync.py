@@ -19,6 +19,7 @@ from typing import Any
 from botocore.exceptions import ClientError
 from xero_python.accounting import AccountingApi
 
+from billing_service import LAST_MUTATION_SOURCE_WELCOME_GRANT, WELCOME_GRANT_TOKENS, BillingService
 from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, s3_client, tenant_data_table
 from logger import logger
 from tenant_data_repository import TenantDataRepository, TenantStatus
@@ -192,6 +193,18 @@ def check_load_required(tenant_id: str) -> bool:
             try:
                 tenant_data_table.put_item(Item={"TenantID": tenant_id, "TenantStatus": TenantStatus.LOADING}, ConditionExpression="attribute_not_exists(TenantID)")
                 logger.info("Seeded tenant record with LOADING status", tenant_id=tenant_id)
+
+                # Grant welcome tokens so new users can try the system immediately.
+                try:
+                    BillingService.adjust_token_balance(
+                        tenant_id,
+                        WELCOME_GRANT_TOKENS,
+                        source=LAST_MUTATION_SOURCE_WELCOME_GRANT,
+                    )
+                    logger.info("Granted welcome tokens", tenant_id=tenant_id, token_count=WELCOME_GRANT_TOKENS)
+                except Exception:
+                    logger.exception("Failed to grant welcome tokens — login continues", tenant_id=tenant_id)
+
             except ClientError as exc:
                 if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
                     logger.exception("Failed to seed tenant status for new tenant", tenant_id=tenant_id)
