@@ -529,7 +529,7 @@ def process_pdf(  # pylint: disable=too-many-locals
 # -- Main --------------------------------------------------------------------
 
 
-def main() -> None:
+def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     """Run extraction on all PDFs in the input directory."""
     # Validate input directory exists and has PDFs.
     if not INPUT_DIR.exists():
