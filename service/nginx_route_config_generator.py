@@ -118,12 +118,7 @@ def extract_flask_routes(app) -> list[dict]:
                 # Same path registered under a different endpoint — merge methods
                 merged[rule.rule]["methods"].update(methods)
             else:
-                merged[rule.rule] = {
-                    "endpoint": rule.endpoint,
-                    "original": rule.rule,
-                    "pattern": flask_to_nginx_pattern(rule.rule),
-                    "methods": methods,
-                }
+                merged[rule.rule] = {"endpoint": rule.endpoint, "original": rule.rule, "pattern": flask_to_nginx_pattern(rule.rule), "methods": methods}
 
     if skipped:
         print(f"INFO: Skipped {len(skipped)} static/handled routes:", file=sys.stderr)
