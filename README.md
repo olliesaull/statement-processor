@@ -207,7 +207,10 @@ Check the inbox for `info@dotelastic.com` and click the verification link. Until
   - Frontend design reference: static mockups in `new-design/` (index.html, about.html, instructions.html, styles.css) served as the design source of truth during the UI overhaul.
   - Configuration + AWS clients: `service/config.py` (environment-variable loading, boto3 clients/resources).
     - `service/config.py` now uses a local `get_envar(...)` helper that mirrors the Numerint Flask app: required env vars fail fast during import, while a small set of local-development defaults (`DOMAIN_NAME`, `STAGE`, `VALKEY_URL`) remain explicit. AWS clients/resources are now created directly via `boto3.client(...)` / `boto3.resource(...)` rather than a custom `boto3.session.Session(...)`. Rationale: this matches the working Numerint pattern, removes conditional session logic, and makes missing runtime configuration obvious during worker startup.
-  - Gunicorn startup: `service/start.sh`.
+  - Container startup: `service/start.sh` (manages Nginx, Gunicorn, and Valkey).
+    - Nginx reverse proxy listens on port 8080 and forwards to Gunicorn via Unix socket (`/tmp/flask.sock`).
+    - When `STAGE=prod`, `start.sh` injects CloudFront protection (`X-Statement-CF` header check) and disables `/static/` serving (CloudFront/S3 handles it).
+    - See **Nginx Reverse Proxy** section below for maintenance details.
     - Gunicorn now writes both access logs and error logs to stdout (`--access-logfile - --error-logfile -`). Rationale: App Runner deployment failures were previously only visible as generic service rollbacks, so emitting request-path logs gives direct evidence about whether health checks reach Gunicorn and whether Flask ever returns a response.
   - Logging: `service/logger.py` (structured logger used across modules).
   - Session/auth wiring: Redis-backed server-side sessions in `service/app.py` using Flask-Session + Valkey/ElastiCache.
@@ -299,7 +302,7 @@ Check the inbox for `info@dotelastic.com` and click the verification link. Until
       - Browser-side CSRF delivery is now standardized across the app: `templates/base.html` always emits a `csrf-token` meta tag, and JavaScript `POST` requests send `csrf_token` in the request body instead of the `X-CSRFToken` header. Rationale: the CloudFront -> App Runner path was observed dropping the custom header in production, which caused `400` CSRF failures for tenant sync and upload preflight even though the browser had a valid token.
       - Flask app secret key remains stable across cold starts because it is provided as a fixed environment value rather than generated at runtime.
       - **Container runtime parity for local development**:
-        - `service/Dockerfile` installs Valkey and uses `service/start.sh` to run Valkey and Gunicorn in one container.
+        - `service/Dockerfile` installs Valkey, Nginx, and curl and uses `service/start.sh` to run Nginx, Gunicorn, and Valkey in one container.
         - `service/run_as_container.sh` now mirrors the Numerint workflow: it replaces any existing `statement-processor` container, rebuilds, runs on `localhost:8080`, tails logs, and supports `-i/--interactive` shell mode.
         - `service/start.sh` now waits for Valkey readiness with `valkey-cli ping` before starting Gunicorn instead of relying on a fixed one-second sleep. Rationale: App Runner rollbacks have shown intermittent candidate startup failures, and a real readiness probe removes the race between the local session store binding its socket and the Flask worker starting to accept requests.
         - Rationale: Flask-Session now depends on a Redis/Valkey backend, so running cache and web process together keeps local execution aligned with App Runner behavior and avoids a second local service to manage.
@@ -316,6 +319,69 @@ Check the inbox for `info@dotelastic.com` and click the verification link. Until
     - Uploads PDF to S3 (`upload_statement_to_s3` → `service/utils/storage.py`).
     - Computes JSON output key (`statement_json_s3_key`) and starts Step Functions (`start_textraction_state_machine` → `service/utils/workflows.py`).
     - If the upload handoff fails after reservation, `service/billing_service.py:release_statement_reservation` returns the tokens and the service deletes the partially created statement row/S3 artefacts.
+
+## Nginx Reverse Proxy
+
+Nginx sits in front of Gunicorn inside the container, providing security hardening, rate limiting, and per-route request validation. The setup mirrors `numerint/dexero/web`.
+
+### Architecture
+
+```
+Client → CloudFront → AppRunner → Nginx (:8080) → Gunicorn (unix:/tmp/flask.sock) → Flask
+```
+
+### Configuration files
+
+| File | Purpose |
+|------|---------|
+| `service/nginx.conf` | Main config: security headers, CSP, rate limiting, proxy settings, static file handling |
+| `service/nginx-routes.conf` | Auto-generated per-route location blocks (committed to git) |
+| `service/nginx_route_config_generator.py` | Generates `nginx-routes.conf` from Flask routes |
+| `service/nginx_route_querystring_allow_list.json` | Allowed query parameters per route |
+| `service/nginx_route_overrides.json` | Per-route directive overrides (e.g. `client_max_body_size`) |
+
+### When to update Nginx config
+
+| Change | Action |
+|--------|--------|
+| Adding external CDN/script/font sources | Update CSP in `service/nginx.conf` |
+| Adding new Flask routes | Regenerate `nginx-routes.conf` (see command below) |
+| Adding query parameters to a route | Update `service/nginx_route_querystring_allow_list.json` and regenerate |
+| Adding routes that accept large request bodies | Update `service/nginx_route_overrides.json` and regenerate |
+| Changing the listen port | Update `listen` directive in `service/nginx.conf` |
+
+### Regenerating route config
+
+Run from `service/`:
+
+```bash
+python3.13 nginx_route_config_generator.py \
+  --app app:app \
+  --upstream gunicorn \
+  --output nginx-routes.conf \
+  --route-params nginx_route_querystring_allow_list.json \
+  --route-overrides nginx_route_overrides.json
+```
+
+Review the diff and commit the updated `nginx-routes.conf`.
+
+### Security features
+
+- **Rate limiting**: 20 req/s per client IP (burst 50)
+- **Request validation**: blocks header injection (CRLF/null), request smuggling, XSS in X-Forwarded-For, empty/oversized User-Agent
+- **Per-route method restriction**: only declared HTTP methods allowed
+- **Query string validation**: routes whitelist allowed parameters; unrecognised params return 404 or are stripped
+- **Body size limiting**: 64KB default, 10MB for upload routes only
+- **Security headers**: X-Frame-Options, X-Content-Type-Options, HSTS, CSP, Permissions-Policy, Referrer-Policy
+- **CloudFront protection** (`STAGE=prod`): requests without valid `X-Statement-CF` header return 403
+
+### Design decisions
+
+- **Port 8080**: kept from the original setup to avoid AppRunner/CDK changes and to allow running both statement processor and numerint locally without port conflicts.
+- **nginx.conf copied to /app/ in Docker**: `start.sh` copies it to `/etc/nginx/nginx.conf` at runtime after applying marker replacements for the current `STAGE`. This avoids baking environment-specific config into the image.
+- **nginx-routes.conf committed to git**: despite being auto-generated, committing it makes route changes visible in PRs and prevents accidental omissions.
+- **Separate JSON configs**: query string allow list and route overrides are separate files because they address different concerns (security vs. performance).
+- **`make run-app` bypasses Nginx**: runs Gunicorn directly on port 8080 for quick local iteration. Use `run_as_container.sh` to test the full Nginx + Gunicorn + Valkey stack locally.
 
 ## Frontend Design System
 
