@@ -295,9 +295,9 @@ def call_bedrock_with_retry(
     for attempt in range(MAX_RETRIES + 1):
         try:
             return call_bedrock(client, system_prompt, pdf_bytes, user_text)
-        except client.exceptions.ThrottlingException:
+        except client.exceptions.ThrottlingException as exc:
             # Throttling is transient — retry.
-            last_error = Exception("ThrottlingException")
+            last_error = exc
         except Exception as exc:  # pylint: disable=broad-exception-caught
             error_code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
             if error_code in retryable:
@@ -583,14 +583,23 @@ def main() -> None:
                 }
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
+            elapsed = round(time.time() - run_start, 1)
             print(f"  FAILED: {exc}")
+            # Read page/chunk counts before failure for diagnostics.
+            try:
+                reader = PdfReader(str(pdf_path))
+                fail_pages = len(reader.pages)
+                fail_chunks = len(chunk_pdf(reader))
+            except Exception:  # pylint: disable=broad-exception-caught
+                fail_pages = 0
+                fail_chunks = 0
             pdf_results.append(
                 {
                     "filename": pdf_path.name,
-                    "page_count": 0,
-                    "chunk_count": 0,
+                    "page_count": fail_pages,
+                    "chunk_count": fail_chunks,
                     "item_count": 0,
-                    "processing_time_seconds": 0,
+                    "processing_time_seconds": elapsed,
                     "estimated_cost_usd": 0,
                     "status": "failed",
                     "error": str(exc),
