@@ -383,6 +383,10 @@ Review the diff and commit the updated `nginx-routes.conf`.
 - **Separate JSON configs**: query string allow list and route overrides are separate files because they address different concerns (security vs. performance).
 - **`make run-app` bypasses Nginx**: runs Gunicorn directly on port 8080 for quick local iteration. Use `run_as_container.sh` to test the full Nginx + Gunicorn + Valkey stack locally.
 
+### Production deployment requirement
+
+`X_STATEMENT_CF` must be added to the AppRunner service's environment variables in `cdk/stacks/statement_processor.py` and set to a secret value that CloudFront sends as a custom origin header. The corresponding CloudFront behavior must be configured to inject the same header. Without this, `start.sh` will refuse to start when `STAGE=prod`.
+
 ## Frontend Design System
 
 The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer in `service/static/assets/css/main.css`. The design is intentionally approachable and trustworthy — targeting SMB finance teams who use Xero.

@@ -109,6 +109,18 @@ start_gunicorn() {
         app:app &
     GUNICORN_PID=$!
     echo "Gunicorn started (PID ${GUNICORN_PID})"
+
+    # Wait for Gunicorn to create the Unix socket before Nginx tries to proxy
+    local retries=0
+    until [ -S /tmp/flask.sock ]; do
+        retries=$((retries + 1))
+        if [ "$retries" -ge 30 ]; then
+            echo "ERROR: Gunicorn socket not created after 30 attempts"
+            exit 1
+        fi
+        sleep 0.2
+    done
+    echo "Gunicorn socket ready (${retries} retries)"
 }
 
 start_nginx() {
@@ -119,9 +131,27 @@ start_nginx() {
 }
 
 wait_for_http() {
-    local port=8080
     local retries=0
     local max_retries=30
+    local stage="${STAGE:-prod}"
+
+    # In prod, Nginx rejects requests without the CloudFront header,
+    # so check Gunicorn directly via the Unix socket instead.
+    if [ "$stage" = "prod" ]; then
+        echo "Waiting for Gunicorn readiness via socket..."
+        until curl -sf --unix-socket /tmp/flask.sock http://localhost/healthz -o /dev/null; do
+            retries=$((retries + 1))
+            if [ "$retries" -ge "$max_retries" ]; then
+                echo "WARNING: Gunicorn did not pass readiness after ${max_retries}s"
+                return 0
+            fi
+            sleep 1
+        done
+        echo "Gunicorn ready via socket (${retries}s)"
+        return 0
+    fi
+
+    local port=8080
     echo "Waiting for HTTP readiness on port ${port}..."
     until curl -sf -o /dev/null "http://127.0.0.1:${port}/"; do
         retries=$((retries + 1))
