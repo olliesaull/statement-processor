@@ -6,6 +6,10 @@ Extract every row from the **main statement items table** only. This is the tabl
 individual transaction line items (invoices, credit notes, payments) with columns like date,
 invoice number, amounts, etc.
 
+Include opening balance or brought-forward balance rows if they appear as rows within
+the table (e.g. "Balance Brought Forward", "Opening Balance", "Balance B/F"). These are
+table rows and should be extracted like any other row.
+
 ## What to ignore
 
 Do NOT extract data from any other tables or sections, including:
@@ -23,15 +27,13 @@ If column headers span multiple rows, combine them into a single label
 ## Reference field
 
 If a column is clearly a cross-reference or document reference (e.g. "Cross Ref", "Doc Ref"),
-map the first such column to the `reference` field. Any additional reference-like columns go
-into the `raw` field.
+map the first such column to `reference` in column_order.
 
 ## Numeric values
 
 - Return monetary values exactly as they appear in the PDF (e.g. "3,848.97", "126.50-", "(126.50)")
 - Do NOT strip separators, convert signs, or normalise — return the raw string
 - Report the detected decimal and thousands separators in the `decimal_separator` and `thousands_separator` fields
-- Use the column headers from the PDF as keys in the `total` field
 
 ## Dates
 
@@ -58,10 +60,42 @@ into the `raw` field.
 
 Do NOT use Python strftime or Java SimpleDateFormat. Use ONLY these SDF tokens.
 
-## Output
+## Output format
 
-Use the extract_statement_rows tool to return your results. Extract ALL rows — do not
-skip or summarise. If a row has missing cells, use empty string or null for those fields.
+Use the extract_statement_rows tool. Extract ALL rows — do not skip or summarise.
 
-The `raw` field should contain only columns NOT already captured by `date`, `number`,
-`total`, `due_date`, or `reference`.
+**Compact array-of-arrays format:** Define `column_order` once listing all column names,
+then return each item as a flat array of string values matching that order.
+
+### Standard field extraction
+
+Always use these standard names in `column_order` for the fixed fields:
+- `date` — transaction date
+- `number` — invoice/document number
+- `due_date` — due/payment date (omit from column_order if not present)
+- `reference` — cross ref / doc ref (omit from column_order if not present)
+
+**You must always extract these standard fields by parsing them from the data, even if
+the PDF combines them into a single column.** For example, if a "Details" column contains
+"INV-001942 - due on 19 Dec 2023", split this into `number` = "INV-001942" and
+`due_date` = "19 Dec 2023". Do not include a column in column_order that duplicates
+data already captured by a standard field.
+
+For all other columns (monetary amounts, descriptions, etc.), use the PDF's own column
+header as the name in column_order (e.g. "Debit", "Credit", "Balance", "Description").
+
+### Example
+
+PDF with columns: Date, Details (contains invoice number and due date), Amount, Balance:
+
+```json
+{
+  "column_order": ["date", "number", "due_date", "Amount", "Balance"],
+  "items": [
+    ["12 Dec 2023", "INV-001942", "19 Dec 2023", "2,204.55", "7,455.45"],
+    ["12 Dec 2023", "INV-001943", "19 Dec 2023", "138.00", "7,593.45"]
+  ]
+}
+```
+
+Use empty string for missing values. Do NOT use null.

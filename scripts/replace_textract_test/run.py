@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -42,13 +43,21 @@ BASE_RETRY_DELAY = 2.0
 # Bedrock document block size limit (~4.5 MB). Use 4 MB as safety margin.
 MAX_CHUNK_BYTES = 4 * 1024 * 1024
 
+# Concurrency limits — kept low to avoid Bedrock throttling.
+MAX_PARALLEL_PDFS = 4
+MAX_PARALLEL_CHUNKS = 3
+
 
 # -- Tool schema -------------------------------------------------------------
 
 # pylint: disable=line-too-long
+# Compact schema: items are arrays-of-arrays instead of objects.
+# Column order is defined once in `column_order`; each item is a flat
+# array of values matching that order. This eliminates repeated key
+# names and cuts output tokens by ~50%.
 EXTRACT_TOOL: dict[str, Any] = {
     "name": "extract_statement_rows",
-    "description": ("Extract structured line items from a supplier statement PDF."),
+    "description": ("Extract structured line items from a supplier statement PDF. Use compact array-of-arrays format for items."),
     "inputSchema": {
         "json": {
             "type": "object",
@@ -72,46 +81,19 @@ EXTRACT_TOOL: dict[str, Any] = {
                     "enum": [",", ".", " ", "'", ""],
                     "description": ("Character used as thousands separator in monetary amounts. Empty string if none."),
                 },
+                "column_order": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": ("Ordered list of column names for each item array. E.g. ['date', 'number', 'due_date', 'reference', 'Debit', 'Credit', 'Balance', 'Description']. Use 'date', 'number', 'due_date', 'reference' for the standard fields. Use the PDF column header name for monetary columns and any extra columns."),
+                },
                 "items": {
                     "type": "array",
                     "items": {
-                        "type": "object",
-                        "properties": {
-                            "date": {
-                                "type": "string",
-                                "description": ("Transaction date exactly as it appears in the PDF. Empty string if absent."),
-                            },
-                            "number": {
-                                "type": "string",
-                                "description": ("Invoice/document number. Empty string if absent."),
-                            },
-                            "total": {
-                                "type": "object",
-                                "additionalProperties": {"type": "string"},
-                                "description": ("Monetary columns as {header_name: raw_string_value}. Return values exactly as printed in the PDF."),
-                            },
-                            "due_date": {
-                                "type": "string",
-                                "description": ("Due date exactly as it appears in the PDF. Empty string if absent."),
-                            },
-                            "reference": {
-                                "type": "string",
-                                "description": ("Cross ref / doc ref — use the first clearly reference-like column. Empty string if absent."),
-                            },
-                            "raw": {
-                                "type": "object",
-                                "description": ("Any columns NOT already captured by date, number, total, due_date, or reference. Empty object if none."),
-                            },
-                        },
-                        "required": [
-                            "date",
-                            "number",
-                            "total",
-                            "due_date",
-                            "reference",
-                            "raw",
-                        ],
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": ("One row as a flat array of values matching column_order. Use empty string for missing values."),
                     },
+                    "description": ("All rows as arrays of strings, one per line item. Each array's values correspond positionally to column_order."),
                 },
             },
             "required": [
@@ -119,12 +101,16 @@ EXTRACT_TOOL: dict[str, Any] = {
                 "date_format",
                 "decimal_separator",
                 "thousands_separator",
+                "column_order",
                 "items",
             ],
         }
     },
 }
 # pylint: enable=line-too-long
+
+# Standard fields that map to named keys in the output dict.
+STANDARD_FIELDS = {"date", "number", "due_date", "reference"}
 
 
 # -- PDF chunking ------------------------------------------------------------
@@ -375,6 +361,47 @@ def convert_amount(
         return raw
 
 
+def reconstruct_items(
+    column_order: list[str],
+    raw_rows: list[list[str]],
+) -> list[dict[str, Any]]:
+    """Reconstruct item dicts from compact array-of-arrays format.
+
+    Maps each flat value array back into a structured dict with
+    standard fields (date, number, due_date, reference), monetary
+    columns in `total`, and remaining columns in `raw`.
+
+    Args:
+        column_order: Column names matching the position of values.
+        raw_rows: List of value arrays from the LLM response.
+
+    Returns:
+        List of item dicts in the same format as the original schema.
+    """
+    items: list[dict[str, Any]] = []
+    for row in raw_rows:
+        item: dict[str, Any] = {
+            "date": "",
+            "number": "",
+            "due_date": "",
+            "reference": "",
+            "total": {},
+            "raw": {},
+        }
+        for idx, col_name in enumerate(column_order):
+            val = row[idx] if idx < len(row) else ""
+            if col_name.lower() in STANDARD_FIELDS:
+                item[col_name.lower()] = val
+            else:
+                # Non-standard columns go into total (monetary) or raw.
+                # We can't distinguish here, so put all into total and
+                # let the caller decide. Post-processing will attempt
+                # numeric conversion; those that fail stay as strings.
+                item["total"][col_name] = val
+        items.append(item)
+    return items
+
+
 def postprocess_items(
     items: list[dict[str, Any]],
     decimal_sep: str,
@@ -437,77 +464,111 @@ def process_pdf(  # pylint: disable=too-many-locals
 
     is_single_chunk = chunk_count == 1
 
-    all_items: list[dict[str, Any]] = []
-    detected_headers: list[str] = []
-    date_format = ""
-    decimal_separator = ""
-    thousands_separator = ""
-    total_input_tokens = 0
-    total_output_tokens = 0
+    # ── Process chunk 1 sequentially (provides headers for the rest) ──
 
-    for i, (pdf_bytes, start_page, end_page) in enumerate(chunks):
-        print(f"  Processing chunk {i + 1}/{chunk_count} (pages {start_page}-{end_page})...")
+    pdf_bytes_0, start_page_0, end_page_0 = chunks[0]
+    print(f"  Processing chunk 1/{chunk_count} (pages {start_page_0}-{end_page_0})...")
+    user_text_0 = "Extract all line items from this statement."
 
-        if is_single_chunk:
-            # Single-chunk PDF — just ask for extraction.
-            user_text = "Extract all line items from this statement."
-        elif i == 0:
-            # First chunk of multi-chunk PDF.
-            user_text = "Extract all line items from this statement."
-        else:
-            # Subsequent chunks — include header context and overlap
-            # instructions so the LLM can map columns correctly even
-            # when headers only appear on page 1.
-            headers_str = ", ".join(detected_headers)
-            user_text = (
+    result_0, in_tok_0, out_tok_0 = call_bedrock_with_retry(
+        client, system_prompt, pdf_bytes_0, user_text_0,
+    )
+    detected_headers = result_0.get("detected_headers", [])
+    column_order = result_0.get("column_order", [])
+    date_format = result_0.get("date_format", "")
+    decimal_separator = result_0.get("decimal_separator", ".")
+    thousands_separator = result_0.get("thousands_separator", "")
+
+    col_order_0 = result_0.get("column_order", column_order)
+    all_items = reconstruct_items(col_order_0, result_0.get("items", []))
+    total_input_tokens = in_tok_0
+    total_output_tokens = out_tok_0
+
+    # ── Process remaining chunks in parallel ────────────────────────
+
+    if chunk_count > 1:
+        headers_str = ", ".join(detected_headers)
+        col_order_str = json.dumps(column_order)
+
+        def _process_chunk(
+            chunk_idx: int,
+        ) -> tuple[int, list[dict[str, Any]], int, int, dict[str, str]]:
+            """Process a single continuation chunk.
+
+            Returns (chunk_idx, items, input_tokens, output_tokens,
+            metadata_warnings).
+            """
+            c_bytes, c_start, c_end = chunks[chunk_idx]
+            print(
+                f"  Processing chunk {chunk_idx + 1}/{chunk_count} "
+                f"(pages {c_start}-{c_end})..."
+            )
+            c_user_text = (
                 f"This is a continuation of a multi-page statement "
-                f"(pages {start_page}-{end_page} of {page_count}).\n"
-                f"The first page of this chunk (page {start_page}) "
+                f"(pages {c_start}-{c_end} of {page_count}).\n"
+                f"The first page of this chunk (page {c_start}) "
                 f"was also the last page of the previous chunk.\n"
                 f"Skip any rows from that page — they have already "
                 f"been extracted.\n"
                 f"The table headers from page 1 are: "
                 f"[{headers_str}]\n"
+                f"Use this exact column_order: {col_order_str}\n"
                 f"If headers are repeated on these pages, skip the "
                 f"header rows.\n"
                 f"If headers are NOT present on these pages, use "
                 f"the headers above to identify columns.\n"
                 f"Extract the data rows only."
             )
-
-        # fmt: off
-        result, in_tokens, out_tokens = call_bedrock_with_retry(
-            client, system_prompt, pdf_bytes, user_text,
-        )
-        # fmt: on
-        total_input_tokens += in_tokens
-        total_output_tokens += out_tokens
-
-        # Use chunk 1's metadata as the canonical values.
-        if i == 0:
-            detected_headers = result.get("detected_headers", [])
-            date_format = result.get("date_format", "")
-            decimal_separator = result.get("decimal_separator", ".")
-            thousands_separator = result.get("thousands_separator", "")
-        else:
-            # Warn if later chunks disagree on metadata.
+            c_result, c_in, c_out = call_bedrock_with_retry(
+                client, system_prompt, c_bytes, c_user_text,
+            )
+            # Check for metadata disagreements.
+            warnings: dict[str, str] = {}
             chunk_1_meta = {
                 "date_format": date_format,
                 "decimal_separator": decimal_separator,
                 "thousands_separator": thousands_separator,
             }
             for field, canonical in chunk_1_meta.items():
-                chunk_val = result.get(field, "")
+                chunk_val = c_result.get(field, "")
                 if chunk_val and chunk_val != canonical:
-                    # fmt: off
-                    print(
-                        f"  WARNING: chunk {i + 1} returned "
-                        f"{field}='{chunk_val}' vs chunk 1's "
-                        f"'{canonical}' — using chunk 1's value"
-                    )
-                    # fmt: on
+                    warnings[field] = chunk_val
 
-        all_items.extend(result.get("items", []))
+            c_col_order = c_result.get("column_order", column_order)
+            c_items = reconstruct_items(
+                c_col_order, c_result.get("items", [])
+            )
+            return (chunk_idx, c_items, c_in, c_out, warnings)
+
+        # Dispatch chunks 2+ in parallel, merge in page order.
+        chunk_results: dict[int, tuple[list[dict[str, Any]], int, int]] = {}
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL_CHUNKS) as pool:
+            futures = {
+                pool.submit(_process_chunk, idx): idx
+                for idx in range(1, chunk_count)
+            }
+            # Map field names to chunk 1's canonical values for warnings.
+            canonical_meta = {
+                "date_format": date_format,
+                "decimal_separator": decimal_separator,
+                "thousands_separator": thousands_separator,
+            }
+            for future in as_completed(futures):
+                idx, c_items, c_in, c_out, warns = future.result()
+                for field, val in warns.items():
+                    print(
+                        f"  WARNING: chunk {idx + 1} returned "
+                        f"{field}='{val}' vs chunk 1's "
+                        f"'{canonical_meta[field]}' — using chunk 1's value"
+                    )
+                chunk_results[idx] = (c_items, c_in, c_out)
+
+        # Merge in chunk order to preserve row ordering.
+        for idx in range(1, chunk_count):
+            c_items, c_in, c_out = chunk_results[idx]
+            all_items.extend(c_items)
+            total_input_tokens += c_in
+            total_output_tokens += c_out
 
     # Post-process: convert raw string totals to numeric values.
     all_items = postprocess_items(all_items, decimal_separator, thousands_separator)
@@ -556,7 +617,7 @@ def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     # Increase read timeout — large/dense PDFs can take minutes for
     # Sonnet to process, exceeding boto3's default 60s read timeout.
     session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
-    bedrock_config = BotoConfig(read_timeout=300)
+    bedrock_config = BotoConfig(read_timeout=900)
     client = session.client("bedrock-runtime", config=bedrock_config)
 
     print(f"Found {len(pdf_files)} PDF(s) in {INPUT_DIR}")
@@ -564,43 +625,43 @@ def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     print(f"Chunk size: {CHUNK_SIZE} pages")
     print()
 
-    run_start = time.time()
-    pdf_results: list[dict[str, Any]] = []
+    def _process_single_pdf(pdf_path: Path) -> dict[str, Any]:
+        """Process one PDF and write its output JSON.
 
-    for pdf_path in pdf_files:
+        Returns a summary dict for the run summary.
+        """
         pdf_start = time.time()
-        print(f"Processing: {pdf_path.name}")
+        start_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        print(f"[{start_ts}] Processing: {pdf_path.name}")
         try:
             result = process_pdf(pdf_path, client, system_prompt)
-            # Write per-PDF JSON output.
             output_path = OUTPUT_DIR / f"{pdf_path.stem}.json"
             output_path.write_text(
                 json.dumps(result, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
+            end_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
             # fmt: off
             print(
-                f"  Done: {result['item_count']} items, "
+                f"  [{end_ts}] Done: {result['item_count']} items, "
                 f"{result['page_count']} pages, "
                 f"{result['processing_time_seconds']}s, "
                 f"${result['estimated_cost_usd']:.4f}"
             )
             # fmt: on
-            pdf_results.append(
-                {
-                    "filename": result["filename"],
-                    "page_count": result["page_count"],
-                    "chunk_count": result["chunk_count"],
-                    "item_count": result["item_count"],
-                    "processing_time_seconds": (result["processing_time_seconds"]),
-                    "estimated_cost_usd": result["estimated_cost_usd"],
-                    "status": "success",
-                }
-            )
+            return {
+                "filename": result["filename"],
+                "page_count": result["page_count"],
+                "chunk_count": result["chunk_count"],
+                "item_count": result["item_count"],
+                "processing_time_seconds": result["processing_time_seconds"],
+                "estimated_cost_usd": result["estimated_cost_usd"],
+                "status": "success",
+            }
         except Exception as exc:  # pylint: disable=broad-exception-caught
             elapsed = round(time.time() - pdf_start, 1)
-            print(f"  FAILED: {exc}")
-            # Read page/chunk counts before failure for diagnostics.
+            end_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            print(f"  [{end_ts}] FAILED ({elapsed}s): {exc}")
             try:
                 reader = PdfReader(str(pdf_path))
                 fail_pages = len(reader.pages)
@@ -608,18 +669,30 @@ def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
             except Exception:  # pylint: disable=broad-exception-caught
                 fail_pages = 0
                 fail_chunks = 0
-            pdf_results.append(
-                {
-                    "filename": pdf_path.name,
-                    "page_count": fail_pages,
-                    "chunk_count": fail_chunks,
-                    "item_count": 0,
-                    "processing_time_seconds": elapsed,
-                    "estimated_cost_usd": 0,
-                    "status": "failed",
-                    "error": str(exc),
-                }
-            )
+            return {
+                "filename": pdf_path.name,
+                "page_count": fail_pages,
+                "chunk_count": fail_chunks,
+                "item_count": 0,
+                "processing_time_seconds": elapsed,
+                "estimated_cost_usd": 0,
+                "status": "failed",
+                "error": str(exc),
+            }
+
+    run_start = time.time()
+
+    # Process all PDFs in parallel (limited concurrency to avoid
+    # Bedrock throttling). Results are collected in submission order.
+    pdf_results: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_PDFS) as pool:
+        futures = [
+            pool.submit(_process_single_pdf, pdf_path)
+            for pdf_path in pdf_files
+        ]
+        # Collect in submission order (preserves alphabetical sort).
+        for future in futures:
+            pdf_results.append(future.result())
 
     # Write run summary.
     total_time = round(time.time() - run_start, 1)
