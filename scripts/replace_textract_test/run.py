@@ -1,0 +1,629 @@
+"""Sonnet extraction test script.
+
+Reads PDFs from the pdfs/ directory, sends each to Sonnet 4.6 via
+Bedrock Converse API with forced tool use, and writes structured
+JSON output for manual accuracy comparison against Textract.
+
+Large PDFs are chunked at ~10 pages per request with 1-page overlap
+to stay within context window limits.
+"""
+
+import io
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import boto3
+from pypdf import PdfReader, PdfWriter
+
+# -- Config ------------------------------------------------------------------
+
+SCRIPT_DIR = Path(__file__).parent
+INPUT_DIR = SCRIPT_DIR / "pdfs"
+OUTPUT_DIR = SCRIPT_DIR / "output"
+CHUNK_SIZE = 10
+AWS_PROFILE = os.environ.get("AWS_PROFILE", "dotelastic-production")
+AWS_REGION = "eu-west-1"
+MODEL_ID = "eu.anthropic.claude-sonnet-4-6-20250514-v1:0"
+SYSTEM_PROMPT_PATH = SCRIPT_DIR / "system_prompt.md"
+COST_PER_INPUT_TOKEN = 3.0 / 1_000_000  # $3/M input tokens
+COST_PER_OUTPUT_TOKEN = 15.0 / 1_000_000  # $15/M output tokens
+
+# Max retries for transient Bedrock errors.
+MAX_RETRIES = 2
+# Base delay in seconds for exponential backoff.
+BASE_RETRY_DELAY = 2.0
+
+# Bedrock document block size limit (~4.5 MB). Use 4 MB as safety margin.
+MAX_CHUNK_BYTES = 4 * 1024 * 1024
+
+
+# -- Tool schema -------------------------------------------------------------
+
+# pylint: disable=line-too-long
+EXTRACT_TOOL: dict[str, Any] = {
+    "name": "extract_statement_rows",
+    "description": ("Extract structured line items from a supplier statement PDF."),
+    "inputSchema": {
+        "json": {
+            "type": "object",
+            "properties": {
+                "detected_headers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": ("The column headers detected in the main statement table."),
+                },
+                "date_format": {
+                    "type": "string",
+                    "description": ("Detected date format using SDF tokens (e.g. 'DD.MM.YYYY'). Scan all dates — if any day > 12, use that to disambiguate DD vs MM."),
+                },
+                "decimal_separator": {
+                    "type": "string",
+                    "enum": [".", ","],
+                    "description": ("Character used as decimal separator in monetary amounts."),
+                },
+                "thousands_separator": {
+                    "type": "string",
+                    "enum": [",", ".", " ", "'", ""],
+                    "description": ("Character used as thousands separator in monetary amounts. Empty string if none."),
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "date": {
+                                "type": "string",
+                                "description": ("Transaction date exactly as it appears in the PDF. Empty string if absent."),
+                            },
+                            "number": {
+                                "type": "string",
+                                "description": ("Invoice/document number. Empty string if absent."),
+                            },
+                            "total": {
+                                "type": "object",
+                                "additionalProperties": {"type": "string"},
+                                "description": ("Monetary columns as {header_name: raw_string_value}. Return values exactly as printed in the PDF."),
+                            },
+                            "due_date": {
+                                "type": "string",
+                                "description": ("Due date exactly as it appears in the PDF. Empty string if absent."),
+                            },
+                            "reference": {
+                                "type": "string",
+                                "description": ("Cross ref / doc ref — use the first clearly reference-like column. Empty string if absent."),
+                            },
+                            "raw": {
+                                "type": "object",
+                                "description": ("Any columns NOT already captured by date, number, total, due_date, or reference. Empty object if none."),
+                            },
+                        },
+                        "required": [
+                            "date",
+                            "number",
+                            "total",
+                            "due_date",
+                            "reference",
+                            "raw",
+                        ],
+                    },
+                },
+            },
+            "required": [
+                "detected_headers",
+                "date_format",
+                "decimal_separator",
+                "thousands_separator",
+                "items",
+            ],
+        }
+    },
+}
+# pylint: enable=line-too-long
+
+
+# -- PDF chunking ------------------------------------------------------------
+
+
+def chunk_pdf(reader: PdfReader) -> list[tuple[bytes, int, int]]:
+    """Split a PDF into overlapping page chunks.
+
+    Each chunk is a self-contained PDF (as bytes) with 1-page overlap
+    between consecutive chunks so rows spanning page boundaries are
+    captured. If a chunk exceeds MAX_CHUNK_BYTES, it is recursively
+    halved until each sub-chunk fits.
+
+    Args:
+        reader: PdfReader for the source PDF.
+
+    Returns:
+        List of (pdf_bytes, start_page_1indexed, end_page_1indexed).
+    """
+    total_pages = len(reader.pages)
+
+    # Build page ranges with 1-page overlap.
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    while start < total_pages:
+        end = min(start + CHUNK_SIZE, total_pages)
+        ranges.append((start, end))
+        # Next chunk starts at the last page of this chunk (overlap).
+        start = end - 1 if end < total_pages else end
+
+    chunks: list[tuple[bytes, int, int]] = []
+    for page_start, page_end in ranges:
+        sub_chunks = _build_chunk_bytes(reader, page_start, page_end)
+        chunks.extend(sub_chunks)
+
+    return chunks
+
+
+def _build_chunk_bytes(
+    reader: PdfReader,
+    page_start: int,
+    page_end: int,
+) -> list[tuple[bytes, int, int]]:
+    """Build PDF bytes for a page range, splitting if over size limit.
+
+    Recursively halves the page range until each chunk is under
+    MAX_CHUNK_BYTES (Bedrock document block limit).
+
+    Args:
+        reader: PdfReader for the source PDF.
+        page_start: Start page index (0-based, inclusive).
+        page_end: End page index (0-based, exclusive).
+
+    Returns:
+        List of (pdf_bytes, start_page_1indexed, end_page_1indexed).
+    """
+    writer = PdfWriter()
+    for i in range(page_start, page_end):
+        writer.add_page(reader.pages[i])
+
+    buf = io.BytesIO()
+    writer.write(buf)
+    pdf_bytes = buf.getvalue()
+
+    if len(pdf_bytes) <= MAX_CHUNK_BYTES or (page_end - page_start) <= 1:
+        # Fits, or can't split further (single page).
+        return [(pdf_bytes, page_start + 1, page_end)]
+
+    # Too large — split in half and recurse.
+    mid = page_start + (page_end - page_start) // 2
+    left = _build_chunk_bytes(reader, page_start, mid)
+    right = _build_chunk_bytes(reader, mid, page_end)
+    return left + right
+
+
+# -- Bedrock API -------------------------------------------------------------
+
+
+def call_bedrock(
+    client: Any,
+    system_prompt: str,
+    pdf_bytes: bytes,
+    user_text: str,
+) -> tuple[dict[str, Any], int, int]:
+    """Call Bedrock Converse API with a PDF document and forced tool use.
+
+    Args:
+        client: boto3 bedrock-runtime client.
+        system_prompt: System prompt text.
+        pdf_bytes: Raw PDF bytes for the document content block.
+        user_text: User message text (chunk context / instructions).
+
+    Returns:
+        Tuple of (tool_input_dict, input_tokens, output_tokens).
+
+    Raises:
+        ValueError: If response contains no tool use block.
+    """
+    response = client.converse(
+        modelId=MODEL_ID,
+        system=[{"text": system_prompt}],
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "document": {
+                            "name": "statement",
+                            "format": "pdf",
+                            "source": {"bytes": pdf_bytes},
+                        }
+                    },
+                    {"text": user_text},
+                ],
+            }
+        ],
+        toolConfig={
+            "tools": [{"toolSpec": EXTRACT_TOOL}],
+            "toolChoice": {"tool": {"name": "extract_statement_rows"}},
+        },
+    )
+
+    # Extract tool use result from response.
+    content_blocks = response.get("output", {}).get("message", {}).get("content", [])
+    for block in content_blocks:
+        tool_use = block.get("toolUse")
+        if tool_use and tool_use.get("name") == "extract_statement_rows":
+            usage = response.get("usage", {})
+            return (
+                tool_use["input"],
+                usage.get("inputTokens", 0),
+                usage.get("outputTokens", 0),
+            )
+
+    raise ValueError("Bedrock response did not contain an extract_statement_rows tool use block")
+
+
+def call_bedrock_with_retry(
+    client: Any,
+    system_prompt: str,
+    pdf_bytes: bytes,
+    user_text: str,
+) -> tuple[dict[str, Any], int, int]:
+    """Call Bedrock with retries for transient server errors.
+
+    Retries up to MAX_RETRIES times with exponential backoff for
+    InternalServerException and ServiceUnavailableException. Fails
+    immediately on client/validation errors.
+
+    Args:
+        client: boto3 bedrock-runtime client.
+        system_prompt: System prompt text.
+        pdf_bytes: Raw PDF bytes.
+        user_text: User message text.
+
+    Returns:
+        Tuple of (tool_input_dict, input_tokens, output_tokens).
+
+    Raises:
+        Exception: If all retries exhausted or non-retryable error.
+    """
+    # Transient error codes that warrant a retry.
+    retryable = {
+        "InternalServerException",
+        "ServiceUnavailableException",
+    }
+    last_error: Exception | None = None
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return call_bedrock(client, system_prompt, pdf_bytes, user_text)
+        except client.exceptions.ThrottlingException:
+            # Throttling is transient — retry.
+            last_error = Exception("ThrottlingException")
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            error_code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+            if error_code in retryable:
+                last_error = exc
+            else:
+                # Non-retryable — fail immediately.
+                raise
+
+        if attempt < MAX_RETRIES:
+            delay = BASE_RETRY_DELAY * (2**attempt)
+            print(f"  Retrying in {delay:.0f}s (attempt {attempt + 1}/{MAX_RETRIES})...")
+            time.sleep(delay)
+
+    raise last_error  # type: ignore[misc]
+
+
+# -- Post-processing ---------------------------------------------------------
+
+
+def convert_amount(
+    raw: str,
+    decimal_sep: str,
+    thousands_sep: str,
+) -> float | str:
+    """Convert a raw monetary string to a float.
+
+    Handles trailing minus signs (126.50-), parenthetical negatives
+    ((126.50)), thousands separators, and decimal separators.
+
+    Args:
+        raw: Raw string value from the LLM (e.g. "3,848.97", "126.50-").
+        decimal_sep: Detected decimal separator ("." or ",").
+        thousands_sep: Detected thousands separator.
+
+    Returns:
+        Float value, or the original string if conversion fails.
+    """
+    s = raw.strip()
+    if not s:
+        return s
+
+    # Detect negative: trailing minus or parentheses.
+    negative = False
+    if s.endswith("-"):
+        negative = True
+        s = s[:-1].strip()
+    elif s.startswith("(") and s.endswith(")"):
+        negative = True
+        s = s[1:-1].strip()
+    elif s.startswith("-"):
+        negative = True
+        s = s[1:].strip()
+
+    # Strip thousands separator.
+    if thousands_sep:
+        s = s.replace(thousands_sep, "")
+
+    # Normalise decimal separator to ".".
+    if decimal_sep == ",":
+        s = s.replace(",", ".")
+
+    try:
+        value = float(s)
+        return -value if negative else value
+    except ValueError:
+        return raw
+
+
+def postprocess_items(
+    items: list[dict[str, Any]],
+    decimal_sep: str,
+    thousands_sep: str,
+) -> list[dict[str, Any]]:
+    """Convert raw string totals to numeric values.
+
+    Args:
+        items: List of extracted items with string total values.
+        decimal_sep: Detected decimal separator.
+        thousands_sep: Detected thousands separator.
+
+    Returns:
+        Items with total values converted to floats where possible.
+    """
+    for item in items:
+        if "total" in item and isinstance(item["total"], dict):
+            # fmt: off
+            item["total"] = {
+                k: convert_amount(v, decimal_sep, thousands_sep)
+                for k, v in item["total"].items()
+            }
+            # fmt: on
+    return items
+
+
+# -- Single-PDF processing ---------------------------------------------------
+
+
+def process_pdf(  # pylint: disable=too-many-locals
+    pdf_path: Path,
+    client: Any,
+    system_prompt: str,
+) -> dict[str, Any]:
+    """Process a single PDF through Sonnet extraction.
+
+    Chunks the PDF, calls Bedrock for each chunk with header
+    propagation, merges results, post-processes numeric values,
+    and returns the structured output dict.
+
+    Args:
+        pdf_path: Path to the input PDF.
+        client: boto3 bedrock-runtime client.
+        system_prompt: System prompt text.
+
+    Returns:
+        Output dict with items, metadata, and cost estimate.
+
+    Raises:
+        Exception: If any chunk fails after retries.
+    """
+    start_time = time.time()
+
+    reader = PdfReader(str(pdf_path))
+    page_count = len(reader.pages)
+    chunks = chunk_pdf(reader)
+    chunk_count = len(chunks)
+
+    is_single_chunk = chunk_count == 1
+
+    all_items: list[dict[str, Any]] = []
+    detected_headers: list[str] = []
+    date_format = ""
+    decimal_separator = ""
+    thousands_separator = ""
+    total_input_tokens = 0
+    total_output_tokens = 0
+
+    for i, (pdf_bytes, start_page, end_page) in enumerate(chunks):
+        print(f"  Processing chunk {i + 1}/{chunk_count} (pages {start_page}-{end_page})...")
+
+        if is_single_chunk:
+            # Single-chunk PDF — just ask for extraction.
+            user_text = "Extract all line items from this statement."
+        elif i == 0:
+            # First chunk of multi-chunk PDF.
+            user_text = "Extract all line items from this statement."
+        else:
+            # Subsequent chunks — include header context and overlap
+            # instructions so the LLM can map columns correctly even
+            # when headers only appear on page 1.
+            headers_str = ", ".join(detected_headers)
+            user_text = (
+                f"This is a continuation of a multi-page statement "
+                f"(pages {start_page}-{end_page} of {page_count}).\n"
+                f"The first page of this chunk (page {start_page}) "
+                f"was also the last page of the previous chunk.\n"
+                f"Skip any rows from that page — they have already "
+                f"been extracted.\n"
+                f"The table headers from page 1 are: "
+                f"[{headers_str}]\n"
+                f"If headers are repeated on these pages, skip the "
+                f"header rows.\n"
+                f"If headers are NOT present on these pages, use "
+                f"the headers above to identify columns.\n"
+                f"Extract the data rows only."
+            )
+
+        # fmt: off
+        result, in_tokens, out_tokens = call_bedrock_with_retry(
+            client, system_prompt, pdf_bytes, user_text,
+        )
+        # fmt: on
+        total_input_tokens += in_tokens
+        total_output_tokens += out_tokens
+
+        # Use chunk 1's metadata as the canonical values.
+        if i == 0:
+            detected_headers = result.get("detected_headers", [])
+            date_format = result.get("date_format", "")
+            decimal_separator = result.get("decimal_separator", ".")
+            thousands_separator = result.get("thousands_separator", "")
+        else:
+            # Warn if later chunks disagree on metadata.
+            chunk_1_meta = {
+                "date_format": date_format,
+                "decimal_separator": decimal_separator,
+                "thousands_separator": thousands_separator,
+            }
+            for field, canonical in chunk_1_meta.items():
+                chunk_val = result.get(field, "")
+                if chunk_val and chunk_val != canonical:
+                    # fmt: off
+                    print(
+                        f"  WARNING: chunk {i + 1} returned "
+                        f"{field}='{chunk_val}' vs chunk 1's "
+                        f"'{canonical}' — using chunk 1's value"
+                    )
+                    # fmt: on
+
+        all_items.extend(result.get("items", []))
+
+    # Post-process: convert raw string totals to numeric values.
+    all_items = postprocess_items(all_items, decimal_separator, thousands_separator)
+
+    elapsed = time.time() - start_time
+    cost = total_input_tokens * COST_PER_INPUT_TOKEN + total_output_tokens * COST_PER_OUTPUT_TOKEN
+
+    return {
+        "filename": pdf_path.name,
+        "page_count": page_count,
+        "chunk_count": chunk_count,
+        "detected_headers": detected_headers,
+        "date_format": date_format,
+        "decimal_separator": decimal_separator,
+        "thousands_separator": thousands_separator,
+        "items": all_items,
+        "item_count": len(all_items),
+        "processing_time_seconds": round(elapsed, 1),
+        "estimated_cost_usd": round(cost, 4),
+    }
+
+
+# -- Main --------------------------------------------------------------------
+
+
+def main() -> None:
+    """Run extraction on all PDFs in the input directory."""
+    # Validate input directory exists and has PDFs.
+    if not INPUT_DIR.exists():
+        print(f"ERROR: Input directory not found: {INPUT_DIR}")
+        print("Create it and add PDF files to test.")
+        sys.exit(1)
+
+    pdf_files = sorted(INPUT_DIR.glob("*.pdf"))
+    if not pdf_files:
+        print(f"ERROR: No PDF files found in {INPUT_DIR}")
+        sys.exit(1)
+
+    # Load system prompt.
+    system_prompt = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+
+    # Create output directory.
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Init Bedrock client with the configured AWS profile.
+    session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
+    client = session.client("bedrock-runtime")
+
+    print(f"Found {len(pdf_files)} PDF(s) in {INPUT_DIR}")
+    print(f"Model: {MODEL_ID}")
+    print(f"Chunk size: {CHUNK_SIZE} pages")
+    print()
+
+    run_start = time.time()
+    pdf_results: list[dict[str, Any]] = []
+
+    for pdf_path in pdf_files:
+        print(f"Processing: {pdf_path.name}")
+        try:
+            result = process_pdf(pdf_path, client, system_prompt)
+            # Write per-PDF JSON output.
+            output_path = OUTPUT_DIR / f"{pdf_path.stem}.json"
+            output_path.write_text(
+                json.dumps(result, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            # fmt: off
+            print(
+                f"  Done: {result['item_count']} items, "
+                f"{result['page_count']} pages, "
+                f"{result['processing_time_seconds']}s, "
+                f"${result['estimated_cost_usd']:.4f}"
+            )
+            # fmt: on
+            pdf_results.append(
+                {
+                    "filename": result["filename"],
+                    "page_count": result["page_count"],
+                    "chunk_count": result["chunk_count"],
+                    "item_count": result["item_count"],
+                    "processing_time_seconds": (result["processing_time_seconds"]),
+                    "estimated_cost_usd": result["estimated_cost_usd"],
+                    "status": "success",
+                }
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            print(f"  FAILED: {exc}")
+            pdf_results.append(
+                {
+                    "filename": pdf_path.name,
+                    "page_count": 0,
+                    "chunk_count": 0,
+                    "item_count": 0,
+                    "processing_time_seconds": 0,
+                    "estimated_cost_usd": 0,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+
+    # Write run summary.
+    total_time = round(time.time() - run_start, 1)
+    total_items = sum(r["item_count"] for r in pdf_results)
+    total_cost = sum(r["estimated_cost_usd"] for r in pdf_results)
+
+    summary = {
+        "run_timestamp": datetime.now(timezone.utc).isoformat(),
+        "total_pdfs": len(pdf_results),
+        "total_items": total_items,
+        "total_time_seconds": total_time,
+        "total_estimated_cost_usd": round(total_cost, 4),
+        "pdfs": pdf_results,
+    }
+    summary_path = OUTPUT_DIR / "run_summary.json"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    print()
+    print("=" * 60)
+    print(f"Total PDFs: {len(pdf_results)}")
+    print(f"Total items: {total_items}")
+    print(f"Total time: {total_time}s")
+    print(f"Total estimated cost: ${total_cost:.4f}")
+    print(f"Summary: {summary_path}")
+
+
+if __name__ == "__main__":
+    main()
