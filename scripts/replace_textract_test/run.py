@@ -339,6 +339,11 @@ def convert_amount(
     if not s:
         return s
 
+    # Guard: if decimal and thousands separators are the same non-empty
+    # value, we can't reliably parse — return raw string.
+    if decimal_sep and thousands_sep and decimal_sep == thousands_sep:
+        return raw
+
     # Detect negative: trailing minus or parentheses.
     negative = False
     if s.endswith("-"):
@@ -372,6 +377,8 @@ def postprocess_items(
     thousands_sep: str,
 ) -> list[dict[str, Any]]:
     """Convert raw string totals to numeric values.
+
+    Mutates items in place and returns the same list for convenience.
 
     Args:
         items: List of extracted items with string total values.
@@ -554,6 +561,7 @@ def main() -> None:
     pdf_results: list[dict[str, Any]] = []
 
     for pdf_path in pdf_files:
+        pdf_start = time.time()
         print(f"Processing: {pdf_path.name}")
         try:
             result = process_pdf(pdf_path, client, system_prompt)
@@ -583,7 +591,7 @@ def main() -> None:
                 }
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            elapsed = round(time.time() - run_start, 1)
+            elapsed = round(time.time() - pdf_start, 1)
             print(f"  FAILED: {exc}")
             # Read page/chunk counts before failure for diagnostics.
             try:
