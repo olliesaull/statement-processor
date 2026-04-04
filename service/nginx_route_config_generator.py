@@ -67,12 +67,11 @@ def flask_to_nginx_pattern(flask_route: str) -> str:
         r"<([^:>]+)>": r"[^/]+",  # Default converter
     }
 
-    pattern = flask_route
+    # Escape dots in literal path segments before converter substitution
+    # to avoid corrupting regex patterns inside converters (e.g. .* or \.\d+)
+    pattern = flask_route.replace(".", "\\.")
     for flask_conv, nginx_conv in converters.items():
         pattern = re.sub(flask_conv, nginx_conv, pattern)
-
-    # Escape dots so they match literally
-    pattern = pattern.replace(".", "\\.")
 
     return f"^{pattern}$"
 
@@ -97,9 +96,13 @@ def is_static_route(route_path: str) -> bool:
 def extract_flask_routes(app) -> list[dict]:
     """Extract application routes from a Flask app, excluding static routes.
 
+    Merges routes with the same path (Flask may register the same URL
+    under multiple endpoints, e.g. GET and POST separately) to avoid
+    duplicate nginx location blocks.
+
     Returns a sorted list of dicts with keys: endpoint, original, pattern, methods.
     """
-    routes = []
+    merged: dict[str, dict] = {}
     skipped = []
 
     with app.app_context():
@@ -109,16 +112,29 @@ def extract_flask_routes(app) -> list[dict]:
                 continue
 
             # Keep all methods except OPTIONS (Nginx handles OPTIONS implicitly)
-            methods = list(rule.methods - {"OPTIONS"})
-            if not methods:
-                methods = ["GET"]
+            methods = set(rule.methods - {"OPTIONS"})
 
-            routes.append({"endpoint": rule.endpoint, "original": rule.rule, "pattern": flask_to_nginx_pattern(rule.rule), "methods": methods})
+            if rule.rule in merged:
+                # Same path registered under a different endpoint — merge methods
+                merged[rule.rule]["methods"].update(methods)
+            else:
+                merged[rule.rule] = {
+                    "endpoint": rule.endpoint,
+                    "original": rule.rule,
+                    "pattern": flask_to_nginx_pattern(rule.rule),
+                    "methods": methods,
+                }
 
     if skipped:
         print(f"INFO: Skipped {len(skipped)} static/handled routes:", file=sys.stderr)
         for route in skipped:
             print(f"  - {route}", file=sys.stderr)
+
+    # Convert method sets to sorted lists for deterministic output
+    routes = []
+    for route in merged.values():
+        route["methods"] = sorted(route["methods"])
+        routes.append(route)
 
     return sorted(routes, key=lambda x: x["original"])
 
