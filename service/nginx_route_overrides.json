@@ -1,0 +1,5 @@
+{
+  "comment": "Per-route Nginx directive overrides. Applied inside the location block.",
+  "/upload-statements": {"client_max_body_size": "10m"},
+  "/api/upload-statements/preflight": {"client_max_body_size": "10m"}
+}
