@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import boto3
+from botocore.config import Config as BotoConfig
 from pypdf import PdfReader, PdfWriter
 
 # -- Config ------------------------------------------------------------------
@@ -28,7 +29,7 @@ OUTPUT_DIR = SCRIPT_DIR / "output"
 CHUNK_SIZE = 10
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "dotelastic-production")
 AWS_REGION = "eu-west-1"
-MODEL_ID = "eu.anthropic.claude-sonnet-4-6-20250514-v1:0"
+MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
 SYSTEM_PROMPT_PATH = SCRIPT_DIR / "system_prompt.md"
 COST_PER_INPUT_TOKEN = 3.0 / 1_000_000  # $3/M input tokens
 COST_PER_OUTPUT_TOKEN = 15.0 / 1_000_000  # $15/M output tokens
@@ -299,7 +300,10 @@ def call_bedrock_with_retry(
             # Throttling is transient — retry.
             last_error = exc
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            error_code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+            # boto3 timeout exceptions have .response = None, so
+            # guard against that to avoid masking the real error.
+            resp = getattr(exc, "response", None) or {}
+            error_code = resp.get("Error", {}).get("Code", "")
             if error_code in retryable:
                 last_error = exc
             else:
@@ -549,8 +553,11 @@ def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Init Bedrock client with the configured AWS profile.
+    # Increase read timeout — large/dense PDFs can take minutes for
+    # Sonnet to process, exceeding boto3's default 60s read timeout.
     session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
-    client = session.client("bedrock-runtime")
+    bedrock_config = BotoConfig(read_timeout=300)
+    client = session.client("bedrock-runtime", config=bedrock_config)
 
     print(f"Found {len(pdf_files)} PDF(s) in {INPUT_DIR}")
     print(f"Model: {MODEL_ID}")
