@@ -17,9 +17,11 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install Valkey for in-container server-side session storage.
+# Install Valkey, Nginx, and curl (for readiness checks).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     valkey \
+    nginx \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder.
@@ -36,6 +38,8 @@ COPY templates/ ./templates/
 COPY static/ ./static/
 COPY utils/ ./utils/
 COPY valkey.conf /etc/valkey/valkey.conf
+COPY nginx.conf /app/nginx.conf
+COPY nginx-routes.conf /etc/nginx/nginx-routes.conf
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
