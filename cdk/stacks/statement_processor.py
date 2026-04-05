@@ -432,6 +432,9 @@ class StatementProcessorStack(Stack):
                         "STRIPE_CURRENCY": "gbp",
                         "STRIPE_MIN_TOKENS": "10",
                         "STRIPE_MAX_TOKENS": "10000",
+                        # CloudFront-only access — Nginx rejects requests missing this header
+                        # when STAGE=prod (see start.sh configure_nginx).
+                        "X_STATEMENT_CF": "R7K92M3XWPQ4J",
                     },
                 ),
             ),
@@ -447,6 +450,7 @@ class StatementProcessorStack(Stack):
             origin=origins.HttpOrigin(
                 app_runner_service_domain,
                 protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+                custom_headers={"X-Statement-CF": "R7K92M3XWPQ4J"},
             ),
             viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
