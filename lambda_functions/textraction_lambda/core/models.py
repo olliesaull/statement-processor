@@ -64,6 +64,7 @@ class StatementItem(BaseModel):
     @classmethod
     def _coerce_total(cls, v: Any) -> dict[str, Number]:
         """Normalize `total` into a simple `{label: value}` mapping."""
+
         def _coerce_val(val: Any) -> Number:
             return cls._coerce_number(val)
 
