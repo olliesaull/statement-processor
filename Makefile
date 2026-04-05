@@ -6,7 +6,7 @@
 .PHONY: help rebuild-venvs update-venvs format lint type-check security vulture test test-verbose clean run-app
 
 # Common exclusions for Python tooling.
-PY_EXCLUDES := -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/__pycache__/*'
+PY_EXCLUDES := -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/__pycache__/*' -not -path '*/cdk/*' -not -path '*/scripts/*'
 
 # Pylint/mypy settings mirrored from numerint/environments.
 # Use one pylint process so lint works reliably across local and sandbox environments (agents).

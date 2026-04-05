@@ -1,22 +1,33 @@
-# Root-level configuration for the entire project
-# This applies to scripts and other files not in service/ or lambda_functions/
+[project]
+name = "statement-processor-service"
+version = "1.0.0"
+description = "Statement Processor - Service"
+requires-python = ">=3.13"
 
+# Ruff configuration for linting and formatting
 [tool.ruff]
 target-version = "py313"
 line-length = 200
 indent-width = 4
 respect-gitignore = true
 
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-skip-magic-trailing-comma = false
-line-ending = "auto"
+include = ["*.py"]
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "*.egg-info",
+    ".pytest_cache",
+    ".ruff_cache",
+    "cdk",
+    "scripts",
+]
 
 [tool.ruff.lint]
 select = [
     "E",     # pycodestyle errors
-    "W",     # pycodestyle warnings
+    "W",     # pycodestyle warnings  
     "F",     # pyflakes (includes unused imports)
     "I",     # isort (import sorting)
     "B",     # flake8-bugbear
@@ -27,5 +38,71 @@ select = [
 ]
 
 ignore = [
-    "E501",  # Line too long (handled by formatter)
+    "E501",   # Line too long (handled by formatter)
+    "B008",   # Do not perform function calls in argument defaults
+    "B024",   # Abstract base class without abstract methods (intentional design)
 ]
+
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+skip-magic-trailing-comma = true
+
+# MyPy configuration for type checking
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+warn_no_return = true
+strict_equality = true
+ignore_missing_imports = true
+ignore_errors = true
+namespace_packages = false
+exclude = ["cdk/", "scripts/"]
+
+# Pylint configuration
+[tool.pylint.main]
+jobs = 0
+persistent = true
+py-version = "3.13"
+ignore-paths = ["cdk/.*", "scripts/.*"]
+
+[tool.pylint.messages_control]
+disable = [
+    "E0401",  # Unable to import (often false positives in complex setups)
+    "C0103",  # Invalid name (allow short variable names in context)
+    "C0302",  # Too many lines in module
+    "R0902",  # Too many instance attributes
+    "R0903",  # Too few public methods
+    "R0904",  # Too many public methods
+    "R0913",  # Too many arguments
+    "R0914",  # Too many local variables
+    "R0915",  # Too many statements
+    "R0917",  # Too many positional arguments
+    "W0511",  # TODO/FIXME comments
+    "W0613",  # Unused argument
+    "W0718",  # Catching too general exception
+]
+
+[tool.pylint.format]
+max-line-length = 200
+max-module-lines = 2000
+indent-string = "    "
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "ex", "_", "id", "pk", "db"]
+
+[tool.pylint.design]
+max-args = 10
+max-attributes = 15
+max-branches = 15
+max-locals = 20
+max-statements = 60
+max-returns = 10

@@ -84,7 +84,9 @@ EXTRACT_TOOL: dict[str, Any] = {
                 "column_order": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": ("Ordered list of column names for each item array. E.g. ['date', 'number', 'due_date', 'reference', 'Debit', 'Credit', 'Balance', 'Description']. Use 'date', 'number', 'due_date', 'reference' for the standard fields. Use the PDF column header name for monetary columns and any extra columns."),
+                    "description": (
+                        "Ordered list of column names for each item array. E.g. ['date', 'number', 'due_date', 'reference', 'Debit', 'Credit', 'Balance', 'Description']. Use 'date', 'number', 'due_date', 'reference' for the standard fields. Use the PDF column header name for monetary columns and any extra columns."
+                    ),
                 },
                 "items": {
                     "type": "array",
@@ -471,7 +473,10 @@ def process_pdf(  # pylint: disable=too-many-locals
     user_text_0 = "Extract all line items from this statement."
 
     result_0, in_tok_0, out_tok_0 = call_bedrock_with_retry(
-        client, system_prompt, pdf_bytes_0, user_text_0,
+        client,
+        system_prompt,
+        pdf_bytes_0,
+        user_text_0,
     )
     detected_headers = result_0.get("detected_headers", [])
     column_order = result_0.get("column_order", [])
@@ -499,10 +504,7 @@ def process_pdf(  # pylint: disable=too-many-locals
             metadata_warnings).
             """
             c_bytes, c_start, c_end = chunks[chunk_idx]
-            print(
-                f"  Processing chunk {chunk_idx + 1}/{chunk_count} "
-                f"(pages {c_start}-{c_end})..."
-            )
+            print(f"  Processing chunk {chunk_idx + 1}/{chunk_count} (pages {c_start}-{c_end})...")
             c_user_text = (
                 f"This is a continuation of a multi-page statement "
                 f"(pages {c_start}-{c_end} of {page_count}).\n"
@@ -520,7 +522,10 @@ def process_pdf(  # pylint: disable=too-many-locals
                 f"Extract the data rows only."
             )
             c_result, c_in, c_out = call_bedrock_with_retry(
-                client, system_prompt, c_bytes, c_user_text,
+                client,
+                system_prompt,
+                c_bytes,
+                c_user_text,
             )
             # Check for metadata disagreements.
             warnings: dict[str, str] = {}
@@ -535,18 +540,13 @@ def process_pdf(  # pylint: disable=too-many-locals
                     warnings[field] = chunk_val
 
             c_col_order = c_result.get("column_order", column_order)
-            c_items = reconstruct_items(
-                c_col_order, c_result.get("items", [])
-            )
+            c_items = reconstruct_items(c_col_order, c_result.get("items", []))
             return (chunk_idx, c_items, c_in, c_out, warnings)
 
         # Dispatch chunks 2+ in parallel, merge in page order.
         chunk_results: dict[int, tuple[list[dict[str, Any]], int, int]] = {}
         with ThreadPoolExecutor(max_workers=MAX_PARALLEL_CHUNKS) as pool:
-            futures = {
-                pool.submit(_process_chunk, idx): idx
-                for idx in range(1, chunk_count)
-            }
+            futures = {pool.submit(_process_chunk, idx): idx for idx in range(1, chunk_count)}
             # Map field names to chunk 1's canonical values for warnings.
             canonical_meta = {
                 "date_format": date_format,
@@ -556,11 +556,7 @@ def process_pdf(  # pylint: disable=too-many-locals
             for future in as_completed(futures):
                 idx, c_items, c_in, c_out, warns = future.result()
                 for field, val in warns.items():
-                    print(
-                        f"  WARNING: chunk {idx + 1} returned "
-                        f"{field}='{val}' vs chunk 1's "
-                        f"'{canonical_meta[field]}' — using chunk 1's value"
-                    )
+                    print(f"  WARNING: chunk {idx + 1} returned {field}='{val}' vs chunk 1's '{canonical_meta[field]}' — using chunk 1's value")
                 chunk_results[idx] = (c_items, c_in, c_out)
 
         # Merge in chunk order to preserve row ordering.
@@ -686,10 +682,7 @@ def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     # Bedrock throttling). Results are collected in submission order.
     pdf_results: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=MAX_PARALLEL_PDFS) as pool:
-        futures = [
-            pool.submit(_process_single_pdf, pdf_path)
-            for pdf_path in pdf_files
-        ]
+        futures = [pool.submit(_process_single_pdf, pdf_path) for pdf_path in pdf_files]
         # Collect in submission order (preserves alphabetical sort).
         for future in futures:
             pdf_results.append(future.result())
