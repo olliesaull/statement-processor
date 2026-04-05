@@ -3,7 +3,7 @@ Pydantic models used across the Lambda.
 
 These are small, focused schemas that:
 - Validate/normalize the StepFunctions -> Lambda event payload (`TextractionEvent`)
-- Provide a typed representation of contact mapping config (`ContactConfig`)
+- Define the extraction output contract (`ExtractionResult`)
 - Provide a typed representation of extracted statement data (`StatementItem`, `SupplierStatement`)
 """
 
@@ -16,53 +16,26 @@ Number = int | float | str
 
 
 class TextractionEvent(BaseModel):
-    """
-    Typed event payload for this Lambda.
+    """Typed event payload for this Lambda.
 
-    StepFunctions passes keys in camelCase (e.g. `jobId`); we expose snake_case attributes via Pydantic field aliases.
+    StepFunctions passes keys in camelCase; we expose snake_case
+    attributes via Pydantic field aliases.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    job_id: str = Field(alias="jobId")
     statement_id: str = Field(alias="statementId")
     tenant_id: str = Field(alias="tenantId")
     contact_id: str = Field(alias="contactId")
     pdf_key: str = Field(alias="pdfKey")
     json_key: str = Field(alias="jsonKey")
     pdf_bucket: str | None = Field(default=None, alias="pdfBucket")
-    textract_status: str | None = Field(default=None, alias="textractStatus")
-
-
-class ContactConfig(BaseModel):
-    """Contact mapping config used by table extraction and persisted in DynamoDB."""
-
-    model_config = ConfigDict(extra="allow")
-
-    date: str = ""
-    due_date: str = ""
-    number: str = ""
-    total: list[str] = Field(default_factory=list)
-    date_format: str = ""
-    decimal_separator: str = "."
-    thousands_separator: str = ","
-    raw: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("total", mode="before")
-    @classmethod
-    def _coerce_total(cls, value: Any) -> list[str]:
-        """Normalize configured total headers into a trimmed string list."""
-        if value is None:
-            return []
-        if not isinstance(value, list):
-            raise TypeError("total must be a list")
-        return [str(item).strip() for item in value if str(item).strip()]
+    page_count: int = Field(alias="pageCount")
 
 
 class StatementItem(BaseModel):
     """Canonical line item extracted from a supplier statement."""
 
-    # These fields are populated by `core/transform.table_to_json`.
     statement_item_id: str = ""
     date: str | None = ""
     number: str | None = ""
@@ -74,7 +47,7 @@ class StatementItem(BaseModel):
 
     @classmethod
     def _coerce_number(cls, v: Any) -> Any:
-        # Best-effort conversion of numeric-looking values into int/float; otherwise keep the original.
+        """Best-effort conversion of numeric-looking values into int/float."""
         if v is None:
             return ""
         if isinstance(v, (int, float)):
@@ -90,7 +63,7 @@ class StatementItem(BaseModel):
     @field_validator("total", mode="before")
     @classmethod
     def _coerce_total(cls, v: Any) -> dict[str, Number]:
-        # Normalize `total` into a simple `{label: value}` mapping from dict input.
+        """Normalize `total` into a simple `{label: value}` mapping."""
         def _coerce_val(val: Any) -> Number:
             return cls._coerce_number(val)
 
@@ -108,9 +81,40 @@ class StatementItem(BaseModel):
         return {}
 
 
+class ExtractionResult(BaseModel):
+    """Output contract for the extraction layer.
+
+    Everything a caller needs from extract_statement(). Items already
+    have floats in total (convert_amount ran inside the boundary).
+    """
+
+    items: list[StatementItem]
+    detected_headers: list[str]
+    header_mapping: dict[str, str]
+    date_format: str
+    date_confidence: str  # "high" or "low"
+    decimal_separator: str
+    thousands_separator: str
+    input_tokens: int
+    output_tokens: int
+    request_ids: list[str] = Field(default_factory=list)
+
+
 class SupplierStatement(BaseModel):
-    """Top-level container for extracted statement rows."""
+    """Top-level container for extracted statement rows.
+
+    Self-describing: carries all metadata needed for display
+    formatting, so the service never needs ContactConfig.
+    """
 
     statement_items: list[StatementItem] = Field(default_factory=list)
     earliest_item_date: str | None = None
     latest_item_date: str | None = None
+    date_format: str = ""
+    date_confidence: str = "high"
+    decimal_separator: str = "."
+    thousands_separator: str = ","
+    detected_headers: list[str] = Field(default_factory=list)
+    header_mapping: dict[str, str] = Field(default_factory=dict)
+    input_tokens: int = 0
+    output_tokens: int = 0
