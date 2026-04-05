@@ -1,5 +1,6 @@
 aws_lambda_powertools
 pdfplumber
+pypdf
 pydantic
 boto3
-boto3-stubs[dynamodb,s3,textract]
+boto3-stubs[dynamodb,s3,bedrock-runtime]
