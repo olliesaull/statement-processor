@@ -1,248 +1,504 @@
-"""
-This module converts the (fairly low-level) output of AWS Textract's
-`GetDocumentAnalysis` API into a simple, table-shaped structure that the rest of
-this Lambda can work with.
+"""Bedrock extraction boundary.
 
-## What Textract returns (high-level)
+This module is the sole interface between the Lambda and Bedrock for
+statement extraction. All PDF chunking, LLM calls, post-processing,
+and chunk-boundary deduplication happen here.
 
-Textract returns a JSON document containing a large `Blocks` array. Each "block"
-is a node in a document graph and has a `BlockType` plus an `Id` used to link it
-to other blocks via `Relationships`.
-
-For table extraction, the important block types are:
-
-- `TABLE`: represents a detected table on a page.
-- `CELL`: represents a single table cell with `RowIndex` / `ColumnIndex`
-  (1-based).
-- `WORD`: a token of text, with a `Text` field.
-- `SELECTION_ELEMENT`: checkboxes, with `SelectionStatus == "SELECTED"`.
-
-The structure is a graph:
-
-`TABLE` --(Relationships: CHILD ids)--> `CELL`
-`CELL`  --(Relationships: CHILD ids)--> `WORD` / `SELECTION_ELEMENT`
-
-`get_document_analysis` can be paginated; responses may include `NextToken`.
-To retrieve all blocks for a job, you must repeatedly call the API until
-`NextToken` is no longer returned.
-
-## What we convert it into
-
-Downstream code (see `core/transform.py`) wants tables in a very simple shape:
-
-    TableOnPage = {"page": int, "grid": List[List[str]]}
-
-Where `grid[row][col]` is the concatenated text for a single cell.
-
-## Pipeline overview
-
-- `analyze_tables_job`: paginate Textract results and collect all `Blocks`.
-- `_extract_tables_from_blocks`: for each `TABLE`, rebuild a 2D cell grid and sanitize it.
-- `_extract_text_for_block`: turn a `CELL` + its children into a single string.
-- `_sanitize_grid`: remove empty rows/cols and duplicate columns.
-- `get_tables_for_job`: wrapper that returns `{job_id: tables}` and logs failures.
-
-The key idea: Textract gives us a graph of blocks; this module traverses that
-graph and reconstructs a clean 2D grid per table so later stages can map headers
-to fields and emit structured statement JSON.
+Public API:
+    extract_statement(pdf_bytes, page_count) -> ExtractionResult
 """
 
-from typing import Any, TypedDict, cast
+import io
+import json
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Any
 
-from config import textract_client
+from pypdf import PdfReader, PdfWriter
+
 from logger import logger
 
+# -- Constants ----------------------------------------------------------------
 
-class TableOnPage(TypedDict):
+MODEL_ID = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+# Pages per chunk and overlap for multi-chunk PDFs.
+CHUNK_SIZE = 10
+
+# Bedrock document block size limit (~4.5 MB). Use 4 MB as safety margin.
+MAX_CHUNK_BYTES = 4 * 1024 * 1024
+
+# Concurrency for parallel chunk processing.
+MAX_PARALLEL_CHUNKS = 3
+
+# Retry config for transient Bedrock errors.
+MAX_RETRIES = 2
+BASE_RETRY_DELAY = 2.0
+
+# Standard fields that map to named keys in the output dict.
+STANDARD_FIELDS = {"date", "number", "due_date", "reference"}
+
+# Currency prefix pattern: 1-3 letters optionally followed by whitespace.
+# Strips R, $, EUR, ZAR, USD, etc. before numeric parsing.
+_CURRENCY_PREFIX_RE = re.compile(r"^[A-Za-z\u20ac$\u00a3\u00a5\u20b9]{1,3}\s*")
+
+# System prompt loaded once from adjacent markdown file.
+_PROMPT_PATH = Path(__file__).parent / "extraction_prompt.md"
+
+# -- Tool schema --------------------------------------------------------------
+
+EXTRACT_TOOL: dict[str, Any] = {
+    "name": "extract_statement_rows",
+    "description": "Extract structured line items from a supplier statement PDF.",
+    "inputSchema": {
+        "json": {
+            "type": "object",
+            "properties": {
+                "detected_headers": {"type": "array", "items": {"type": "string"}, "description": "The column headers detected in the main statement table."},
+                "date_format": {"type": "string", "description": "Detected date format using SDF tokens (e.g. 'DD.MM.YYYY')."},
+                "date_confidence": {"type": "string", "enum": ["high", "low"], "description": "high if any day > 12 disambiguates DD/MM; low if all days <= 12."},
+                "decimal_separator": {"type": "string", "enum": [".", ","], "description": "Character used as decimal separator in monetary amounts."},
+                "thousands_separator": {"type": "string", "enum": [",", ".", " ", "'", ""], "description": "Character used as thousands separator. Empty string if none."},
+                "column_order": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Ordered list of column names for each item array. "
+                        "Use 'date', 'number', 'due_date', 'reference' for standard fields. "
+                        "Use the PDF column header name for monetary and extra columns."
+                    ),
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"type": "array", "items": {"type": "string"}, "description": "One row as a flat array of values matching column_order."},
+                    "description": "All rows as arrays of strings, one per line item.",
+                },
+            },
+            "required": ["detected_headers", "date_format", "date_confidence", "decimal_separator", "thousands_separator", "column_order", "items"],
+        }
+    },
+}
+
+
+# -- PDF chunking -------------------------------------------------------------
+
+
+def chunk_pdf(reader: PdfReader) -> list[tuple[bytes, int, int]]:
+    """Split a PDF into overlapping page chunks.
+
+    Each chunk is a self-contained PDF (as bytes) with 1-page overlap
+    between consecutive chunks so rows spanning page boundaries are
+    captured. Chunks exceeding MAX_CHUNK_BYTES are recursively halved.
+
+    Returns:
+        List of (pdf_bytes, start_page_1indexed, end_page_1indexed).
     """
-    A single extracted table, annotated with the page number it was found on.
+    total_pages = len(reader.pages)
 
-    The `grid` is a 2D list of strings where:
-    - Each inner list is a row
-    - Each string is the concatenated cell text for that row/column position
-    - The grid has already been "sanitized" (empty rows/cols removed; duplicate columns removed)
+    # Build page ranges with 1-page overlap.
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    while start < total_pages:
+        end = min(start + CHUNK_SIZE, total_pages)
+        ranges.append((start, end))
+        start = end - 1 if end < total_pages else end
+
+    chunks: list[tuple[bytes, int, int]] = []
+    for page_start, page_end in ranges:
+        sub_chunks = _build_chunk_bytes(reader, page_start, page_end)
+        chunks.extend(sub_chunks)
+
+    return chunks
+
+
+def _build_chunk_bytes(reader: PdfReader, page_start: int, page_end: int) -> list[tuple[bytes, int, int]]:
+    """Build PDF bytes for a page range, splitting if over size limit."""
+    writer = PdfWriter()
+    for i in range(page_start, page_end):
+        writer.add_page(reader.pages[i])
+
+    buf = io.BytesIO()
+    writer.write(buf)
+    pdf_bytes = buf.getvalue()
+
+    if len(pdf_bytes) <= MAX_CHUNK_BYTES or (page_end - page_start) <= 1:
+        if len(pdf_bytes) > MAX_CHUNK_BYTES:
+            logger.error("Single page exceeds Bedrock document block size limit", page=page_start + 1, chunk_bytes=len(pdf_bytes), max_bytes=MAX_CHUNK_BYTES)
+        return [(pdf_bytes, page_start + 1, page_end)]
+
+    # Too large -- split in half and recurse.
+    mid = page_start + (page_end - page_start) // 2
+    left = _build_chunk_bytes(reader, page_start, mid)
+    right = _build_chunk_bytes(reader, mid, page_end)
+    return left + right
+
+
+# -- Post-processing ----------------------------------------------------------
+
+
+def convert_amount(raw: str, decimal_sep: str, thousands_sep: str) -> float | str:
+    """Convert a raw monetary string to a float.
+
+    Handles currency prefixes (R, $, ZAR, EUR, etc.), trailing minus
+    signs, parenthetical negatives, thousands/decimal separators.
+
+    Returns float or original string if conversion fails.
     """
+    s = raw.strip()
+    if not s:
+        return s
 
-    page: int
-    grid: list[list[str]]
+    # Guard: identical non-empty separators -> can't parse reliably.
+    if decimal_sep and thousands_sep and decimal_sep == thousands_sep:
+        return raw
 
+    # Strip currency prefix (R, $, EUR, ZAR, USD, etc.)
+    s = _CURRENCY_PREFIX_RE.sub("", s).strip()
 
-def _sanitize_grid(grid: list[list[str]]) -> list[list[str]]:
-    """
-    Clean a raw rectangular table grid built from Textract `CELL` coordinates.
+    # Detect negative: trailing minus, parentheses, or leading minus.
+    negative = False
+    if s.endswith("-"):
+        negative = True
+        s = s[:-1].strip()
+    elif s.startswith("(") and s.endswith(")"):
+        negative = True
+        s = s[1:-1].strip()
+    elif s.startswith("-"):
+        negative = True
+        s = s[1:].strip()
 
-    Textract table reconstruction can produce:
-    - Entirely empty rows (padding / detection noise)
-    - Entirely empty columns
-    - Duplicate columns (same header + identical values) due to detection quirks
+    # Strip thousands separator.
+    if thousands_sep:
+        s = s.replace(thousands_sep, "")
 
-    This function:
-    1) Removes fully-empty rows
-    2) Removes fully-empty columns
-    3) Deduplicates identical columns by comparing (header, column_values) signatures
+    # Normalise decimal separator to ".".
+    if decimal_sep == ",":
+        s = s.replace(",", ".")
 
-    Returns a smaller grid that is easier to map into structured fields later.
-    """
-    # 1) Remove fully-empty rows (e.g., padding/noise from table detection).
-    meaningful_rows = [row for row in grid if any(cell.strip() for cell in row)]
-    if not meaningful_rows:
-        return []
-
-    # 2) Remove fully-empty columns across the remaining rows.
-    keep_cols = [idx for idx in range(len(meaningful_rows[0])) if any(row[idx].strip() for row in meaningful_rows)]
-    if not keep_cols:
-        return []
-
-    cleaned = [[row[idx] for idx in keep_cols] for row in meaningful_rows]
-    if not cleaned or not cleaned[0]:
-        return cleaned
-
-    # 3) Deduplicate columns by signature (header + all values below it).
-    seen_signatures = set()
-    keep_dedup: list[int] = []
-    for col_idx in range(len(cleaned[0])):
-        header = (cleaned[0][col_idx] or "").strip().lower()
-        column_values = tuple((row[col_idx] or "").strip() for row in cleaned[1:])
-        signature = (header, column_values)
-        if signature in seen_signatures:
-            continue
-        seen_signatures.add(signature)
-        keep_dedup.append(col_idx)
-
-    if len(keep_dedup) == len(cleaned[0]):
-        return cleaned
-
-    return [[row[idx] for idx in keep_dedup] for row in cleaned]
-
-
-def _extract_text_for_block(block_map: dict[str, dict[str, Any]], block: dict[str, Any]) -> str:
-    """
-    Convert a Textract `CELL` block into a single text string.
-
-    A `CELL` does not directly contain human-readable text; instead it references CHILD blocks, typically:
-    - `WORD` blocks (with `Text`)
-    - `SELECTION_ELEMENT` blocks (checkboxes), represented here as "X" when selected
-
-    This function walks the child ids and concatenates tokens into the cell's text.
-    """
-    texts: list[str] = []
-    for rel in block.get("Relationships", []):
-        if rel.get("Type") != "CHILD":
-            continue
-        for cid in rel.get("Ids", []):
-            child = block_map.get(cid, {})
-            if child.get("BlockType") == "WORD":
-                txt = (child.get("Text") or "").strip()
-                if txt:
-                    texts.append(txt)
-            elif child.get("BlockType") == "SELECTION_ELEMENT" and child.get("SelectionStatus") == "SELECTED":
-                texts.append("X")
-    return " ".join(texts)
-
-
-def _extract_tables_from_blocks(blocks: list[dict[str, Any]]) -> list[TableOnPage]:  # pylint: disable=too-many-locals
-    """
-    Reconstruct table grids from the flat `Blocks` list returned by Textract.
-
-    Textract encodes tables as a graph of blocks:
-    - `TABLE` blocks reference their child `CELL` blocks via Relationships (Type="CHILD")
-    - `CELL` blocks specify `RowIndex` / `ColumnIndex` (1-based) and reference their child `WORD`/`SELECTION_ELEMENT` blocks for text content
-
-    This function:
-    - Indexes blocks by id (`block_map`) so relationship ids can be resolved quickly
-    - For each `TABLE`, collects all associated `CELL`s
-    - Allocates a grid sized to the max RowIndex/ColumnIndex
-    - Fills grid coordinates with cell text via `_extract_text_for_block`
-    - Cleans the grid via `_sanitize_grid`
-
-    Returns a list of `TableOnPage` entries sorted by page.
-    """
-    # Build an index for quick lookup
-    block_map: dict[str, dict[str, Any]] = {}
-    for block in blocks:
-        if not isinstance(block, dict):
-            continue
-        block_id = block.get("Id")
-        if isinstance(block_id, str):
-            block_map[block_id] = block
-    tables: list[TableOnPage] = []
-
-    # We only care about `TABLE` blocks; everything else is reached via relationships.
-    for block in blocks:
-        if not isinstance(block, dict) or block.get("BlockType") != "TABLE":
-            continue
-        page = int(block.get("Page") or 1)
-        cell_ids: list[str] = []
-        for rel in block.get("Relationships", []):
-            if rel.get("Type") == "CHILD":
-                cell_ids.extend(rel.get("Ids", []))
-
-        # Resolve the table's child ids into actual `CELL` blocks.
-        cells = [block_map.get(cid) for cid in cell_ids if cid in block_map]
-        if not cells:
-            continue
-
-        # Textract uses 1-based row/column indices; size the grid from the max indices seen.
-        max_row = max(int(c.get("RowIndex") or 0) for c in cells if isinstance(c, dict))
-        max_col = max(int(c.get("ColumnIndex") or 0) for c in cells if isinstance(c, dict))
-        grid = [["" for _ in range(max_col)] for _ in range(max_row)]
-
-        for cell in cells:
-            if not isinstance(cell, dict):
-                continue
-            r_idx = max(int(cell.get("RowIndex") or 1) - 1, 0)
-            c_idx = max(int(cell.get("ColumnIndex") or 1) - 1, 0)
-            if r_idx >= max_row or c_idx >= max_col:
-                continue
-            # Convert each cell's WORD/SELECTION children into a single string value.
-            text = _extract_text_for_block(block_map, cell)
-            grid[r_idx][c_idx] = text
-
-        sanitized = _sanitize_grid(grid)
-        if sanitized:
-            tables.append({"page": page, "grid": sanitized})
-
-    tables.sort(key=lambda t: t["page"])
-    return tables
-
-
-def analyze_tables_job(job_id: str) -> list[TableOnPage]:
-    """
-    Fetch and parse Textract table results for a completed job id.
-
-    `get_document_analysis` is paginated. We call it repeatedly, following `NextToken`,
-    until all blocks are retrieved, then extract tables by reconstructing grids from the block graph.
-    """
-    blocks: list[dict[str, Any]] = []
-    next_token: str | None = None
-    while True:
-        params: dict[str, Any] = {"JobId": job_id}
-        if next_token:
-            params["NextToken"] = next_token
-        # Textract paginates; keep calling until `NextToken` is absent.
-        resp = textract_client.get_document_analysis(**params)
-        raw_blocks = cast(list[dict[str, Any]], resp.get("Blocks", []))
-        blocks.extend(raw_blocks)
-        next_token = resp.get("NextToken")
-        if not next_token:
-            break
-
-    # Convert the full block graph into a per-table grid representation.
-    return _extract_tables_from_blocks(blocks)
-
-
-def get_tables_for_job(job_id: str) -> dict[str, list[TableOnPage]]:
-    """
-    Convenience wrapper used by the main workflow (`run_textraction`).
-
-    Returns a mapping of `{job_id: tables}` so callers can associate tables with
-    the job that produced them. Any exceptions are logged and swallowed, because
-    downstream steps may choose to proceed (or fail) based on missing table data.
-    """
-    result: dict[str, list[TableOnPage]] = {}
     try:
-        result[job_id] = analyze_tables_job(job_id)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        # Failures are logged and swallowed so the caller can decide how to handle missing tables.
-        logger.exception("Textract result fetch failed", job_id=job_id, error=str(exc), exc_info=True)
+        value = float(s)
+        return -value if negative else value
+    except ValueError:
+        return raw
+
+
+def reconstruct_items(column_order: list[str], raw_rows: list[list[str]]) -> list[dict[str, Any]]:
+    """Reconstruct item dicts from compact array-of-arrays format.
+
+    Maps each flat value array into a structured dict with standard
+    fields (date, number, due_date, reference), monetary columns in
+    ``total``, and ALL columns in ``raw`` for debugging.
+    """
+    items: list[dict[str, Any]] = []
+    for row in raw_rows:
+        item: dict[str, Any] = {"date": "", "number": "", "due_date": "", "reference": "", "total": {}, "raw": {}}
+        for idx, col_name in enumerate(column_order):
+            val = row[idx] if idx < len(row) else ""
+            # ALL columns go into raw for debugging.
+            item["raw"][col_name] = val
+            if col_name.lower() in STANDARD_FIELDS:
+                item[col_name.lower()] = val
+            else:
+                # Non-standard columns go into total (monetary).
+                item["total"][col_name] = val
+        items.append(item)
+    return items
+
+
+def postprocess_items(items: list[dict[str, Any]], decimal_sep: str, thousands_sep: str) -> list[dict[str, Any]]:
+    """Convert raw string totals to numeric values.
+
+    Also logs conversion failures for post-migration debugging.
+    Mutates items in place and returns the same list.
+    """
+    for item in items:
+        if "total" in item and isinstance(item["total"], dict):
+            converted: dict[str, Any] = {}
+            for k, v in item["total"].items():
+                result = convert_amount(str(v), decimal_sep, thousands_sep)
+                if isinstance(result, str) and result:
+                    logger.warning("convert_amount fallback", raw_value=v, decimal_sep=decimal_sep, thousands_sep=thousands_sep, reason="returned_as_string")
+                converted[k] = result
+            item["total"] = converted
+    return items
+
+
+def build_header_mapping(detected_headers: list[str], column_order: list[str]) -> dict[str, str]:
+    """Build header_mapping from detected_headers and column_order.
+
+    Zips the two lists: where column_order[i] is a standard field name,
+    maps detected_headers[i] -> column_order[i]. Otherwise maps to "total".
+
+    Example::
+
+        detected_headers=["Date", "Reference", "Debit", "Credit"]
+        column_order=["date", "number", "Debit", "Credit"]
+        -> {"Date": "date", "Reference": "number", "Debit": "total", "Credit": "total"}
+    """
+    mapping: dict[str, str] = {}
+    for i in range(min(len(detected_headers), len(column_order))):
+        header = detected_headers[i]
+        col = column_order[i]
+        if col.lower() in STANDARD_FIELDS:
+            mapping[header] = col.lower()
+        else:
+            mapping[header] = "total"
+    return mapping
+
+
+def deduplicate_chunks(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop consecutive identical items from chunk-boundary overlap.
+
+    After merging chunks in page order, scans for adjacent items
+    identical across every field. Drops the second. Safe because:
+    - Chunk-boundary duplicates are always adjacent
+    - Avoids false-positive on payments referencing invoices
+    - Handles both unique-number items and generic rows uniformly
+
+    All dedup actions are logged for auditability.
+    """
+    if not items:
+        return items
+
+    result: list[dict[str, Any]] = [items[0]]
+    dedup_count = 0
+
+    for i in range(1, len(items)):
+        if _items_equal(items[i], items[i - 1]):
+            dedup_count += 1
+            logger.info("Chunk boundary dedup: dropped duplicate", dropped_index=i, item_number=items[i].get("number", ""), item_date=items[i].get("date", ""))
+        else:
+            result.append(items[i])
+
+    if dedup_count:
+        logger.info("Chunk boundary dedup summary", total_dropped=dedup_count)
+
     return result
+
+
+def _items_equal(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Compare two items across all fields for exact equality."""
+    keys = {"date", "number", "due_date", "reference", "total", "raw"}
+    return all(a.get(k) == b.get(k) for k in keys)
+
+
+# -- Bedrock API --------------------------------------------------------------
+
+
+def _get_bedrock_client() -> Any:
+    """Return the shared Bedrock runtime client.
+
+    Separated into a function so integration tests can mock it.
+    """
+    from config import bedrock_runtime_client  # pylint: disable=import-outside-toplevel
+
+    return bedrock_runtime_client
+
+
+def _load_system_prompt() -> str:
+    """Load the system prompt from the adjacent markdown file."""
+    return _PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _call_bedrock(client: Any, system_prompt: str, pdf_bytes: bytes, user_text: str) -> tuple[dict[str, Any], int, int, str]:
+    """Call Bedrock Converse API with a PDF document and forced tool use.
+
+    Returns:
+        (tool_input_dict, input_tokens, output_tokens, request_id).
+    """
+    response = client.converse(
+        modelId=MODEL_ID,
+        system=[{"text": system_prompt}],
+        messages=[{"role": "user", "content": [{"document": {"name": "statement", "format": "pdf", "source": {"bytes": pdf_bytes}}}, {"text": user_text}]}],
+        toolConfig={"tools": [{"toolSpec": EXTRACT_TOOL}], "toolChoice": {"tool": {"name": "extract_statement_rows"}}},
+    )
+
+    content_blocks = response.get("output", {}).get("message", {}).get("content", [])
+    for block in content_blocks:
+        tool_use = block.get("toolUse")
+        if tool_use and tool_use.get("name") == "extract_statement_rows":
+            usage = response.get("usage", {})
+            request_id = response.get("ResponseMetadata", {}).get("RequestId", "")
+            return (tool_use["input"], usage.get("inputTokens", 0), usage.get("outputTokens", 0), request_id)
+
+    raise ValueError("Bedrock response did not contain an extract_statement_rows tool use block")
+
+
+def _call_bedrock_with_retry(client: Any, system_prompt: str, pdf_bytes: bytes, user_text: str) -> tuple[dict[str, Any], int, int, str]:
+    """Call Bedrock with retries for transient server/throttling errors.
+
+    Retries up to MAX_RETRIES times with exponential backoff.
+    Fails immediately on client/validation errors.
+    """
+    retryable_codes = {"InternalServerException", "ServiceUnavailableException"}
+    last_error: Exception | None = None
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return _call_bedrock(client, system_prompt, pdf_bytes, user_text)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            error_code = ""
+            # ThrottlingException is a named exception on the client.
+            if hasattr(client, "exceptions") and isinstance(exc, client.exceptions.ThrottlingException):
+                error_code = "ThrottlingException"
+            else:
+                resp = getattr(exc, "response", None) or {}
+                error_code = resp.get("Error", {}).get("Code", "")
+
+            if error_code in retryable_codes or error_code == "ThrottlingException":
+                last_error = exc
+                if attempt < MAX_RETRIES:
+                    delay = BASE_RETRY_DELAY * (2**attempt)
+                    logger.warning("Bedrock transient error, retrying", attempt=attempt + 1, max_retries=MAX_RETRIES, delay_seconds=delay, error_code=error_code)
+                    time.sleep(delay)
+            else:
+                raise
+
+    raise last_error  # type: ignore[misc]
+
+
+# -- Main entry point ---------------------------------------------------------
+
+
+def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
+    """Extract structured line items from a statement PDF.
+
+    This is the sole entry point for statement extraction. Callers
+    depend only on this function signature and ExtractionResult.
+
+    The implementation chunks the PDF, calls Bedrock Haiku for each
+    chunk (parallel for chunks 2+), reconstructs items, runs numeric
+    post-processing, and deduplicates chunk boundaries.
+    """
+    from core.models import ExtractionResult, StatementItem  # pylint: disable=import-outside-toplevel
+
+    client = _get_bedrock_client()
+    system_prompt = _load_system_prompt()
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    chunks = chunk_pdf(reader)
+    chunk_count = len(chunks)
+    request_ids: list[str] = []
+
+    # -- Process chunk 1 (provides headers + metadata for rest) --
+
+    pdf_bytes_0, start_0, end_0 = chunks[0]
+    logger.info("Processing chunk", chunk=1, total_chunks=chunk_count, pages=f"{start_0}-{end_0}")
+
+    result_0, in_tok_0, out_tok_0, req_id_0 = _call_bedrock_with_retry(client, system_prompt, pdf_bytes_0, "Extract all line items from this statement.")
+    request_ids.append(req_id_0)
+
+    detected_headers = result_0.get("detected_headers", [])
+    column_order = result_0.get("column_order", [])
+    date_format = result_0.get("date_format", "")
+    date_confidence = result_0.get("date_confidence", "high")
+    decimal_separator = result_0.get("decimal_separator", ".")
+    thousands_separator = result_0.get("thousands_separator", "")
+
+    logger.info(
+        "Chunk 1 metadata",
+        detected_headers=detected_headers,
+        column_order=column_order,
+        date_format=date_format,
+        date_confidence=date_confidence,
+        decimal_separator=decimal_separator,
+        thousands_separator=thousands_separator,
+    )
+
+    all_items = reconstruct_items(column_order, result_0.get("items", []))
+    logger.info("Chunk 1 items", count=len(all_items))
+
+    total_input_tokens = in_tok_0
+    total_output_tokens = out_tok_0
+
+    # -- Process remaining chunks in parallel --
+
+    if chunk_count > 1:
+        headers_str = ", ".join(detected_headers)
+        col_order_str = json.dumps(column_order)
+
+        def _process_continuation(chunk_idx: int) -> tuple[int, list[dict[str, Any]], int, int, str, dict[str, str]]:
+            """Process a single continuation chunk."""
+            c_bytes, c_start, c_end = chunks[chunk_idx]
+            logger.info("Processing chunk", chunk=chunk_idx + 1, total_chunks=chunk_count, pages=f"{c_start}-{c_end}")
+
+            c_user_text = (
+                f"This is a continuation of a multi-page statement "
+                f"(pages {c_start}-{c_end} of {page_count}).\n"
+                f"The first page of this chunk (page {c_start}) "
+                f"was also the last page of the previous chunk.\n"
+                f"Skip any rows from that page — they have already "
+                f"been extracted.\n"
+                f"The table headers from page 1 are: "
+                f"[{headers_str}]\n"
+                f"Use this exact column_order: {col_order_str}\n"
+                f"If headers are repeated on these pages, skip the "
+                f"header rows.\n"
+                f"If headers are NOT present on these pages, use "
+                f"the headers above to identify columns.\n"
+                f"Extract the data rows only."
+            )
+            c_result, c_in, c_out, c_req_id = _call_bedrock_with_retry(client, system_prompt, c_bytes, c_user_text)
+
+            # Log metadata disagreements with chunk 1 (the canonical source).
+            warnings: dict[str, str] = {}
+            canonical_meta = {"date_format": date_format, "decimal_separator": decimal_separator, "thousands_separator": thousands_separator}
+            for field, canonical in canonical_meta.items():
+                chunk_val = c_result.get(field, "")
+                if chunk_val and chunk_val != canonical:
+                    warnings[field] = chunk_val
+                    logger.warning("Chunk metadata disagreement", chunk=chunk_idx + 1, field=field, chunk_value=chunk_val, canonical_value=canonical)
+
+            c_col_order = c_result.get("column_order", column_order)
+            c_items = reconstruct_items(c_col_order, c_result.get("items", []))
+            logger.info("Chunk items", chunk=chunk_idx + 1, count=len(c_items))
+
+            return (chunk_idx, c_items, c_in, c_out, c_req_id, warnings)
+
+        # Dispatch chunks 2+ in parallel, merge in page order.
+        chunk_results: dict[int, tuple[list[dict[str, Any]], int, int, str]] = {}
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL_CHUNKS) as pool:
+            futures = {pool.submit(_process_continuation, idx): idx for idx in range(1, chunk_count)}
+            for future in as_completed(futures):
+                idx, c_items, c_in, c_out, c_req_id, _ = future.result()
+                chunk_results[idx] = (c_items, c_in, c_out, c_req_id)
+
+        # Merge in chunk order to preserve row ordering.
+        for idx in range(1, chunk_count):
+            c_items, c_in, c_out, c_req_id = chunk_results[idx]
+            all_items.extend(c_items)
+            total_input_tokens += c_in
+            total_output_tokens += c_out
+            request_ids.append(c_req_id)
+
+    # -- Post-process --
+
+    all_items = postprocess_items(all_items, decimal_separator, thousands_separator)
+    logger.info("reconstruct_items summary", item_count_before_dedup=len(all_items))
+
+    all_items = deduplicate_chunks(all_items)
+    logger.info("Post-dedup item count", item_count=len(all_items))
+
+    # Build header_mapping from chunk 1 metadata.
+    header_mapping = build_header_mapping(detected_headers, column_order)
+    logger.info("header_mapping", mapping=header_mapping)
+
+    # Convert raw dicts to StatementItem models.
+    statement_items: list[StatementItem] = []
+    for item in all_items:
+        item["statement_item_id"] = ""  # Set by orchestrator later.
+        statement_items.append(StatementItem.model_validate(item))
+
+    return ExtractionResult(
+        items=statement_items,
+        detected_headers=detected_headers,
+        header_mapping=header_mapping,
+        date_format=date_format,
+        date_confidence=date_confidence,
+        decimal_separator=decimal_separator,
+        thousands_separator=thousands_separator,
+        input_tokens=total_input_tokens,
+        output_tokens=total_output_tokens,
+        request_ids=request_ids,
+    )
