@@ -4,7 +4,6 @@ import json
 import os
 import secrets
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
@@ -20,12 +19,8 @@ from flask_wtf.csrf import CSRFError, CSRFProtect
 
 from banner_service import get_banners
 from billing_service import LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
-from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, S3_BUCKET_NAME, STAGE, VALKEY_URL, tenant_statements_table
-from core.config_suggestion import delete_suggestion, get_pending_suggestions, suggest_config_for_statement
-from core.contact_config_metadata import EXAMPLE_CONFIG, FIELD_DESCRIPTIONS
-from core.get_contact_config import get_contact_config, set_contact_config
+from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, S3_BUCKET_NAME, STAGE, VALKEY_URL
 from core.item_classification import guess_statement_item_type
-from core.models import ContactConfig, StatementItem
 from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, PaymentNumberMap, StatementItemPayload, StatementRowsByHeader, StatementRowViewModel, XeroDocumentPayload
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
@@ -60,7 +55,7 @@ from utils.email import send_login_notification_email
 from utils.statement_rows import format_item_type_label as _format_item_type_label
 from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
 from utils.statement_upload_validation import PreparedStatementUpload, build_statement_upload_preflight, prepare_statement_uploads, validate_upload_payload
-from utils.statement_view import build_right_rows, build_row_comparisons, get_date_format_from_config, get_number_separators_from_config, match_invoices_to_statement_items, prepare_display_mappings
+from utils.statement_view import build_right_rows, build_row_comparisons, match_invoices_to_statement_items, prepare_display_mappings
 from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
 from utils.workflows import start_textraction_state_machine
 from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
@@ -128,14 +123,6 @@ _executor = ThreadPoolExecutor(max_workers=5)
 
 # Stripe service instance — used by checkout routes.
 stripe_service = StripeService()
-
-
-DEFAULT_DECIMAL_SEPARATOR = "."
-DEFAULT_THOUSANDS_SEPARATOR = ","
-DECIMAL_SEPARATOR_OPTIONS = [(".", "Dot (.)"), (",", "Comma (,)")]
-THOUSANDS_SEPARATOR_OPTIONS = [("", "None"), (",", "Comma (,)"), (".", "Dot (.)"), (" ", "Space ( )"), ("'", "Apostrophe (')")]
-DECIMAL_SEPARATOR_VALUES = {opt[0] for opt in DECIMAL_SEPARATOR_OPTIONS}
-THOUSANDS_SEPARATOR_VALUES = {opt[0] for opt in THOUSANDS_SEPARATOR_OPTIONS}
 
 
 class StatementUploadStartError(RuntimeError):
@@ -247,20 +234,6 @@ def _set_active_tenant(tenant_id: str | None) -> None:
         session.pop("xero_tenant_name", None)
 
 
-def _normalize_decimal_separator(value: str | None) -> str:
-    """Coerce the decimal separator to a supported value."""
-    if value in DECIMAL_SEPARATOR_VALUES:
-        return value or DEFAULT_DECIMAL_SEPARATOR
-    return DEFAULT_DECIMAL_SEPARATOR
-
-
-def _normalize_thousands_separator(value: str | None) -> str:
-    """Coerce the thousands separator to a supported value."""
-    if value in THOUSANDS_SEPARATOR_VALUES:
-        return value if value is not None else DEFAULT_THOUSANDS_SEPARATOR
-    return DEFAULT_THOUSANDS_SEPARATOR
-
-
 def _absolute_app_url(path: str) -> str:
     """Build an absolute application URL from the configured public hostname.
 
@@ -272,188 +245,6 @@ def _absolute_app_url(path: str) -> str:
         local_port = os.getenv("PORT", "8080")
         return f"http://{DOMAIN_NAME}:{local_port}{path}"
     return f"https://{DOMAIN_NAME}{path}"
-
-
-def _build_config_rows(cfg: ContactConfig) -> list[dict[str, Any]]:
-    """Build table rows for canonical fields using existing config values."""
-    flat: dict[str, Any] = {}
-    allowed_keys = set(StatementItem.model_fields.keys())
-    disallowed = {"raw", "statement_item_id"}
-    for key, value in cfg.model_dump().items():
-        if key in allowed_keys and key not in disallowed:
-            flat[key] = value
-
-    flat.pop("reference", None)
-    flat.pop("item_type", None)
-
-    # Canonical field order from the Pydantic model, prioritising config UI alignment.
-    preferred_order = ["number", "total", "date", "due_date"]
-    model_fields = [f for f in dict(StatementItem.model_fields) if f not in {"raw", "statement_item_id", "item_type"}]
-    remaining_fields = [f for f in model_fields if f not in preferred_order]
-    canonical_order = preferred_order + remaining_fields
-
-    rows: list[dict[str, Any]] = []
-    for f in canonical_order:
-        if f in {"reference", "item_type"}:
-            continue
-        val = flat.get(f)
-        if f == "total":
-            values = [str(v) for v in val] if isinstance(val, list) else [""]
-            rows.append({"field": f, "values": values or [""], "is_multi": True})
-        else:
-            values = [str(val)] if isinstance(val, str) else [""]
-            rows.append({"field": f, "values": values, "is_multi": False})
-    return rows
-
-
-def _load_config_context(tenant_id: str | None, contact_lookup: dict[str, str], selected_contact_name: str) -> dict[str, Any]:
-    """Load a contact config and return updates for the template context."""
-    selected_contact_id = contact_lookup.get(selected_contact_name)
-    logger.info("Config load submitted", tenant_id=tenant_id, contact_name=selected_contact_name, contact_id=selected_contact_id)
-
-    updates: dict[str, Any] = {"selected_contact_name": selected_contact_name, "selected_contact_id": selected_contact_id}
-
-    if not selected_contact_id:
-        updates["error"] = "Please select a valid contact."
-        logger.info("Config load failed", tenant_id=tenant_id, contact_name=selected_contact_name)
-        return updates
-
-    try:
-        cfg = get_contact_config(tenant_id, selected_contact_id)
-        updates["mapping_rows"] = _build_config_rows(cfg)
-        updates["decimal_separator"] = _normalize_decimal_separator(cfg.decimal_separator)
-        updates["thousands_separator"] = _normalize_thousands_separator(cfg.thousands_separator)
-        updates["date_format"] = cfg.date_format or ""
-        logger.info("Config loaded", tenant_id=tenant_id, contact_id=selected_contact_id, keys=len(cfg.model_dump()))
-        return updates
-    except KeyError:
-        updates["mapping_rows"] = _build_config_rows(ContactConfig())
-        updates["decimal_separator"] = DEFAULT_DECIMAL_SEPARATOR
-        updates["thousands_separator"] = DEFAULT_THOUSANDS_SEPARATOR
-        updates["date_format"] = ""
-        updates["message"] = "No existing config found. You can create one below."
-        logger.info("Config not found", tenant_id=tenant_id, contact_id=selected_contact_id)
-        return updates
-    except Exception as exc:
-        updates["error"] = f"Failed to load config: {exc}"
-        logger.info("Config load error", tenant_id=tenant_id, contact_id=selected_contact_id, error=exc)
-        return updates
-
-
-def _save_config_context(tenant_id: str | None, form: Any) -> dict[str, Any]:
-    """Persist config edits and return updates for the template context."""
-    selected_contact_id = form.get("contact_id")
-    selected_contact_name = form.get("contact_name")
-    logger.info("Config save submitted", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name)
-
-    updates: dict[str, Any] = {"selected_contact_id": selected_contact_id, "selected_contact_name": selected_contact_name}
-
-    try:
-        try:
-            existing = get_contact_config(tenant_id, selected_contact_id)
-        except KeyError:
-            existing = ContactConfig()
-        posted_fields = [f for f in form.getlist("fields[]") if f]
-
-        selected_decimal_separator = _normalize_decimal_separator(form.get("decimal_separator"))
-        selected_thousands_separator = _normalize_thousands_separator(form.get("thousands_separator"))
-        selected_date_format = (form.get("date_format") or "").strip()
-
-        # Preserve any root keys not shown in the mapping editor.
-        existing_payload = existing.model_dump()
-        preserved = {k: v for k, v in existing_payload.items() if k not in posted_fields and k not in {"reference", "item_type"}}
-
-        new_map: dict[str, Any] = {}
-        for f in posted_fields:
-            if f == "total":
-                total_vals = [v.strip() for v in form.getlist("map[total][]") if v.strip()]
-                new_map["total"] = total_vals
-            else:
-                val = form.get(f"map[{f}]")
-                new_map[f] = (val or "").strip()
-        combined = ContactConfig.model_validate(
-            {**preserved, **new_map, "date_format": selected_date_format, "decimal_separator": selected_decimal_separator, "thousands_separator": selected_thousands_separator}
-        )
-
-        updates["decimal_separator"] = selected_decimal_separator
-        updates["thousands_separator"] = selected_thousands_separator
-        updates["date_format"] = selected_date_format
-
-        # Validate required mappings before saving.
-        number_value = (new_map.get("number") or "").strip()
-        total_values = new_map.get("total") if isinstance(new_map.get("total"), list) else []
-        if not number_value:
-            updates["error"] = "The 'Number' field is mandatory. Please map the statement column that contains item numbers (e.g. invoice number)."
-            updates["message"] = None
-            updates["mapping_rows"] = _build_config_rows(combined)
-        elif not total_values:
-            updates["error"] = "The 'Total' field is mandatory. Please map at least one statement column with totals."
-            updates["message"] = None
-            updates["mapping_rows"] = _build_config_rows(combined)
-        else:
-            set_contact_config(tenant_id, selected_contact_id, combined)
-            logger.info("Contact config saved", tenant_id=tenant_id, contact_id=selected_contact_id, contact_name=selected_contact_name, config=combined.model_dump())
-            updates["message"] = "Config updated successfully."
-            updates["mapping_rows"] = _build_config_rows(combined)
-
-            # Auto-confirm any pending review suggestions for this contact.
-            confirmed, skipped = _auto_confirm_pending_suggestions(tenant_id, selected_contact_id)
-            updates["auto_confirmed"] = confirmed
-            updates["auto_skipped"] = skipped
-    except Exception as exc:
-        updates["error"] = f"Failed to save config: {exc}"
-        logger.info("Config save failed", tenant_id=tenant_id, contact_id=selected_contact_id, error=exc)
-    return updates
-
-
-def _auto_confirm_pending_suggestions(tenant_id: str | None, contact_id: str) -> tuple[int, int]:
-    """Auto-confirm pending config suggestions for a contact after manual save.
-
-    Reserves tokens, deletes the S3 suggestion, clears DynamoDB pending
-    status, and starts the extraction workflow for each matching statement.
-    Statements are skipped if token reservation fails.
-
-    Returns:
-        Tuple of (confirmed_count, skipped_count).
-    """
-    suggestions = get_pending_suggestions(tenant_id)
-    matching = [s for s in suggestions if s.contact_id == contact_id]
-
-    if not matching:
-        return 0, 0
-
-    confirmed = 0
-    skipped = 0
-
-    for suggestion in matching:
-        statement_id = suggestion.statement_id
-
-        # Reserve tokens — skip this statement on billing failure.
-        page_count = _get_statement_page_count(tenant_id, statement_id)
-        try:
-            BillingService.reserve_confirmed_statement(tenant_id, statement_id, page_count)
-        except InsufficientTokensError:
-            logger.info("Auto-confirm skipped; insufficient tokens", tenant_id=tenant_id, statement_id=statement_id, page_count=page_count)
-            skipped += 1
-            continue
-        except BillingServiceError as exc:
-            logger.exception("Auto-confirm skipped; billing error", tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
-            skipped += 1
-            continue
-
-        # Clean up suggestion and clear pending status.
-        delete_suggestion(tenant_id, statement_id)
-        tenant_statements_table.update_item(Key={"TenantID": tenant_id, "StatementID": statement_id}, UpdateExpression="REMOVE #s", ExpressionAttributeNames={"#s": "Status"})
-
-        # Start extraction workflow.
-        pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
-        json_key = statement_json_s3_key(tenant_id, statement_id)
-        start_textraction_state_machine(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_key, json_key=json_key)
-
-        confirmed += 1
-        logger.info("Auto-confirmed pending suggestion", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id)
-
-    return confirmed, skipped
 
 
 @app.route("/api/tenant-statuses", methods=["GET"])
@@ -602,7 +393,9 @@ def _process_statement_upload(tenant_id: str | None, reserved_upload: ReservedSt
 
     # Kick off background textraction so it's ready by the time the user views it.
     json_statement_key = statement_json_s3_key(tenant_id, statement_id)
-    started = start_textraction_state_machine(tenant_id=tenant_id, contact_id=reserved_upload.contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key)
+    started = start_textraction_state_machine(
+        tenant_id=tenant_id, contact_id=reserved_upload.contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key, page_count=reserved_upload.page_count
+    )
 
     log_kwargs = {"tenant_id": tenant_id, "contact_id": reserved_upload.contact_id, "statement_id": statement_id, "pdf_key": pdf_statement_key, "json_key": json_statement_key}
 
@@ -651,88 +444,38 @@ def _reserve_statement_uploads(tenant_id: str | None, prepared_uploads: list[Pre
     return []
 
 
-def _handle_upload_statements_post(tenant_id: str | None, *, contact_lookup: dict[str, str], error_messages: list[str]) -> tuple[int, int]:
+def _handle_upload_statements_post(tenant_id: str | None, *, contact_lookup: dict[str, str], error_messages: list[str]) -> int:
     """Validate, reserve, and start workflow processing for one upload POST.
 
+    All uploads go straight to token reservation and Step Functions — there
+    is no longer a config-review gate because Bedrock extraction derives
+    header mappings directly from the PDF content.
+
     Returns:
-        Tuple of (success_count, review_count) — how many uploads started
-        processing and how many were submitted for config review.
+        Number of uploads that started processing successfully.
     """
     files = [f for f in request.files.getlist("statements") if f and f.filename]
     names = request.form.getlist("contact_names")
     logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
 
     if not validate_upload_payload(files, names):
-        return 0, 0
+        return 0
 
     prepared_uploads = prepare_statement_uploads(tenant_id, files, names, contact_lookup, error_messages)
     if not prepared_uploads:
-        return 0, 0
+        return 0
 
-    # Split uploads into those with config (ready) and those needing review.
-    ready_uploads = [u for u in prepared_uploads if not u.needs_config_review]
-    review_uploads = [u for u in prepared_uploads if u.needs_config_review]
-
-    # Process ready uploads as before (reserve, upload, start step function).
+    # Reserve tokens and start the extraction workflow for every valid upload.
+    reserved_uploads = _reserve_statement_uploads(tenant_id, prepared_uploads, error_messages)
     uploads_ok = 0
-    if ready_uploads:
-        reserved_uploads = _reserve_statement_uploads(tenant_id, ready_uploads, error_messages)
-        for reserved_upload in reserved_uploads:
-            try:
-                _process_statement_upload(tenant_id=tenant_id, reserved_upload=reserved_upload)
-                uploads_ok += 1
-            except StatementUploadStartError as exc:
-                _handle_reserved_upload_failure(tenant_id, reserved_upload, exc, error_messages)
-
-    # Submit review uploads — no token reservation until user confirms config.
-    review_count = 0
-    for upload in review_uploads:
+    for reserved_upload in reserved_uploads:
         try:
-            statement_id = uuid.uuid4().hex
-            _create_review_statement_header(tenant_id, statement_id, upload)
+            _process_statement_upload(tenant_id=tenant_id, reserved_upload=reserved_upload)
+            uploads_ok += 1
+        except StatementUploadStartError as exc:
+            _handle_reserved_upload_failure(tenant_id, reserved_upload, exc, error_messages)
 
-            pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
-            upload_statement_to_s3(fs_like=upload.uploaded_file, key=pdf_key)
-
-            _executor.submit(
-                suggest_config_for_statement,
-                tenant_id=tenant_id,
-                contact_id=upload.contact_id,
-                contact_name=upload.contact_name,
-                statement_id=statement_id,
-                pdf_s3_key=pdf_key,
-                filename=upload.uploaded_file.filename or "statement.pdf",
-                page_count=upload.page_count,
-            )
-            review_count += 1
-            logger.info("Submitted config suggestion job", tenant_id=tenant_id, statement_id=statement_id, contact_name=upload.contact_name)
-        except Exception as exc:
-            logger.exception("Failed to submit review upload", tenant_id=tenant_id, contact_name=upload.contact_name, error=exc)
-            error_messages.append(f"{upload.uploaded_file.filename or 'PDF'}: Failed to upload for config review.")
-
-    return uploads_ok, review_count
-
-
-def _create_review_statement_header(tenant_id: str | None, statement_id: str, upload: PreparedStatementUpload) -> None:
-    """Create a DynamoDB header row for a statement awaiting config review.
-
-    These rows have Status=pending_config_review and no billing reservation
-    fields — tokens are reserved later when the user confirms the config.
-    """
-    tenant_statements_table.put_item(
-        Item={
-            "TenantID": tenant_id,
-            "StatementID": statement_id,
-            "OriginalStatementFilename": upload.uploaded_file.filename or "Unnamed PDF",
-            "ContactID": upload.contact_id,
-            "ContactName": upload.contact_name,
-            "UploadedAt": datetime.now(UTC).replace(microsecond=0).isoformat(),
-            "Completed": "false",
-            "RecordType": "statement",
-            "PdfPageCount": upload.page_count,
-            "Status": "pending_config_review",
-        }
-    )
+    return uploads_ok
 
 
 @app.route("/api/upload-statements/preflight", methods=["POST"])
@@ -784,16 +527,12 @@ def upload_statements():
     error_messages: list[str] = []
     logger.info("Rendering upload statements", tenant_id=tenant_id, available_contacts=len(contacts_list))
 
-    uploads_ok = 0
-    review_count = 0
     if request.method == "POST":
-        uploads_ok, review_count = _handle_upload_statements_post(tenant_id, contact_lookup=contact_lookup, error_messages=error_messages)
+        uploads_ok = _handle_upload_statements_post(tenant_id, contact_lookup=contact_lookup, error_messages=error_messages)
 
         if uploads_ok:
             success_count = uploads_ok
-        if review_count:
-            error_messages.append(f"{review_count} statement{'s' if review_count != 1 else ''} need config review — go to Configuration to confirm.")
-        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, review=review_count, errors=list(error_messages))
+        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=list(error_messages))
 
     return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages)
 
@@ -1042,7 +781,7 @@ def _classify_statement_items(
     items: list[StatementItemPayload],
     rows_by_header: StatementRowsByHeader,
     item_number_header: str | None,
-    contact_config: ContactConfig,
+    header_mapping: dict[str, str] | None,
     matched_invoice_to_statement_item: MatchedInvoiceMap,
     matched_numbers: set[str],
     match_by_item_id: MatchByItemId,
@@ -1086,7 +825,7 @@ def _classify_statement_items(
             source = "payment_match"
 
         if not new_type:
-            new_type = guess_statement_item_type(raw, it.get("total"), contact_config)
+            new_type = guess_statement_item_type(raw_row=raw, total_entries=it.get("total"), header_mapping=header_mapping)
             source = "heuristic"
 
         if new_type and new_type != current_type:
@@ -1286,13 +1025,6 @@ def statement(statement_id: str):
         logger.info("Statement record not found", tenant_id=tenant_id, statement_id=statement_id)
         abort(404)
 
-    # Redirect to /configs if the statement hasn't been configured yet
-    # (viewing the detail page would fail due to missing JSON).
-    record_status = str(record.get("Status") or "")
-    if record_status in ("pending_config_review", "config_suggestion_failed"):
-        contact_name_redirect = str(record.get("ContactName") or "").strip()
-        return redirect(url_for("configs", contact_name=contact_name_redirect))
-
     items_view = _parse_items_view(request.values.get("items_view"))
     show_payments = _parse_show_payments(request.values.get("show_payments"))
     logger.info("Statement detail requested", tenant_id=tenant_id, statement_id=statement_id, items_view=items_view, show_payments=show_payments, method=request.method)
@@ -1351,11 +1083,11 @@ def statement(statement_id: str):
             **base_context,
         )
 
-    # 1) Parse display configuration and left-side rows
+    # 1) Parse display configuration and left-side rows.
+    #    Header mapping, date format, and number separators are now embedded
+    #    in the S3 JSON by the Bedrock extraction pipeline (no DynamoDB config lookup).
     items: list[StatementItemPayload] = data.get("statement_items", []) or []
-    contact_config: ContactConfig = get_contact_config(tenant_id, contact_id)
-    decimal_sep, thousands_sep = get_number_separators_from_config(contact_config)
-    display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, contact_config)
+    display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, statement_data=data)
 
     # 2) Fetch Xero documents and classify each statement item
     invoices: list[XeroDocumentPayload] = get_invoices_by_contact(contact_id) or []
@@ -1376,7 +1108,7 @@ def statement(statement_id: str):
         items=items,
         rows_by_header=rows_by_header,
         item_number_header=item_number_header,
-        contact_config=contact_config,
+        header_mapping=data.get("header_mapping", {}),
         matched_invoice_to_statement_item=matched_invoice_to_statement_item,
         matched_numbers=matched_numbers,
         match_by_item_id=match_by_item_id,
@@ -1387,17 +1119,15 @@ def statement(statement_id: str):
     _persist_classification_updates(data=data, statement_id=statement_id, tenant_id=tenant_id, json_statement_key=json_statement_key, classification_updates=classification_updates)
 
     # 3) Build right-hand rows from the matched invoices
-    date_fmt = get_date_format_from_config(contact_config)
-
     right_rows_by_header = build_right_rows(
         rows_by_header=rows_by_header,
         display_headers=display_headers,
         header_to_field=header_to_field,
         matched_map=matched_invoice_to_statement_item,
         item_number_header=item_number_header,
-        date_format=date_fmt,
-        decimal_separator=decimal_sep,
-        thousands_separator=thousands_sep,
+        date_format=data.get("date_format"),
+        decimal_separator=data.get("decimal_separator", "."),
+        thousands_separator=data.get("thousands_separator", ","),
     )
 
     # 4) Compare LEFT (statement) vs RIGHT (Xero) for per-cell indicators
@@ -1545,223 +1275,6 @@ def disconnect_tenant():
     if not updated:
         return redirect(url_for("index"))
     return redirect(management_url)
-
-
-@app.route("/configs", methods=["GET", "POST"])
-@active_tenant_required("Please select a tenant before configuring mappings.")
-@xero_token_required
-@route_handler_logging
-@block_when_loading
-def configs():
-    """Render and update the contact mapping configuration UI."""
-    tenant_id = session.get("xero_tenant_id")
-
-    contacts_raw = get_contacts()
-    contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
-    contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
-    contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
-    logger.info("Rendering configs", tenant_id=tenant_id, contacts=len(contacts_list))
-
-    context: dict[str, Any] = {
-        "contacts": contacts_list,
-        "selected_contact_name": None,
-        "selected_contact_id": None,
-        "mapping_rows": [],  # {field, values:list[str], is_multi:bool}
-        "message": None,
-        "error": None,
-        "field_descriptions": FIELD_DESCRIPTIONS,
-        "date_format": "",
-        "decimal_separator": DEFAULT_DECIMAL_SEPARATOR,
-        "thousands_separator": DEFAULT_THOUSANDS_SEPARATOR,
-        "decimal_separator_options": DECIMAL_SEPARATOR_OPTIONS,
-        "thousands_separator_options": THOUSANDS_SEPARATOR_OPTIONS,
-    }
-
-    if request.method == "POST":
-        action = request.form.get("action")
-        if action == "load":
-            # Load existing config for the chosen contact name.
-            selected_contact_name = (request.form.get("contact_name") or "").strip()
-            context.update(_load_config_context(tenant_id, contact_lookup, selected_contact_name))
-        elif action == "save_map":
-            # Save edited mapping.
-            save_result = _save_config_context(tenant_id, request.form)
-            auto_confirmed = save_result.pop("auto_confirmed", 0)
-            auto_skipped = save_result.pop("auto_skipped", 0)
-            context.update(save_result)
-
-            # If pending suggestions were auto-confirmed, update the message
-            if auto_confirmed > 0:
-                parts = [context.get("message") or ""]
-                parts.append(f"{auto_confirmed} pending statement(s) auto-confirmed and queued for extraction.")
-                if auto_skipped > 0:
-                    parts.append(f"{auto_skipped} statement(s) skipped due to insufficient tokens.")
-                context["message"] = " ".join(p for p in parts if p)
-    elif request.args.get("contact_name"):
-        # Support ?contact_name= query param for pre-selection (e.g. redirected from failed statement).
-        selected_contact_name = request.args["contact_name"].strip()
-        context.update(_load_config_context(tenant_id, contact_lookup, selected_contact_name))
-
-    # Load pending config suggestions for the review section.
-    # Merge detected headers with LLM-suggested values so autocomplete
-    # suggestions include column names the LLM identified from data rows
-    # (not just the Textract first row which may be a title rather than
-    # real headers).
-    pending_suggestions = get_pending_suggestions(tenant_id)
-    suggestions_dicts: list[dict[str, Any]] = []
-    for s in pending_suggestions:
-        d = s.model_dump()
-        seen = set(d["detected_headers"])
-        extra: list[str] = []
-        cfg = d.get("suggested_config", {})
-        for field in ("number", "date", "due_date"):
-            val = cfg.get(field, "")
-            if val and val not in seen:
-                extra.append(val)
-                seen.add(val)
-        for val in cfg.get("total", []):
-            if val and val not in seen:
-                extra.append(val)
-                seen.add(val)
-        d["all_headers"] = [h for h in d["detected_headers"] if h] + extra
-        suggestions_dicts.append(d)
-    context["pending_suggestions"] = suggestions_dicts
-
-    context.update(
-        {
-            "example_rows": _build_config_rows(ContactConfig.model_validate(EXAMPLE_CONFIG)),
-            "example_date_format": str(EXAMPLE_CONFIG.get("date_format") or ""),
-            "example_decimal_separator": EXAMPLE_CONFIG.get("decimal_separator", DEFAULT_DECIMAL_SEPARATOR),
-            "example_thousands_separator": EXAMPLE_CONFIG.get("thousands_separator", DEFAULT_THOUSANDS_SEPARATOR),
-            "decimal_separator_labels": dict(DECIMAL_SEPARATOR_OPTIONS),
-            "thousands_separator_labels": dict(THOUSANDS_SEPARATOR_OPTIONS),
-        }
-    )
-
-    return render_template("configs.html", **context)
-
-
-@app.route("/api/configs/confirm", methods=["POST"])
-@active_tenant_required("Please select a tenant.")
-@xero_token_required
-@route_handler_logging
-def confirm_config_suggestion():
-    """Confirm an LLM-suggested config and kick off full extraction."""
-    tenant_id = session.get("xero_tenant_id")
-    data = request.get_json()
-
-    contact_id = data.get("contact_id", "")
-    statement_id = data.get("statement_id", "")
-    config_payload = data.get("config", {})
-
-    # Validate mandatory fields (server-side source of truth).
-    errors = _validate_config_mandatory_fields(config_payload)
-    if errors:
-        return jsonify({"ok": False, "errors": errors}), 400
-
-    # Reserve tokens now — the review-upload path deferred reservation until
-    # the user confirmed the config (design spec: "tokens are reserved later
-    # when the user confirms the config and the full Step Function kicks off").
-    page_count = _get_statement_page_count(tenant_id, statement_id)
-    try:
-        BillingService.reserve_confirmed_statement(tenant_id, statement_id, page_count)
-    except InsufficientTokensError:
-        logger.info("Config confirm blocked; insufficient tokens", tenant_id=tenant_id, statement_id=statement_id, page_count=page_count)
-        return jsonify({"ok": False, "errors": ["Not enough tokens to process this statement. Please purchase more tokens."]}), 400
-    except BillingServiceError as exc:
-        logger.exception("Config confirm blocked; billing error", tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
-        return jsonify({"ok": False, "errors": ["Could not reserve tokens. Please try again."]}), 500
-
-    # Save config to DynamoDB.
-    config = ContactConfig.model_validate(config_payload)
-    set_contact_config(tenant_id, contact_id, config)
-
-    # Clean up the S3 suggestion file now that it's been confirmed.
-    delete_suggestion(tenant_id, statement_id)
-
-    # Clear the pending status so the statement no longer shows review badges.
-    tenant_statements_table.update_item(Key={"TenantID": tenant_id, "StatementID": statement_id}, UpdateExpression="REMOVE #s", ExpressionAttributeNames={"#s": "Status"})
-
-    # Start the extraction workflow — the PDF is already in S3 from upload.
-    pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
-    json_key = statement_json_s3_key(tenant_id, statement_id)
-    start_textraction_state_machine(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_key, json_key=json_key)
-
-    logger.info("Config suggestion confirmed", tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id)
-    return jsonify({"ok": True, "statement_id": statement_id})
-
-
-@app.route("/api/configs/confirm-all", methods=["POST"])
-@active_tenant_required("Please select a tenant.")
-@xero_token_required
-@route_handler_logging
-def confirm_all_config_suggestions():
-    """Confirm multiple suggested configs. Skips invalid ones."""
-    tenant_id = session.get("xero_tenant_id")
-    items = request.get_json().get("items", [])
-
-    confirmed: list[str] = []
-    skipped: list[dict[str, Any]] = []
-
-    for item in items:
-        config_payload = item.get("config", {})
-        errors = _validate_config_mandatory_fields(config_payload)
-        if errors:
-            skipped.append({"statement_id": item.get("statement_id"), "errors": errors})
-            continue
-
-        contact_id = item.get("contact_id", "")
-        statement_id = item.get("statement_id", "")
-
-        # Reserve tokens for this statement before processing.
-        page_count = _get_statement_page_count(tenant_id, statement_id)
-        try:
-            BillingService.reserve_confirmed_statement(tenant_id, statement_id, page_count)
-        except InsufficientTokensError:
-            skipped.append({"statement_id": statement_id, "errors": ["Not enough tokens to process this statement."]})
-            continue
-        except BillingServiceError as exc:
-            logger.exception("Bulk confirm billing error", tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
-            skipped.append({"statement_id": statement_id, "errors": ["Could not reserve tokens. Please try again."]})
-            continue
-
-        config = ContactConfig.model_validate(config_payload)
-        set_contact_config(tenant_id, contact_id, config)
-        delete_suggestion(tenant_id, statement_id)
-
-        # Clear pending status before starting the workflow.
-        tenant_statements_table.update_item(Key={"TenantID": tenant_id, "StatementID": statement_id}, UpdateExpression="REMOVE #s", ExpressionAttributeNames={"#s": "Status"})
-
-        pdf_key = statement_pdf_s3_key(tenant_id, statement_id)
-        json_key = statement_json_s3_key(tenant_id, statement_id)
-        start_textraction_state_machine(tenant_id=tenant_id, contact_id=contact_id, statement_id=statement_id, pdf_key=pdf_key, json_key=json_key)
-
-        confirmed.append(statement_id)
-
-    logger.info("Bulk config confirm", tenant_id=tenant_id, confirmed=len(confirmed), skipped=len(skipped))
-    return jsonify({"confirmed": confirmed, "skipped": skipped})
-
-
-def _get_statement_page_count(tenant_id: str | None, statement_id: str) -> int:
-    """Fetch PdfPageCount from the statement header row in DynamoDB."""
-    resp = tenant_statements_table.get_item(Key={"TenantID": tenant_id, "StatementID": statement_id}, ProjectionExpression="PdfPageCount")
-    item = resp.get("Item", {})
-    raw = item.get("PdfPageCount", 0)
-    return int(raw) if raw else 0
-
-
-def _validate_config_mandatory_fields(config: dict) -> list[str]:
-    """Validate mandatory config fields, return list of error messages."""
-    errors: list[str] = []
-    if not config.get("number"):
-        errors.append("'number' (document number column) is required.")
-    if not config.get("date"):
-        errors.append("'date' (transaction date column) is required.")
-    if not config.get("total") or not any(config["total"]):
-        errors.append("At least one 'total' column is required.")
-    if not config.get("date_format"):
-        errors.append("'date_format' is required.")
-    return errors
 
 
 @app.route("/api/banner/dismiss", methods=["POST"])
