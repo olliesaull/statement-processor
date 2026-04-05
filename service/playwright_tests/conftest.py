@@ -6,7 +6,6 @@ import pytest
 from dotenv import load_dotenv
 from playwright.sync_api import Page
 
-from playwright_tests.helpers.configs import configure_contact
 from playwright_tests.helpers.logging import log_step
 from playwright_tests.helpers.runs import StatementFlowRun
 from playwright_tests.helpers.statements import delete_statement_if_exists, open_statement_from_list, open_statements_page, require_statement_file, upload_statement, wait_for_statement_table
@@ -70,8 +69,6 @@ def prepare_statement(uploaded_statement_cache: set[tuple[str, str, str, str]]) 
         if cache_key not in uploaded_statement_cache:
             log_step("playwright", "Deleting existing statement if present.")
             delete_statement_if_exists(page, test_run)
-            log_step("playwright", "Updating contact mapping.")
-            configure_contact(page, test_run)
             log_step("playwright", "Uploading statement PDF.")
             upload_statement(page, test_run)
             uploaded_statement_cache.add(cache_key)

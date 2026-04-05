@@ -49,7 +49,6 @@ def test_prepare_statement_uploads_returns_valid_rows_and_collects_errors(monkey
         return UploadPageCountResult(filename=uploaded_file.filename or "statement.pdf", page_count=2)
 
     monkeypatch.setattr(statement_upload_validation, "count_uploaded_pdf_pages", _fake_count)
-    monkeypatch.setattr(statement_upload_validation, "get_contact_config", lambda tenant_id, contact_id: {"ContactID": contact_id})
 
     error_messages: list[str] = []
     prepared_uploads = prepare_statement_uploads(
@@ -60,23 +59,4 @@ def test_prepare_statement_uploads_returns_valid_rows_and_collects_errors(monkey
     assert prepared_uploads[0].contact_id == "contact-1"
     assert prepared_uploads[0].contact_name == "Acme Ltd"
     assert prepared_uploads[0].page_count == 2
-    assert prepared_uploads[0].needs_config_review is False
     assert error_messages == ["bad.pdf: Unable to determine page count for this PDF.", "Please select a contact for 'missing-contact.pdf'."]
-
-
-def test_prepare_uploads_flags_missing_config_as_needs_review(monkeypatch) -> None:
-    """Uploads without config should be returned with needs_config_review=True, not rejected."""
-
-    monkeypatch.setattr(statement_upload_validation, "count_uploaded_pdf_pages", lambda tid, f: UploadPageCountResult(filename=f.filename or "", page_count=2))
-    monkeypatch.setattr(statement_upload_validation, "get_contact_config", _raise_key_error)
-
-    error_messages: list[str] = []
-    prepared = prepare_statement_uploads("tenant-1", [_make_upload("new-supplier.pdf")], ["New Supplier Ltd"], {"New Supplier Ltd": "contact-new"}, error_messages)
-
-    assert len(prepared) == 1
-    assert prepared[0].needs_config_review is True
-    assert not error_messages  # No error — it's not a failure
-
-
-def _raise_key_error(*args, **kwargs):
-    raise KeyError("Config not found")

@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Page, expect
 
-from playwright_tests.helpers.configs import count_config_contacts
 from playwright_tests.helpers.excel import read_excel_table, require_expected_excel
 from playwright_tests.helpers.logging import log_step
 from playwright_tests.helpers.runs import StatementFlowRun, load_test_runs
@@ -16,6 +15,24 @@ from playwright_tests.helpers.tenants import switch_to_tenant_row
 from playwright_tests.helpers.xero_login import ensure_xero_login
 
 TEST_RUNS = load_test_runs()
+
+
+def _count_upload_contacts(page: Page, base_url: str) -> int:
+    """Return the number of contact options in the upload page datalist.
+
+    Uses the upload page's contacts-list datalist, which replaced the
+    deleted configs page after the Bedrock migration.
+
+    Args:
+        page: Playwright page fixture.
+        base_url: Base URL for the app under test.
+
+    Returns:
+        Count of contact options.
+    """
+    page.goto(f"{base_url}/upload-statements", wait_until="domcontentloaded")
+    page.wait_for_selector("#contacts-list", state="attached")
+    return page.locator("#contacts-list option").count()
 
 
 @pytest.mark.parametrize("test_run", TEST_RUNS, ids=lambda run: run.contact_name)
@@ -107,13 +124,14 @@ def test_tenant_switching_updates_contacts(page: Page, test_run: StatementFlowRu
     page.wait_for_url("**/tenant_management**")
     page.locator(f"#{target_row_id}").locator("text=Current Tenant").wait_for()
 
-    target_contact_count = count_config_contacts(page, test_run.base_url)
+    # Use the upload page contact list instead of the deleted configs page.
+    target_contact_count = _count_upload_contacts(page, test_run.base_url)
 
     log_step("playwright", "Switching back to original tenant.")
     page.goto(f"{test_run.base_url}/tenant_management", wait_until="domcontentloaded")
     page.wait_for_selector("tr")
     switch_to_tenant_row(page, row_id=active_row_id)
-    original_contact_count = count_config_contacts(page, test_run.base_url)
+    original_contact_count = _count_upload_contacts(page, test_run.base_url)
 
     if target_contact_count == original_contact_count:
         raise AssertionError(f"Contact counts did not change after tenant switch (both {original_contact_count}).")
