@@ -41,7 +41,6 @@ class StatementProcessorStack(Stack):
         if is_production and not apex_domain:
             raise ValueError("domain_name must be set for prod deployments so CloudFront aliases and OAuth callback routing are configured for the public site.")
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
-        TENANT_CONTACTS_CONFIG_TABLE_NAME = "TenantContactsConfigTable"
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
         TENANT_BILLING_TABLE_NAME = "TenantBillingTable"
         TENANT_TOKEN_LEDGER_TABLE_NAME = "TenantTokenLedgerTable"
@@ -79,16 +78,6 @@ class StatementProcessorStack(Stack):
             partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="StatementItemID", type=dynamodb.AttributeType.STRING),
             projection_type=dynamodb.ProjectionType.ALL,
-        )
-
-        tenant_contacts_config_table = dynamodb.Table(
-            self,
-            TENANT_CONTACTS_CONFIG_TABLE_NAME,
-            table_name=TENANT_CONTACTS_CONFIG_TABLE_NAME,
-            partition_key=dynamodb.Attribute(name="TenantID", type=dynamodb.AttributeType.STRING),
-            sort_key=dynamodb.Attribute(name="ContactID", type=dynamodb.AttributeType.STRING),
-            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
 
         tenant_data_table = dynamodb.Table(
@@ -144,19 +133,6 @@ class StatementProcessorStack(Stack):
             bucket_name=STATIC_ASSETS_BUCKET_NAME,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
         )
-        s3_bucket.add_to_resource_policy(
-            iam.PolicyStatement(
-                sid="AllowTextractReadStatements",
-                principals=[iam.ServicePrincipal("textract.amazonaws.com")],
-                actions=["s3:GetObject", "s3:GetObjectVersion"],
-                resources=[s3_bucket.arn_for_objects("*")],
-                conditions={
-                    "StringEquals": {"AWS:SourceAccount": env.account},
-                    "ArnLike": {"AWS:SourceArn": f"arn:aws:textract:{env.region}:{env.account}:*"},
-                },
-            )
-        )
-
         # endregion ---------- S3 ----------
 
         # region ---------- Lambda ----------
@@ -176,18 +152,17 @@ class StatementProcessorStack(Stack):
         textraction_lambda = _lambda.Function(
             self,
             "TextractionLambda",
-            description="Perform statement textraction using Textract and PDF Plumber",
+            description="Perform statement extraction using Bedrock Haiku",
             code=textraction_lambda_image,
             memory_size=2048,
             handler=Handler.FROM_IMAGE,
             runtime=Runtime.FROM_IMAGE,
             architecture=_lambda.Architecture.ARM_64,
-            timeout=Duration.seconds(60),
+            timeout=Duration.seconds(660),
             log_group=textraction_log_group,
             environment={
                 "STAGE": "prod" if is_production else "dev",
                 "S3_BUCKET_NAME": S3_BUCKET_NAME,
-                "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
                 "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
                 "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
                 "TENANT_BILLING_TABLE_NAME": TENANT_BILLING_TABLE_NAME,
@@ -197,13 +172,15 @@ class StatementProcessorStack(Stack):
 
         textraction_lambda.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["textract:GetDocumentAnalysis"],
-                resources=["*"],
+                actions=["bedrock:InvokeModel"],
+                resources=[
+                    "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-*",
+                    f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/eu.anthropic.claude-haiku-4-5-*",
+                ],
             )
         )
 
         tenant_statements_table.grant_read_write_data(textraction_lambda)
-        tenant_contacts_config_table.grant_read_write_data(textraction_lambda)
         tenant_data_table.grant_read_write_data(textraction_lambda)
         tenant_billing_table.grant_read_write_data(textraction_lambda)
         tenant_token_ledger_table.grant_read_write_data(textraction_lambda)
@@ -213,60 +190,19 @@ class StatementProcessorStack(Stack):
 
         # region ---------- StepFunctions ----------
 
-        start_textract = tasks.CallAwsService(
-            self,
-            "StartTextractDocumentAnalysis",
-            service="textract",
-            action="startDocumentAnalysis",
-            iam_resources=["*"],
-            parameters={
-                "DocumentLocation": {
-                    "S3Object": {
-                        "Bucket": sfn.JsonPath.string_at("$.s3Bucket"),
-                        "Name": sfn.JsonPath.string_at("$.pdfKey"),
-                    }
-                },
-                "FeatureTypes": ["TABLES"],
-            },
-            result_path="$.textractJob",
-        )
-
-        wait_for_textract = sfn.Wait(
-            self,
-            "WaitForTextract",
-            time=sfn.WaitTime.duration(Duration.seconds(10)),
-        )
-
-        get_textract_status = tasks.CallAwsService(
-            self,
-            "GetTextractStatus",
-            service="textract",
-            action="getDocumentAnalysis",
-            iam_resources=["*"],
-            parameters={
-                "JobId": sfn.JsonPath.string_at("$.textractJob.JobId"),
-                "MaxResults": 1,
-            },
-            result_selector={
-                "JobStatus": sfn.JsonPath.string_at("$.JobStatus"),
-            },
-            result_path="$.textractStatus",
-        )
-
         process_statement = tasks.LambdaInvoke(
             self,
             "ProcessStatement",
             lambda_function=textraction_lambda,
             payload=sfn.TaskInput.from_object(
                 {
-                    "jobId": sfn.JsonPath.string_at("$.textractJob.JobId"),
                     "tenantId": sfn.JsonPath.string_at("$.tenant_id"),
                     "contactId": sfn.JsonPath.string_at("$.contact_id"),
                     "statementId": sfn.JsonPath.string_at("$.statement_id"),
                     "s3Bucket": sfn.JsonPath.string_at("$.s3Bucket"),
                     "pdfKey": sfn.JsonPath.string_at("$.pdfKey"),
                     "jsonKey": sfn.JsonPath.string_at("$.jsonKey"),
-                    "textractStatus": sfn.JsonPath.string_at("$.textractStatus.JobStatus"),
+                    "pageCount": sfn.JsonPath.number_at("$.pageCount"),
                 }
             ),
             result_path="$.lambdaResult",
@@ -278,41 +214,15 @@ class StatementProcessorStack(Stack):
         process_statement_outcome.when(sfn.Condition.string_equals("$.lambdaResult.Payload.status", "ok"), workflow_succeeded)
         process_statement_outcome.otherwise(workflow_failed)
 
-        textract_finished = sfn.Choice(self, "IsTextractFinished?")
-        textract_finished.when(
-            sfn.Condition.string_equals("$.textractStatus.JobStatus", "SUCCEEDED"),
-            process_statement,
-        )
-        textract_finished.when(
-            sfn.Condition.string_equals("$.textractStatus.JobStatus", "PARTIAL_SUCCESS"),
-            process_statement,
-        )
-        textract_finished.when(
-            sfn.Condition.string_equals("$.textractStatus.JobStatus", "FAILED"),
-            process_statement,
-        )
-        textract_finished.otherwise(wait_for_textract)
-
         process_statement.next(process_statement_outcome)
-        wait_for_textract.next(get_textract_status)
-        get_textract_status.next(textract_finished)
-        start_textract.next(wait_for_textract)
 
         state_machine = sfn.StateMachine(
             self,
             "TextractionStateMachine",
             state_machine_name=f"TextractionStateMachine-{stage}",
-            definition_body=sfn.DefinitionBody.from_chainable(start_textract),
-            timeout=Duration.minutes(30),
+            definition_body=sfn.DefinitionBody.from_chainable(process_statement),
+            timeout=Duration.seconds(720),
         )
-
-        state_machine.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=["textract:StartDocumentAnalysis", "textract:GetDocumentAnalysis"],
-                resources=["*"],
-            )
-        )
-        s3_bucket.grant_read(state_machine.role)
 
         textraction_lambda.grant_invoke(state_machine.role)
 
@@ -329,31 +239,12 @@ class StatementProcessorStack(Stack):
             iam.PolicyStatement(
                 actions=[
                     "cloudwatch:PutMetricData",
-                    "textract:StartDocumentAnalysis",
-                    "textract:GetDocumentAnalysis",
-                    "textract:AnalyzeDocument",
                     "states:StartExecution",
                 ],
                 resources=["*"],
             )
         )
-        # Allow Bedrock Haiku invocation for auto config suggestion.
-        # Both foundation-model and cross-region inference profile ARNs are needed
-        # because newer models require inference profiles for on-demand invocation.
-        statement_processor_instance_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["bedrock:InvokeModel"],
-                resources=[
-                    # Wildcard region for foundation model: cross-region inference
-                    # profiles route to any EU region (e.g. eu-north-1), not just
-                    # the deployment region.
-                    "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-*",
-                    f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/eu.anthropic.claude-haiku-4-5-*",
-                ],
-            )
-        )
         tenant_statements_table.grant_read_write_data(statement_processor_instance_role)
-        tenant_contacts_config_table.grant_read_write_data(statement_processor_instance_role)
         tenant_data_table.grant_read_write_data(statement_processor_instance_role)
         tenant_billing_table.grant_read_write_data(statement_processor_instance_role)
         tenant_token_ledger_table.grant_read_write_data(statement_processor_instance_role)
@@ -411,7 +302,6 @@ class StatementProcessorStack(Stack):
                         "LOG_LEVEL": "DEBUG",
                         "MAX_UPLOAD_MB": "10",
                         "S3_BUCKET_NAME": S3_BUCKET_NAME,
-                        "TENANT_CONTACTS_CONFIG_TABLE_NAME": TENANT_CONTACTS_CONFIG_TABLE_NAME,
                         "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
                         "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
                         "TENANT_BILLING_TABLE_NAME": TENANT_BILLING_TABLE_NAME,
