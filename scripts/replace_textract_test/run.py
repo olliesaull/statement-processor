@@ -1,8 +1,8 @@
-"""Sonnet extraction test script.
+"""Haiku extraction test script.
 
-Reads PDFs from the pdfs/ directory, sends each to Sonnet 4.6 via
+Reads PDFs from the pdfs/ directory, sends each to Haiku 4.5 via
 Bedrock Converse API with forced tool use, and writes structured
-JSON output for manual accuracy comparison against Textract.
+JSON output for accuracy comparison against the Sonnet 4.6 baseline.
 
 Large PDFs are chunked at ~10 pages per request with 1-page overlap
 to stay within context window limits.
@@ -30,10 +30,10 @@ OUTPUT_DIR = SCRIPT_DIR / "output"
 CHUNK_SIZE = 10
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "dotelastic-production")
 AWS_REGION = "eu-west-1"
-MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
+MODEL_ID = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 SYSTEM_PROMPT_PATH = SCRIPT_DIR / "system_prompt.md"
-COST_PER_INPUT_TOKEN = 3.0 / 1_000_000  # $3/M input tokens
-COST_PER_OUTPUT_TOKEN = 15.0 / 1_000_000  # $15/M output tokens
+COST_PER_INPUT_TOKEN = 1.0 / 1_000_000  # $1/M input tokens
+COST_PER_OUTPUT_TOKEN = 5.0 / 1_000_000  # $5/M output tokens
 
 # Max retries for transient Bedrock errors.
 MAX_RETRIES = 2
