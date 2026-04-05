@@ -1,5 +1,7 @@
 {
   "comment": "Per-route Nginx directive overrides. Applied inside the location block.",
   "/upload-statements": {"client_max_body_size": "10m"},
-  "/api/upload-statements/preflight": {"client_max_body_size": "10m"}
+  "/api/upload-statements/preflight": {"client_max_body_size": "10m"},
+  "comment_statement_detail": "XLSX export can be slow for large statements — give it headroom beyond Gunicorn's 60s timeout",
+  "/statement/<statement_id>": {"proxy_read_timeout": "120s"}
 }

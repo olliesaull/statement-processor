@@ -148,6 +148,15 @@ class TestGenerateSingleLocation:
         block = "\n".join(lines)
         assert "rewrite ^(.*)$ $1? last;" in block
         assert "proxy_pass http://gunicorn" in block
+        # Non-healthz routes should have access logging enabled (no suppression)
+        assert "access_log off" not in block
+
+    def test_healthz_suppresses_access_log(self) -> None:
+        """Health check endpoint suppresses access logs to reduce noise."""
+        route = {"endpoint": "healthz", "original": "/healthz", "pattern": "^/healthz$", "methods": ["GET", "HEAD"]}
+        lines = generate_single_location(route, "gunicorn")
+        block = "\n".join(lines)
+        assert "access_log off;" in block
 
     def test_route_with_allowed_params(self) -> None:
         """Routes with allowed params get regex validation."""

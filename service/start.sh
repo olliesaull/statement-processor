@@ -153,7 +153,9 @@ wait_for_http() {
 
     local port=8080
     echo "Waiting for HTTP readiness on port ${port}..."
-    until curl -sf -o /dev/null "http://127.0.0.1:${port}/"; do
+    # Use /healthz (same endpoint App Runner probes) with an explicit
+    # User-Agent to avoid the empty-UA block in nginx.conf.
+    until curl -sf -A healthcheck -o /dev/null "http://127.0.0.1:${port}/healthz"; do
         retries=$((retries + 1))
         if [ "$retries" -ge "$max_retries" ]; then
             echo "WARNING: App did not pass HTTP readiness after ${max_retries}s"
@@ -161,9 +163,7 @@ wait_for_http() {
         fi
         sleep 1
     done
-    local status
-    status=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/")
-    echo "App ready: HTTP ${status} (${retries}s)"
+    echo "App ready (${retries}s)"
 }
 
 echo "=== Container startup ==="

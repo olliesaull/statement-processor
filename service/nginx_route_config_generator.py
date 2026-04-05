@@ -204,7 +204,11 @@ def generate_single_location(route: dict, upstream_name: str, allowed_params: di
     or pass through), and optional per-route directive overrides.
     """
     lines = [f'location ~ "{route["pattern"]}" {{']
-    lines.append("    access_log off;")
+
+    # Suppress access logs only for /healthz (high-frequency App Runner
+    # health checks).  All other routes log normally for observability.
+    if route["original"] == "/healthz":
+        lines.append("    access_log off;")
 
     # Public pages: strip query strings (UTMs logged by CloudFront)
     public_pages = ["/", "/about", "/cookies", "/instructions", "/pricing"]
@@ -218,9 +222,9 @@ def generate_single_location(route: dict, upstream_name: str, allowed_params: di
     for directive, value in overrides.items():
         lines.append(f"    {directive} {value};")
 
-    # Method restriction and HEAD handling
+    # Method restriction — Flask handles HEAD natively (runs GET handler,
+    # strips the body) so we don't short-circuit it here.
     lines.append(f"    limit_except {' '.join(route['methods'])} {{ deny all; }}")
-    lines.append("    if ($request_method = HEAD) {return 200;}")
 
     if is_public:
         lines.extend(
