@@ -136,12 +136,73 @@ const setupStickyActionDocks = () => {
   });
 };
 
+const setupScrollProxy = () => {
+  const wrapper = document.querySelector(".statement-table-wrapper");
+  const proxy = document.getElementById("scroll-proxy");
+  if (!wrapper || !proxy) return;
+
+  const proxyInner = proxy.querySelector(".scroll-proxy-inner");
+  if (!proxyInner) return;
+
+  const dock = document.querySelector("[data-sticky-dock]");
+  let syncing = false;
+
+  /* Set the proxy's inner width to match the table's scroll width. */
+  const syncWidths = () => {
+    proxyInner.style.width = wrapper.scrollWidth + "px";
+  };
+
+  /* Determine whether the proxy should be visible:
+     - table must have horizontal overflow
+     - the native scrollbar (bottom of wrapper) must be off-screen */
+  const syncVisibility = () => {
+    const hasOverflow = wrapper.scrollWidth > wrapper.clientWidth;
+    const nativeBarVisible = wrapper.getBoundingClientRect().bottom <= window.innerHeight;
+    const shouldShow = hasOverflow && !nativeBarVisible;
+
+    proxy.classList.toggle("is-visible", shouldShow);
+
+    /* Position above the sticky dock when it is visible. */
+    if (dock && dock.classList.contains("is-visible")) {
+      const dockHeight = dock.offsetHeight;
+      proxy.style.bottom = "calc(" + (dockHeight + 8) + "px + 1rem + env(safe-area-inset-bottom))";
+    } else {
+      proxy.style.bottom = "";
+    }
+  };
+
+  /* Bidirectional scroll sync with a guard flag. */
+  proxy.addEventListener("scroll", () => {
+    if (syncing) return;
+    syncing = true;
+    wrapper.scrollLeft = proxy.scrollLeft;
+    syncing = false;
+  });
+
+  wrapper.addEventListener("scroll", () => {
+    if (syncing) return;
+    syncing = true;
+    proxy.scrollLeft = wrapper.scrollLeft;
+    syncing = false;
+  });
+
+  window.addEventListener("scroll", syncVisibility, { passive: true });
+  window.addEventListener("resize", () => {
+    syncWidths();
+    syncVisibility();
+  });
+
+  syncWidths();
+  syncVisibility();
+};
+
 window.addEventListener("load", () => {
   updateNavbarScrollState();
   window.addEventListener("scroll", updateNavbarScrollState, { passive: true });
   setupCookieConsentButton();
   updateNavbarAuthLink();
   setupStickyActionDocks();
+  setupScrollProxy();
 
   // Scroll-reveal animations
   document.querySelectorAll('.reveal, .reveal-subtle').forEach(el => {
