@@ -1542,7 +1542,7 @@ a:focus-visible {
 .table-compare {
   --split-border: 6px solid var(--bs-border-color);
   max-width: 100%;
-  table-layout: auto;
+  table-layout: fixed;
   width: 100%;
 }
 
@@ -1569,14 +1569,20 @@ a:focus-visible {
   word-break: normal;
 }
 
-/* Reasonable minimum widths per column */
+/* Fixed column widths for the comparison table.
+   Type and action columns are narrow; data columns share remaining space. */
 .col-type {
-  min-width: 6ch;
+  width: 3.5%;
   white-space: nowrap;
 }
 
-.col-credit {
-  min-width: 7ch;
+.col-xero-link {
+  width: 4.5%;
+  white-space: nowrap;
+}
+
+.col-status {
+  width: 6%;
   white-space: nowrap;
 }
 
