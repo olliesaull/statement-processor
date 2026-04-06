@@ -33,10 +33,18 @@ configure_nginx() {
             exit 1
         fi
 
-        # Inject CloudFront protection check
+        # Inject CloudFront protection check (exempt /healthz for AppRunner health probes)
         sed -i '/# CLOUDFRONT_PROTECTION_MARKER/c\
         # CloudFront protection - reject requests without valid secret\
-        if ($http_x_statement_cf != "'"$X_STATEMENT_CF"'") {\
+        # /healthz is exempt so AppRunner health checks pass without the header\
+        set $cf_check "block";\
+        if ($uri = /healthz) {\
+            set $cf_check "skip";\
+        }\
+        if ($http_x_statement_cf = "'"$X_STATEMENT_CF"'") {\
+            set $cf_check "skip";\
+        }\
+        if ($cf_check = "block") {\
             return 403;\
         }' /etc/nginx/nginx.conf
 
