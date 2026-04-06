@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}FAQ - Statement Processor{% endblock %}
+
+{% block container_class %}p-0{% endblock %}
+
+{% block content %}
+  <!-- Page Header -->
+  <header class="page-header page-header-hero">
+    <div class="container">
+      <p class="section-kicker reveal">FAQ</p>
+      <h1 class="reveal reveal-delay-1">Frequently Asked Questions</h1>
+      <p class="page-subtitle reveal reveal-delay-2">
+        Find answers to common questions about setting up, uploading statements, reviewing results, and managing billing.
+      </p>
+    </div>
+  </header>
+
+  <section class="section">
+    <div class="container">
+      <div class="row">
+
+        <!-- Sidebar navigation: visible on large screens only -->
+        <div class="col-lg-3 d-none d-lg-block">
+          <div class="sticky-top" style="top: 80px;">
+            <nav aria-label="FAQ sections">
+              <ul class="list-unstyled mb-0" id="faq-sidebar-nav">
+                {% for section in faqs %}
+                <li class="mb-2">
+                  <a class="faq-sidebar-link {% if loop.first %}active{% endif %}"
+                     href="#{{ section.id }}"
+                     data-section="{{ section.id }}">
+                    {{ section.title }}
+                  </a>
+                </li>
+                {% endfor %}
+              </ul>
+            </nav>
+          </div>
+        </div>
+
+        <!-- Main FAQ content -->
+        <div class="col-lg-9">
+          {% for section in faqs %}
+          <div id="{{ section.id }}" class="scroll-offset mb-5">
+
+            <!-- Section heading with back-to-top -->
+            <div class="d-flex align-items-baseline justify-content-between mb-3">
+              <h2 class="h4 mb-0">{{ section.title }}</h2>
+              <a href="#" class="faq-back-to-top ms-3" aria-label="Back to top">&#8593; Top</a>
+            </div>
+
+            <hr class="faq-divider">
+
+            {% for faq in section.questions %}
+            <!-- Each question is a collapsible item -->
+            <div>
+              <a class="faq-collapse-toggle d-flex align-items-center justify-content-between w-100"
+                 data-bs-toggle="collapse"
+                 href="#faq-answer-{{ section.id }}-{{ loop.index }}"
+                 role="button"
+                 aria-expanded="false"
+                 aria-controls="faq-answer-{{ section.id }}-{{ loop.index }}">
+                <span class="faq-question">{{ faq.question }}</span>
+                <span class="faq-toggle-icon ms-3" aria-hidden="true">
+                  <span class="plus-line horizontal"></span>
+                  <span class="plus-line vertical"></span>
+                </span>
+              </a>
+
+              <div class="collapse" id="faq-answer-{{ section.id }}-{{ loop.index }}">
+                <div class="faq-answer">
+                  {{ faq.answer | safe }}
+                </div>
+              </div>
+            </div>
+
+            <hr class="faq-divider">
+            {% endfor %}
+
+          </div>
+          {% endfor %}
+
+          <!-- CTA panel -->
+          <div class="cta-panel reveal mt-4">
+            <div>
+              <h2>Still have questions?</h2>
+              <p>Get started in Tenant Management or follow the step-by-step instructions guide.</p>
+            </div>
+            <div class="cta-actions">
+              <a href="{{ url_for('tenant_management') }}" class="btn btn-primary">Open Tenant Management</a>
+              <a href="{{ url_for('instructions') }}" class="btn btn-secondary">View Instructions</a>
+            </div>
+          </div>
+
+        </div><!-- /.col-lg-9 -->
+      </div><!-- /.row -->
+    </div><!-- /.container -->
+  </section>
+
+  <script>
+    // Scroll-spy: highlight the sidebar link for the section most visible in the viewport.
+    (function () {
+      "use strict";
+
+      const sidebarLinks = document.querySelectorAll("#faq-sidebar-nav [data-section]");
+      if (!sidebarLinks.length) return;
+
+      const sectionIds = Array.from(sidebarLinks).map(link => link.dataset.section);
+      const sections = sectionIds.map(id => document.getElementById(id)).filter(Boolean);
+
+      function getActiveSectionId() {
+        // Return the id of the section whose top edge is nearest to (but not past) 120px from the
+        // viewport top — i.e. the topmost visible section once the sticky navbar is accounted for.
+        const OFFSET = 120;
+        let activeId = sectionIds[0];
+        for (const section of sections) {
+          if (section.getBoundingClientRect().top <= OFFSET) {
+            activeId = section.id;
+          }
+        }
+        return activeId;
+      }
+
+      function updateSidebar() {
+        const activeId = getActiveSectionId();
+        sidebarLinks.forEach(link => {
+          link.classList.toggle("active", link.dataset.section === activeId);
+        });
+      }
+
+      window.addEventListener("scroll", updateSidebar, { passive: true });
+      updateSidebar();
+    })();
+  </script>
+{% endblock %}

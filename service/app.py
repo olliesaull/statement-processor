@@ -40,6 +40,7 @@ from utils.auth import (
     set_session_is_set_cookie,
     xero_token_required,
 )
+from utils.content import load_faqs, load_legal_page
 from utils.dynamo import (
     delete_statement_data,
     get_completed_statements,
@@ -556,6 +557,30 @@ def about():
 def cookies():
     """Render the cookie policy and consent page."""
     return render_template("cookies.html")
+
+
+@app.route("/faq")
+@route_handler_logging
+def faq():
+    """Render the FAQ page with collapsible sections loaded from YAML+markdown."""
+    faqs = load_faqs()
+    return render_template("faq.html", faqs=faqs)
+
+
+@app.route("/privacy")
+@route_handler_logging
+def privacy():
+    """Render the privacy policy page from markdown content."""
+    content = load_legal_page("privacy.md")
+    return render_template("privacy.html", content=content)
+
+
+@app.route("/terms")
+@route_handler_logging
+def terms():
+    """Render the terms and conditions page from markdown content."""
+    content = load_legal_page("terms.md")
+    return render_template("terms.html", content=content)
 
 
 @app.route("/statements")
