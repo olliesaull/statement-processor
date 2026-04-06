@@ -1908,6 +1908,10 @@ a:focus-visible {
     margin-right: 0;
     align-self: flex-start;
   }
+
+  .scroll-proxy {
+    bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  }
 }
 
 @media (max-width: 480px) {
