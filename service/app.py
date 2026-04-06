@@ -583,38 +583,73 @@ def terms():
     return render_template("terms.html", content=content)
 
 
-@app.route("/robots.txt")
-def robots_txt():
-    """Serve robots.txt with crawling policy for search engines."""
-    body = f"""# Crawling policy for {DOMAIN_NAME}
+def _get_authenticated_routes() -> list[str]:
+    """Return sorted list of authenticated route paths for robots/llm disallow rules.
+
+    Inspects each route's view function for the ``_requires_auth`` attribute
+    set by ``xero_token_required`` and ``active_tenant_required``.
+    """
+    authenticated = set()
+    for rule in app.url_map.iter_rules():
+        view_func = app.view_functions.get(rule.endpoint)
+        if view_func and getattr(view_func, "_requires_auth", False):
+            # Use the base path (strip dynamic segments) so /statement/<id> becomes /statement/
+            path = rule.rule.split("<")[0]
+            authenticated.add(path)
+    return sorted(authenticated)
+
+
+# Routes excluded from the sitemap even though they are public (system/utility routes).
+_SITEMAP_EXCLUDE = {"/healthz", "/login", "/logout", "/callback", "/robots.txt", "/sitemap.xml", "/llm.txt", "/favicon.ico", "/test-login"}
+
+
+def _get_sitemap_routes() -> list[str]:
+    """Return sorted list of public page paths suitable for the sitemap.
+
+    A route is included when it is unauthenticated, accepts GET, has no
+    dynamic segments, and is not in the system-route exclusion set.
+    """
+    pages = []
+    for rule in app.url_map.iter_rules():
+        if "<" in rule.rule:
+            continue
+        if rule.rule in _SITEMAP_EXCLUDE:
+            continue
+        if "GET" not in rule.methods:
+            continue
+        view_func = app.view_functions.get(rule.endpoint)
+        if view_func and getattr(view_func, "_requires_auth", False):
+            continue
+        pages.append(rule.rule)
+    return sorted(pages)
+
+
+def _build_crawl_policy(header_comment: str) -> str:
+    """Build a robots.txt / llm.txt body from the detected authenticated routes."""
+    disallow_lines = "\n".join(f"Disallow: {path}" for path in _get_authenticated_routes())
+    return f"""# {header_comment} for {DOMAIN_NAME}
 # Public pages are allowed. Private/system routes are disallowed.
 
 User-agent: *
 Allow: /
 
-Disallow: /tenant_management
-Disallow: /upload-statements
-Disallow: /statements
-Disallow: /statement/
-Disallow: /buy-tokens
-Disallow: /billing-details
-Disallow: /checkout/
-Disallow: /login
-Disallow: /logout
-Disallow: /callback
-Disallow: /api/
+{disallow_lines}
 
 Sitemap: https://{DOMAIN_NAME}/sitemap.xml
 """
-    return Response(body, mimetype="text/plain")
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    """Serve robots.txt with crawling policy for search engines."""
+    return Response(_build_crawl_policy("Crawling policy"), mimetype="text/plain")
 
 
 @app.route("/sitemap.xml")
 def sitemap_xml():
     """Serve sitemap.xml listing all public pages."""
-    urls = ["/", "/about", "/pricing", "/instructions", "/faq", "/privacy", "/terms", "/cookies"]
     lines = ["<?xml version='1.0' encoding='UTF-8'?>", "<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>"]
-    for path in urls:
+    for path in _get_sitemap_routes():
         lines.append(f"<url><loc>https://{DOMAIN_NAME}{path}</loc></url>")
     lines.append("</urlset>")
     return Response("\n".join(lines), mimetype="text/xml")
@@ -623,27 +658,7 @@ def sitemap_xml():
 @app.route("/llm.txt")
 def llm_txt():
     """Serve llm.txt with crawling policy for LLM agents."""
-    body = f"""# LLM crawling policy for {DOMAIN_NAME}
-# Public pages are allowed. Private/system routes are disallowed.
-
-User-agent: *
-Allow: /
-
-Disallow: /tenant_management
-Disallow: /upload-statements
-Disallow: /statements
-Disallow: /statement/
-Disallow: /buy-tokens
-Disallow: /billing-details
-Disallow: /checkout/
-Disallow: /login
-Disallow: /logout
-Disallow: /callback
-Disallow: /api/
-
-Sitemap: https://{DOMAIN_NAME}/sitemap.xml
-"""
-    return Response(body, mimetype="text/plain")
+    return Response(_build_crawl_policy("LLM crawling policy"), mimetype="text/plain")
 
 
 @app.route("/statements")
