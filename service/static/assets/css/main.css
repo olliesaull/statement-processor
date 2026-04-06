@@ -1779,6 +1779,25 @@ a:focus-visible {
   opacity: 0;
   pointer-events: none;
   transition: bottom 180ms ease, opacity 180ms ease;
+  background: transparent;
+  scrollbar-color: rgba(0,0,0,0.35) transparent;
+}
+
+.scroll-proxy::-webkit-scrollbar {
+  height: 8px;
+}
+
+.scroll-proxy::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-proxy::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.35);
+  border-radius: 4px;
+}
+
+.scroll-proxy::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.5);
 }
 
 .scroll-proxy.is-visible {
