@@ -1541,9 +1541,9 @@ a:focus-visible {
 
 .table-compare {
   --split-border: 6px solid var(--bs-border-color);
-  table-layout: fixed;
+  max-width: 100%;
+  table-layout: auto;
   width: 100%;
-  min-width: 1440px;
 }
 
 /* Split border between Statement and Xero halves */
@@ -1569,27 +1569,14 @@ a:focus-visible {
   word-break: normal;
 }
 
-/* Column widths for the fixed-layout comparison table.
-   Assigned via <colgroup> using canonical field types. */
-.col-w-type     { width: 3.5%; }
-.col-w-date     { width: 7.5%; }
-.col-w-number   { width: 6.5%; }
-.col-w-due_date { width: 7.5%; }
-.col-w-reference { width: 9%; }
-.col-w-total    { width: 5.5%; }
-.col-w-xero-link { width: 3.5%; }
-.col-w-status   { width: 6%; }
-
-.col-type,
-.table-compare td.col-type {
+/* Reasonable minimum widths per column */
+.col-type {
+  min-width: 6ch;
   white-space: nowrap;
 }
 
-.col-xero-link {
-  white-space: nowrap;
-}
-
-.col-status {
+.col-credit {
+  min-width: 7ch;
   white-space: nowrap;
 }
 
@@ -1647,7 +1634,7 @@ a:focus-visible {
 }
 
 .table-compare .cell-value-wrapper {
-  max-width: 100%;
+  max-width: 20ch;
 }
 
 .cell-value-truncate {

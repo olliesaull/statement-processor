@@ -1195,7 +1195,6 @@ def statement(statement_id: str):
         "is_processing": False,
         "processing_failed": False,
         "raw_statement_headers": display_headers,
-        "header_to_field": header_to_field,
         "statement_rows": visible_rows,
         "all_statement_rows": statement_rows,
         "row_comparisons": row_comparisons,

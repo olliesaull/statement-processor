@@ -92,24 +92,13 @@
       </div>
       <div class="table-responsive statement-table-wrapper">
         <table class="table table-bordered align-middle table-compare w-100 statement-table" id="statement-table" data-automation="statement-table">
-          <colgroup>
-            <col class="col-w-type">
-            {% for h in raw_statement_headers %}
-              <col class="col-w-{{ header_to_field.get(h, 'total') }}">
-            {% endfor %}
-            {% for h in raw_statement_headers %}
-              <col class="col-w-{{ header_to_field.get(h, 'total') }}">
-            {% endfor %}
-            <col class="col-w-xero-link">
-            <col class="col-w-status">
-          </colgroup>
           <thead class="table-light">
             <tr>
               <th class="text-center col-type" rowspan="2">Type</th>
               <th class="split-right text-center" colspan="{{ statement_col_count }}">Statement</th>
               <th class="text-center" colspan="{{ statement_col_count }}">Xero</th>
-              <th class="text-center col-xero-link" rowspan="2">Xero Link</th>
-              <th class="text-center col-status" rowspan="2">Status</th>
+              <th class="text-center" rowspan="2">Xero Link</th>
+              <th class="text-center" rowspan="2">Status</th>
             </tr>
             <tr>
               {% for h in raw_statement_headers %}
