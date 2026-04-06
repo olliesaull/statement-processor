@@ -20,9 +20,9 @@ from logger import logger
 
 ENTRY_TYPE_CONSUME = "CONSUME"
 ENTRY_TYPE_RELEASE = "RELEASE"
-SOURCE_TEXTRACT_FAILED = "stepfunctions-textract-failed"
-SOURCE_TEXTRACTION_FAILURE = "textraction-lambda-failure"
-SOURCE_TEXTRACTION_SUCCESS = "textraction-lambda-success"
+SOURCE_EXTRACTION_FAILED = "stepfunctions-extraction-failed"
+SOURCE_EXTRACTION_FAILURE = "extraction-lambda-failure"
+SOURCE_EXTRACTION_SUCCESS = "extraction-lambda-success"
 TOKEN_RESERVATION_STATUS_CONSUMED = "consumed"
 TOKEN_RESERVATION_STATUS_RELEASED = "released"
 TOKEN_RESERVATION_STATUS_RESERVED = "reserved"
@@ -208,14 +208,14 @@ class BillingSettlementService:
             raise BillingSettlementError(f"Failed to settle statement reservation for {statement_id}.") from exc
 
     @classmethod
-    def release_statement_reservation(cls, tenant_id: str, statement_id: str, *, source: str = SOURCE_TEXTRACTION_FAILURE) -> bool:
+    def release_statement_reservation(cls, tenant_id: str, statement_id: str, *, source: str = SOURCE_EXTRACTION_FAILURE) -> bool:
         """Release a statement reservation and return its pages to the balance."""
         return cls._settle_statement_reservation(
             tenant_id=tenant_id, statement_id=statement_id, source=source, entry_type=ENTRY_TYPE_RELEASE, next_status=TOKEN_RESERVATION_STATUS_RELEASED, update_balance=True
         )
 
     @classmethod
-    def consume_statement_reservation(cls, tenant_id: str, statement_id: str, *, source: str = SOURCE_TEXTRACTION_SUCCESS) -> bool:
+    def consume_statement_reservation(cls, tenant_id: str, statement_id: str, *, source: str = SOURCE_EXTRACTION_SUCCESS) -> bool:
         """Mark a statement reservation as consumed after successful processing."""
         return cls._settle_statement_reservation(
             tenant_id=tenant_id, statement_id=statement_id, source=source, entry_type=ENTRY_TYPE_CONSUME, next_status=TOKEN_RESERVATION_STATUS_CONSUMED, update_balance=False

@@ -13,7 +13,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from billing_service import WELCOME_GRANT_TOKENS
-from core.config_suggestion import get_pending_suggestion_count
 
 logger = logging.getLogger(__name__)
 
@@ -70,37 +69,6 @@ def get_banners(tenant_id: str, dismissed_keys: set[str]) -> list[Banner]:
             continue
         banners.append(banner)
     return banners
-
-
-def config_review_banner_provider(tenant_id: str) -> Banner | None:
-    """Banner provider for pending config review notifications.
-
-    Replaces the former inject_pending_review_count context processor.
-    Caching is handled by the context processor caller, not here.
-
-    Args:
-        tenant_id: Tenant to check for pending suggestions.
-
-    Returns:
-        Info banner with count and link to configs, or None if no pending reviews.
-    """
-    try:
-        count = get_pending_suggestion_count(tenant_id)
-    except Exception:
-        logger.exception("Failed to fetch pending suggestion count", tenant_id=tenant_id)
-        return None
-
-    if count <= 0:
-        return None
-
-    # Match the original grammar: "1 statement needs" vs "3 statements need"
-    plural_s = "s" if count != 1 else ""
-    verb = "needs" if count == 1 else "need"
-
-    return Banner(message=f"{count} statement{plural_s} {verb} config review.", alert_type="info", link_text="Review now", link_url="/configs", dismissible=False)
-
-
-register_banner_provider(config_review_banner_provider)
 
 
 def welcome_grant_banner_provider(_tenant_id: str) -> Banner:

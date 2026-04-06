@@ -1,0 +1,5 @@
+reportlab
+pypdf
+boto3
+pydantic
+aws_lambda_powertools

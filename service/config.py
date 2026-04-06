@@ -18,7 +18,6 @@ The SSM parameter paths are themselves stored as environment variables
 import os
 
 import boto3
-import botocore.config
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -76,7 +75,6 @@ VALKEY_URL: str = get_envar("VALKEY_URL", "redis://127.0.0.1:6379/0")
 # Ignoring Bandit suggestion as tempfile.gettempdir returns /tmp anyways (B108:hardcoded_tmp_directory)
 LOCAL_DATA_DIR: str = "./tmp/data" if STAGE in {"dev", "local"} else "/tmp/data"  # nosec B108
 
-TENANT_CONTACTS_CONFIG_TABLE_NAME: str = get_envar("TENANT_CONTACTS_CONFIG_TABLE_NAME")
 TENANT_STATEMENTS_TABLE_NAME: str = get_envar("TENANT_STATEMENTS_TABLE_NAME")
 TENANT_DATA_TABLE_NAME: str = get_envar("TENANT_DATA_TABLE_NAME")
 TENANT_BILLING_TABLE_NAME: str = get_envar("TENANT_BILLING_TABLE_NAME")
@@ -87,14 +85,8 @@ s3_client = boto3.client("s3")
 stepfunctions_client = boto3.client("stepfunctions")
 ddb_client = boto3.client("dynamodb")
 
-# Adaptive retry for services with throttling risk (Textract, Bedrock).
-_adaptive_retry = botocore.config.Config(retries={"max_attempts": 3, "mode": "adaptive"})
-textract_client = boto3.client("textract", config=_adaptive_retry)
-bedrock_runtime_client = boto3.client("bedrock-runtime", config=_adaptive_retry)
-
 ddb = boto3.resource("dynamodb")
 tenant_statements_table = ddb.Table(TENANT_STATEMENTS_TABLE_NAME)
-tenant_contacts_config_table = ddb.Table(TENANT_CONTACTS_CONFIG_TABLE_NAME)
 tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME)
 tenant_billing_table = ddb.Table(TENANT_BILLING_TABLE_NAME)
 tenant_token_ledger_table = ddb.Table(TENANT_TOKEN_LEDGER_TABLE_NAME)

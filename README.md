@@ -35,18 +35,22 @@
 │       ├── run_static_checks.sh
 │       ├── core/
 │       │   ├── __init__.py
+│       │   ├── billing.py
 │       │   ├── date_utils.py
 │       │   ├── extraction.py
-│       │   ├── get_contact_config.py
+│       │   ├── extraction_prompt.md
 │       │   ├── models.py
-│       │   ├── textract_statement.py
-│       │   ├── transform.py
+│       │   ├── statement_processor.py
 │       │   └── validation/
 │       │       ├── __init__.py
 │       │       ├── anomaly_detection.py
 │       │       └── validate_item_count.py
 │       └── tests/
 ├── scripts/
+│   ├── accuracy_test/
+│   │   ├── generate_pdfs.py
+│   │   ├── requirements.txt
+│   │   └── run_accuracy_test.py
 │   ├── add_config_to_ddb/
 │   │   ├── requirements.txt
 │   │   └── temp_add_config_to_ddb.py
@@ -85,14 +89,13 @@
     ├── xero_repository.py
     ├── core/
     │   ├── __init__.py
-    │   ├── bedrock_client.py
-    │   ├── config_suggestion.py
-    │   ├── contact_config_metadata.py
     │   ├── date_disambiguation.py
     │   ├── date_utils.py
-    │   ├── get_contact_config.py
     │   ├── item_classification.py
-    │   └── models.py
+    │   ├── models.py
+    │   ├── number_disambiguation.py
+    │   ├── statement_detail_types.py
+    │   └── statement_row_palette.py
     ├── playwright_tests/
     │   ├── helpers/
     │   └── tests/
@@ -114,30 +117,30 @@
 ## Major constructs and resources (from `cdk/stacks/statement_processor.py`)
 - **DynamoDB tables**
   - `TenantStatementsTable` (`tenant_statements_table`): statement‑level records; GSIs `TenantIDCompletedIndex` and `TenantIDStatementItemIDIndex` support filtering by completion status and per‑item lookups (see inline comments).
-  - `TenantContactsConfigTable` (`tenant_contacts_config_table`): shared table wired into both App Runner and the Textraction Lambda via env vars and IAM grants, so it acts as shared per‑tenant configuration/state (details of contents TODO (needs verification)).
+  - ~~`TenantContactsConfigTable`~~: **Removed.** Previously stored per-contact column mappings. Now redundant because Bedrock returns self-describing statement JSON with embedded metadata (`header_mapping`, `date_format`, etc.).
   - `TenantDataTable` (`tenant_data_table`): shared tenant state table wired into both App Runner and the Textraction Lambda via env vars and IAM grants; this now stays focused on sync/load metadata rather than mutable billing balance state.
   - `TenantBillingTable` (`tenant_billing_table`): dedicated tenant billing snapshot table keyed by `TenantID`; shared by App Runner and the Textraction Lambda because uploads reserve tokens in the web app while asynchronous consume/release settlement happens after the Step Functions workflow finishes. Keeping this snapshot separate from `TenantDataTable` lets balance writes stay atomic with the token ledger without colliding with sync/load metadata.
   - `TenantTokenLedgerTable` (`tenant_token_ledger_table`): append-only tenant billing ledger table keyed by `TenantID` + `LedgerEntryID`; shared by App Runner and the Textraction Lambda because both runtimes now participate in the token lifecycle (`RESERVE` on upload, `CONSUME` on success, `RELEASE` on failure).
   - `StripeEventStoreTable` (`stripe_event_store_table`): Stripe webhook idempotency table keyed by `StripeEventID`; exposed only to App Runner because webhook verification and deduplication terminate in the Flask service, not the Textraction Lambda.
 - **S3 bucket**
-  - `dexero-statement-processor-{stage}` (`s3_bucket`): shared object store referenced by both App Runner and the Textraction Lambda; includes an explicit bucket policy to allow Textract to read statement PDFs.
+  - `dexero-statement-processor-{stage}` (`s3_bucket`): shared object store referenced by both App Runner and the Textraction Lambda. The previous Textract bucket policy has been removed — the Lambda now downloads PDFs directly from S3 and sends them to Bedrock.
 - **Lambda**
   - `TextractionLambda` (`textraction_lambda`): container‑image Lambda built from `lambda_functions/textraction_lambda` to perform statement extraction; invoked by the Step Functions state machine (`ProcessStatement` task).
   - `TextractionLambda` and `StatementProcessorWebLambda` are explicitly configured for `arm64`, and their Docker image assets are built as `linux/arm64` to avoid architecture mismatches and improve cold-start efficiency on Graviton.
   - `TextractionLambdaLogGroup` (`textraction_log_group`): explicit log group with stage‑dependent retention (3 months in prod, 1 week otherwise).
 - **Step Functions**
-  - `TextractionStateMachine` (`state_machine`): orchestrates `StartTextractDocumentAnalysis` → `WaitForTextract` → `GetTextractStatus` → `ProcessStatement`, with success/failure handling for Textract job status.
+  - `TextractionStateMachine` (`state_machine`): 2-state workflow — `ProcessStatement` → `DidStatementProcessingSucceed?`. The Lambda calls Bedrock synchronously, so the previous Textract polling states were removed.
 - **App Runner**
-  - `Statement Processor Website` (`web`): App Runner service built from `service/` (`AppRunnerImage`) to run the Flask service; uses an instance role to access DynamoDB, S3, Textract, and Step Functions.
+  - `Statement Processor Website` (`web`): App Runner service built from `service/` (`AppRunnerImage`) to run the Flask service; uses an instance role to access DynamoDB, S3, and Step Functions. App Runner no longer needs Textract or Bedrock permissions — extraction is handled entirely by the Lambda.
   - App Runner now receives explicit `AWS_REGION` and `AWS_DEFAULT_REGION` runtime env vars from CDK instead of relying on platform-injected defaults. Rationale: `service/config.py` creates boto3 clients during module import, and the Flask worker boot path must not depend on whether App Runner happens to inject a default region variable.
   - App Runner health checks now use HTTP against `/healthz` instead of raw TCP. The Flask route returns `200` with an empty body. Rationale: TCP only proves the Gunicorn master socket is open; it does not prove a worker successfully booted or that Flask can return a response. `/healthz` is a tiny unauthenticated route with no template or business-logic work, so it is a better signal for whether Flask can actually handle requests.
   - Lambda does not set `AWS_REGION` manually in CDK. Rationale: Lambda reserves that environment variable name and already injects the runtime region automatically.
   - Production public-domain settings are configured in `cdk/app.py` (`PROD_DOMAIN_NAME`) and consumed by `cdk/stacks/statement_processor.py` to set CloudFront aliases and the OAuth callback host consistently.
 - **IAM roles and policies**
-  - `Statement Processor App Runner Instance Role` (`statement_processor_instance_role`): grants App Runner access to CloudWatch metrics, Textract, and Step Functions; table and S3 permissions are added via grants.
+  - `Statement Processor App Runner Instance Role` (`statement_processor_instance_role`): grants App Runner access to CloudWatch metrics and Step Functions; table and S3 permissions are added via grants. Textract and Bedrock permissions are no longer needed on App Runner.
   - Web Lambda runtime no longer requires `ssm:GetParameter`/`kms:Decrypt` for Xero/session secrets; `cdk/deploy_stack.sh` reads SSM secure parameters before deploy and passes them into CDK as deploy-time environment variables for Lambda. This removes per-cold-start SSM/KMS network calls from the Flask service startup path.
   - `cdk/deploy_stack.sh` now runs a bounded Docker multi-arch preflight before `cdk deploy`: it reuses any existing `buildx` builder that already advertises `linux/arm64` (preferring the active/default builder before creating the repo-specific `multiarch` builder), skips the privileged `tonistiigi/binfmt` refresh when an initial `linux/arm64` smoke test already succeeds, and wraps bootstrap/runtime checks in explicit progress messages plus timeouts. Rationale: first-run image pulls and stale custom builders were previously hidden behind `/dev/null`, which made deploys look stuck at the Docker multi-arch step even when Docker was still bootstrapping emulation.
-  - Textract permissions added to both Lambda and state machine roles to allow `StartDocumentAnalysis` and `GetDocumentAnalysis`.
+  - Lambda gets `bedrock:InvokeModel` for Bedrock Converse API calls (replacing the previous `textract:GetDocumentAnalysis` permission). The state machine no longer needs direct Textract permissions since it only invokes the Lambda.
 - **CloudWatch + SNS**
   - `StatementProcessorAppRunnerErrorMetricFilter` + `StatementProcessorAppRunnerErrorAlarm`: parses App Runner application logs for `ERROR` and raises an alarm.
   - `TextractionLambdaErrorMetricFilter` + `TextractionLambdaErrorAlarm`: parses Textraction Lambda logs for `ERROR` or timeout strings and raises an alarm.
@@ -183,21 +186,71 @@ aws ses verify-email-identity --email-address info@dotelastic.com --region eu-we
 
 Check the inbox for `info@dotelastic.com` and click the verification link. Until this step is complete, all `send_email` calls for login notifications will fail with `MessageRejected`.
 
-## Orchestration (Step Functions & Textract)
+## Orchestration (Step Functions & Bedrock)
+
+> **Migration note (2026-04):** Statement extraction was migrated from AWS Textract to Amazon Bedrock (Claude haiku-4-5) via the Converse API with forced tool use. See **Textract to Bedrock Migration** section below for rationale and details.
+
 **State machine definitions and entry points**
-- `TextractionStateMachine` is defined in `cdk/stacks/statement_processor.py` as a single chainable state machine built from `StartTextractDocumentAnalysis` -> `WaitForTextract` -> `GetTextractStatus` -> `IsTextractFinished?` -> `ProcessStatement` -> `DidStatementProcessingSucceed?`. The workflow now invokes the same Lambda on both Textract success and Textract failure so billing settlement always runs before the execution ends.
+- `TextractionStateMachine` is defined in `cdk/stacks/statement_processor.py` as a 2-state workflow: `ProcessStatement` -> `DidStatementProcessingSucceed?`. The previous 6-state Textract polling workflow (`StartTextractDocumentAnalysis` -> `WaitForTextract` -> `GetTextractStatus` -> `IsTextractFinished?` -> `ProcessStatement` -> `DidStatementProcessingSucceed?`) was replaced because Bedrock calls are synchronous — the Lambda sends PDF chunks to Bedrock and receives structured JSON back in one call, eliminating the need for polling.
 - Executions are started from the Flask service via `service/utils/workflows.py:start_textraction_state_machine`, invoked during upload in `service/app.py:_process_statement_upload`.
 
 **Step-by-step flow (code-grounded)**
 1. Upload handler registers statement metadata and starts the state machine (`service/app.py:_process_statement_upload` -> `service/utils/workflows.py:start_textraction_state_machine`).
-2. Step Functions calls Textract `startDocumentAnalysis` with the S3 PDF location (`StartTextractDocumentAnalysis` in `cdk/stacks/statement_processor.py`).
-3. Workflow waits 10 seconds (`WaitForTextract`).
-4. Workflow calls `getDocumentAnalysis` to check `JobStatus` (`GetTextractStatus`).
-5. If status is `SUCCEEDED` or `PARTIAL_SUCCESS`, invoke `TextractionLambda` with job id + S3 keys (`ProcessStatement`).
-6. If status is `FAILED`, invoke the same Lambda with `textractStatus=FAILED` so it can release the earlier token reservation instead of leaving tokens stuck in `reserved`.
-7. Otherwise, loop back to wait and poll again until timeout.
-8. Lambda retrieves paginated Textract results, builds statement JSON, persists items, and writes JSON to S3 (`lambda_functions/textraction_lambda/core/extraction.py` + `lambda_functions/textraction_lambda/core/textract_statement.py`). On success it consumes the earlier reservation; on failure it releases the reservation back to `TenantBillingTable`.
-9. `lambda_functions/textraction_lambda/main.py` returns a compact metadata payload (IDs, `jsonKey`, filename/date/item summary) instead of embedding the full statement JSON in state output; Step Functions now branches on `Payload.status` so billing failures and processing failures explicitly fail the execution.
+2. Step Functions invokes `TextractionLambda` with S3 keys (`ProcessStatement`).
+3. Lambda downloads the PDF from S3, chunks it (up to ~10 pages per chunk with 1-page overlap), and sends each chunk to Bedrock via the Converse API with forced tool use (`extract_statement_rows`) to receive structured JSON back (`lambda_functions/textraction_lambda/core/extraction.py`).
+4. Lambda merges chunk results, deduplicates overlap rows, builds statement JSON with self-describing metadata (`header_mapping`, `date_format`, `date_confidence`, `decimal_separator`, `thousands_separator`), persists items to DynamoDB, and writes JSON to S3 (`lambda_functions/textraction_lambda/core/statement_processor.py`). On success it consumes the earlier token reservation; on failure it releases the reservation back to `TenantBillingTable`.
+5. `lambda_functions/textraction_lambda/main.py` returns a compact metadata payload (IDs, `jsonKey`, filename/date/item summary); Step Functions branches on `Payload.status` so billing failures and processing failures explicitly fail the execution.
+
+**Timeout configuration**
+- Lambda timeout: 660 seconds (Bedrock calls for large multi-chunk PDFs can take longer than the old Textract polling).
+- State machine timeout: 720 seconds (down from 30 minutes, since there is no polling loop).
+
+## Textract to Bedrock Migration
+
+### What changed
+Statement extraction was migrated from AWS Textract to Amazon Bedrock (Claude haiku-4-5) via the Converse API with forced tool use. The Lambda sends PDF page chunks to Bedrock and receives structured JSON back in a single synchronous call, replacing the asynchronous Textract polling workflow.
+
+### Why
+- **65% cheaper** per statement than Textract table extraction.
+- **50% faster** end-to-end (no polling loop, no wait states).
+- **Identical accuracy** validated across 18 real-world PDFs during testing.
+- **Structural understanding**: Textract struggled with structurally diverse PDFs (misidentified section titles as headers, could not handle multi-line headers, required growing workarounds). Bedrock gives structural understanding of the document.
+
+### Self-describing statement JSON
+The output JSON now carries metadata that the service reads directly from S3:
+- `header_mapping`: detected column-to-field mapping (e.g. `{"date": "Date", "number": "Reference"}`).
+- `date_format`: detected date format string (e.g. `DD/MM/YYYY`).
+- `date_confidence`: `high` (unambiguous dates found) or `low` (all dates ambiguous).
+- `decimal_separator` and `thousands_separator`: detected number formatting.
+
+This eliminates the need for a per-contact `ContactConfig` stored in DynamoDB. The service reads the statement JSON from S3 and uses the embedded metadata directly.
+
+### What was removed
+- **ContactConfig (DynamoDB table + code)**: `TenantContactsConfigTable`, all `get_contact_config` and `contact_config_metadata` modules in both service and Lambda.
+- **Config suggestion pipeline**: `service/core/config_suggestion.py`, `service/core/bedrock_client.py`, `service/core/date_disambiguation.py`, config suggestion S3 prefix.
+- **`/configs` UI route**: No longer needed — users do not manually configure column mappings.
+- **Textract polling states**: The 6-state Step Functions workflow (`StartTextractDocumentAnalysis` -> `WaitForTextract` -> `GetTextractStatus` -> `IsTextractFinished?` -> `ProcessStatement` -> `DidStatementProcessingSucceed?`) was replaced with a 2-state workflow (`ProcessStatement` -> `DidStatementProcessingSucceed?`).
+- **Textract IAM permissions**: Lambda gets `bedrock:InvokeModel` instead. App Runner no longer needs Textract or Bedrock permissions.
+- **S3 bucket policy for Textract**: Textract previously needed to read PDFs from S3 directly; the Lambda now downloads PDFs and sends them to Bedrock.
+
+### CDK changes summary
+- Lambda IAM: `bedrock:InvokeModel` replaces `textract:GetDocumentAnalysis`.
+- Lambda timeout: 60s -> 660s (Bedrock calls can take longer than Textract polling).
+- State machine timeout: 30 minutes -> 720 seconds.
+- State machine definition: 2 states instead of 6.
+- App Runner: no longer granted Textract or Bedrock permissions.
+- `TenantContactsConfigTable`: removed from CDK stack.
+
+### Accuracy test suite
+Located at `scripts/accuracy_test/`. Contains 8 synthetic PDF scenarios testing extraction accuracy across different statement layouts and edge cases.
+
+```bash
+# Requires CDK deploy for Bedrock permissions (uses deployed Lambda's IAM role)
+python3.13 scripts/accuracy_test/run_accuracy_test.py
+```
+
+### Bedrock model access
+The Bedrock Converse API requires model access to be enabled in the AWS console. The EU cross-region inference profile `eu.anthropic.claude-haiku-4-5-20251001-v1:0` must be enabled in the deployment region. This is a manual console step — CDK only grants the IAM permissions.
 
 ## Flask Service
 
@@ -217,7 +270,7 @@ Check the inbox for `info@dotelastic.com` and click the verification link. Until
     - Tenant sync-status checks are read directly from DynamoDB via `service/utils/tenant_status.py` for consistent cross-instance behavior.
 
 - **Main modules/packages**
-  - `service/core/`: domain models and mapping logic (e.g. `contact_config_metadata.py`, `get_contact_config.py`, `item_classification.py`, `models.py`).
+  - `service/core/`: domain models and logic (e.g. `item_classification.py`, `models.py`). The config-related modules (`contact_config_metadata.py`, `get_contact_config.py`, `config_suggestion.py`, `bedrock_client.py`, `date_disambiguation.py`) have been removed.
   - `service/utils/`: cross‑cutting utilities:
     - Auth/session helpers: `service/utils/auth.py`
     - DynamoDB access: `service/utils/dynamo.py`
@@ -256,7 +309,7 @@ Check the inbox for `info@dotelastic.com` and click the verification link. Until
     - `/statements` (GET): list and sort statements (requires tenant + Xero auth, blocks while loading).
     - `/statement/<statement_id>` (GET/POST): statement detail view, completion toggles, and XLSX export (requires tenant + Xero auth, blocks while loading).
     - `/statement/<statement_id>/delete` (POST): delete statement + artefacts (requires tenant + Xero auth, blocks while loading).
-    - `/configs` (GET/POST): contact mapping configuration UI (requires tenant + Xero auth, blocks while loading).
+    - ~~`/configs`~~: **Removed.** Contact mapping configuration UI is no longer needed — Bedrock returns self-describing JSON.
     - `/instructions` (GET): instructions page.
     - `/about` (GET): non-technical overview page covering product purpose, use cases, outcomes, and practical limits.
     - **Shared statement row colour system (UI + Excel)**:
@@ -310,7 +363,7 @@ Check the inbox for `info@dotelastic.com` and click the verification link. Until
     - `/.well-known/<path>` (GET): returns 204 for DevTools probes.
 
 - **Upload processing flow** (from `service/app.py`)
-  - `upload_statements` validates file/contact counts, enforces PDF MIME/extension rules (`service/utils/storage.py:is_allowed_pdf`), verifies a contact config exists (`_ensure_contact_config`), and then calls `service/billing_service.py` to reserve tokens atomically before any upload starts.
+  - `upload_statements` validates file/contact counts, enforces PDF MIME/extension rules (`service/utils/storage.py:is_allowed_pdf`), and then calls `service/billing_service.py` to reserve tokens atomically before any upload starts. Contact config validation is no longer needed — Bedrock detects column mappings during extraction.
   - `service/billing_service.py:reserve_statement_uploads`:
     - Decrements `TenantBillingTable.TokenBalance` conditionally.
     - Appends one `RESERVE` row per statement to `TenantTokenLedgerTable`.
@@ -411,7 +464,7 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
 
 **Overview**
 - Primary stores are DynamoDB tables for statement data/config/status and S3 for statement artefacts and cached Xero datasets (tables/bucket created in `cdk/stacks/statement_processor.py`).
-- The structured statement JSON schema is produced by the Textraction Lambda (`lambda_functions/textraction_lambda/core/textract_statement.py`, `lambda_functions/textraction_lambda/core/models.py`) and consumed by the Flask service (`service/app.py`, `service/utils/storage.py`).
+- The structured statement JSON schema is produced by the Textraction Lambda (`lambda_functions/textraction_lambda/core/statement_processor.py`, `lambda_functions/textraction_lambda/core/models.py`) via Bedrock (Claude haiku-4-5) and consumed by the Flask service (`service/app.py`, `service/utils/storage.py`). The JSON is self-describing: it includes `header_mapping`, `date_format`, `date_confidence`, `decimal_separator`, and `thousands_separator` so the service does not need an external config lookup.
 
 ### DynamoDB
 **TenantStatementsTable** (`cdk/stacks/statement_processor.py`)
@@ -423,15 +476,15 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
   - `TenantIDStatementItemIDIndex` (PK: `TenantID`, SK: `StatementItemID`) defined in CDK but not referenced in code (TODO (needs verification)).
 - **Concept**
   - Single-table pattern storing both statement headers and statement line items.
-  - `RecordType` distinguishes row types: `"statement"` for headers (`service/billing_service.py:reserve_statement_uploads`) and `"statement_item"` for line items (`lambda_functions/textraction_lambda/core/textract_statement.py:_persist_statement_items`).
+  - `RecordType` distinguishes row types: `"statement"` for headers (`service/billing_service.py:reserve_statement_uploads`) and `"statement_item"` for line items (`lambda_functions/textraction_lambda/core/statement_processor.py:_persist_statement_items`).
 - **Writers**
   - Statement headers: `service/billing_service.py:reserve_statement_uploads` (initial record with billing metadata).
-  - Item rows + header updates: `lambda_functions/textraction_lambda/core/textract_statement.py` (writes item rows; sets `EarliestItemDate`, `LatestItemDate`, `JobId` on header).
+  - Item rows + header updates: `lambda_functions/textraction_lambda/core/statement_processor.py` (writes item rows; sets `EarliestItemDate` and `LatestItemDate` on header).
   - Status updates: `service/utils/dynamo.py` (completion flags and item type updates).
 - **Readers**
   - `service/utils/dynamo.py` (list statements, read header + item status, delete statement data).
   - `service/app.py` (statement list/detail flows).
-  - `lambda_functions/textraction_lambda/core/textract_statement.py` (reads header to preserve completion status during re‑processing).
+  - `lambda_functions/textraction_lambda/core/statement_processor.py` (reads header to preserve completion status during re-processing).
 - **Example header item** (created by `service/billing_service.py:reserve_statement_uploads`, later updated by the Lambda):
 ```json
 {
@@ -446,7 +499,6 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
   "PdfPageCount": 8,
   "ReservationLedgerEntryID": "reserve#<statement_id>",
   "TokenReservationStatus": "reserved",
-  "JobId": "<textract_job_id>",
   "EarliestItemDate": "YYYY-MM-DD",
   "LatestItemDate": "YYYY-MM-DD"
 }
@@ -475,35 +527,9 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
 ```
 - `statement_item.total` is now treated as a dict-only `{label: value}` mapping in both service and textraction code paths; legacy list-style totals are no longer supported.
 
-**TenantContactsConfigTable** (`cdk/stacks/statement_processor.py`)
-- **Keys**
-  - Partition key: `TenantID`
-  - Sort key: `ContactID`
-- **Concept**
-  - Stores per‑tenant, per‑contact mapping config under the `config` attribute.
-  - Config shape is flattened at the root (for example `number`, `total`, `date_format`, `decimal_separator`, `thousands_separator`); nested legacy `statement_items` mappings are no longer read.
-- **Writers**
-  - Config UI save/load: `service/core/get_contact_config.py`.
-  - Raw header persistence during extraction: `lambda_functions/textraction_lambda/core/transform.py:_persist_raw_headers` (via `core/get_contact_config.py:set_contact_config`).
-- **Readers**
-  - Config UI and upload validation: `service/core/get_contact_config.py`, `service/app.py`.
-  - Textraction mapping: `lambda_functions/textraction_lambda/core/get_contact_config.py`.
-- **Example item** (based on `service/core/contact_config_metadata.py:EXAMPLE_CONFIG`):
-```json
-{
-  "TenantID": "<tenant_id>",
-  "ContactID": "<contact_id>",
-  "config": {
-    "date": "date",
-    "due_date": "",
-    "number": "reference",
-    "date_format": "YYYY-MM-DD",
-    "total": ["debit", "credit"],
-    "decimal_separator": ".",
-    "thousands_separator": ","
-  }
-}
-```
+**TenantContactsConfigTable** — **REMOVED**
+- This table has been removed as part of the Textract-to-Bedrock migration. Bedrock returns self-describing statement JSON that includes `header_mapping`, `date_format`, `date_confidence`, `decimal_separator`, and `thousands_separator` directly in the output. The service reads these metadata fields from the statement JSON in S3 instead of needing a per-contact `ContactConfig` in DynamoDB.
+- The associated DynamoDB table, config suggestion pipeline, `/configs` UI route, and all `get_contact_config` / `contact_config_metadata` modules have been removed from both the service and Lambda codebases.
 
 **TenantDataTable** (`cdk/stacks/statement_processor.py`)
 - **Keys**
@@ -575,8 +601,8 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
 - `service/templates/base.html` renders the banner list as Bootstrap alerts, with an optional dismiss button that POSTs to `/api/banner/dismiss`.
 - Dismissed banners are persisted as a string set (`DismissedBanners`) on the tenant's `TenantDataTable` row via `TenantDataRepository.dismiss_banner`, so dismissals survive across sessions.
 - Current providers:
-  - `config_review_banner_provider` — shows an info banner when the tenant has pending config review suggestions (count > 0), with a link to `/configs`. Not dismissible because the count is dynamic.
   - `welcome_grant_banner_provider` — unconditionally returns a success banner telling the tenant they received 5 free tokens, with a link to `/upload-statements`. Dismissible via `dismiss_key="welcome-grant"`.
+  - `config_review_banner_provider` has been removed (config suggestion pipeline removed).
 - Adding a new banner: write a function matching the `BannerProvider` protocol, call `register_banner_provider(fn)` at module level, and import the module during app startup.
 
 **Manual token adjustments**
@@ -622,54 +648,26 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
 **Key structure for statements** (defined in `service/utils/storage.py`)
 - PDFs: `{tenant_id}/statements/{statement_id}.pdf`
   - Written by: `service/app.py:_process_statement_upload` via `upload_statement_to_s3`.
-  - Read by: Textract (via Step Functions) and the Textraction Lambda.
+  - Read by: Textraction Lambda (downloads PDF, chunks it, and sends pages to Bedrock).
   - Deleted by: `service/utils/dynamo.py:delete_statement_data`.
 - JSON outputs: `{tenant_id}/statements/{statement_id}.json`
-  - Written by: `lambda_functions/textraction_lambda/core/textract_statement.py:run_textraction`.
+  - Written by: `lambda_functions/textraction_lambda/core/statement_processor.py:run_textraction`.
   - Read by: `service/utils/storage.py:fetch_json_statement` (used in `service/app.py` statement detail view).
   - Updated by: `service/app.py:_persist_classification_updates` (re‑uploads JSON after item type changes).
   - Deleted by: `service/utils/dynamo.py:delete_statement_data`.
 - Key sanitisation: `_statement_s3_key` rejects path separators in `tenant_id`/`statement_id` to avoid path traversal in keys (`service/utils/storage.py`).
-- Config suggestions: `{tenant_id}/config-suggestions/{statement_id}.json`
-  - Written by: `service/core/config_suggestion.py:suggest_config_for_statement` after Textract + Bedrock analysis.
-  - Read by: `service/core/config_suggestion.py:get_pending_suggestions` (loaded on `/configs` page).
-  - Deleted by: `service/core/config_suggestion.py:delete_suggestion` (after user confirms config).
-  - Contents: `ConfigSuggestion` model — contact metadata, detected headers, suggested column mappings, and confidence notes.
+- Config suggestions: **Removed.** The `{tenant_id}/config-suggestions/` prefix is no longer used. Bedrock returns self-describing JSON with column mappings embedded, so the config suggestion pipeline has been removed entirely.
 
 **Key structure for cached Xero datasets**
 - `{tenant_id}/data/{resource}.json` where `resource` is one of `contacts`, `invoices`, `credit_notes`, `payments` (`service/xero_repository.py`, `service/sync.py`).
   - Written by: `service/sync.py` after fetching from Xero.
   - Read by: `service/xero_repository.py` (download to local cache when missing).
 
-## Auto Config Suggestion
+## Auto Config Suggestion — REMOVED
 
-When a statement is uploaded for a contact that has no saved config, the system auto-detects column mappings instead of blocking the upload.
+The auto config suggestion pipeline has been removed as part of the Textract-to-Bedrock migration. Bedrock returns self-describing statement JSON that includes column mappings (`header_mapping`), date format, and number formatting metadata directly in the extraction output. There is no longer a separate suggestion/confirmation step — uploads go straight to extraction.
 
-### How it works
-1. **Upload**: The PDF is uploaded to S3 and a DynamoDB header row is created with `Status=pending_config_review`. No tokens are reserved at this stage.
-2. **Textract**: A background thread extracts page 1 as a single-page PDF (to avoid the sync API's multi-page limitation) and runs `AnalyzeDocument` with `FeatureTypes=["TABLES"]`.
-3. **Bedrock Haiku 4.5**: The detected headers and sample rows are sent to Bedrock via the Converse API with a forced tool call (`suggest_config`). The prompt includes a full SDF token reference table so the LLM returns date formats in the correct syntax.
-4. **Date disambiguation**: A post-processing step scans date values for components > 12 to confirm or reject the LLM's DD/MM vs MM/DD proposal. If all values are ambiguous (both components <= 12), the date format is left empty for the user to fill in.
-5. **S3 save**: The suggestion (including detected headers, suggested config, and confidence notes) is saved to `{tenant_id}/config-suggestions/{statement_id}.json`.
-6. **User confirmation**: The `/configs` page shows pending review cards with dropdowns pre-filled from the detected headers. Users can adjust mappings and confirm. On confirmation, tokens are reserved via `BillingService.reserve_confirmed_statement()` (deducting from the tenant balance and stamping reservation metadata on the statement header), the config is saved to DynamoDB, the suggestion file is deleted, and the extraction step function is started. Token reservation is deferred to this point (rather than upload time) to avoid locking tokens for abandoned suggestions.
-
-### Status values
-- `pending_config_review`: Suggestion generated successfully, awaiting user confirmation.
-- `config_suggestion_failed`: Textract or Bedrock failed — the user must configure manually via the full config editor.
-
-### Bedrock model access
-The Bedrock Converse API requires model access to be enabled in the AWS console. The EU cross-region inference profile `eu.anthropic.claude-haiku-4-5-20251001-v1:0` must be enabled in the deployment region. This is a manual console step — CDK only grants the IAM permissions.
-
-### New files
-| File | Purpose |
-|------|---------|
-| `service/core/date_disambiguation.py` | DD/MM vs MM/DD disambiguation from date values |
-| `service/core/bedrock_client.py` | Bedrock Converse API wrapper with tool use for config suggestion |
-| `service/core/config_suggestion.py` | Orchestrator: Textract → Bedrock → S3 → DynamoDB status |
-
-### API endpoints
-- `POST /api/configs/confirm` — Confirm a single suggested config and start extraction.
-- `POST /api/configs/confirm-all` — Confirm multiple configs in one request. Skips invalid ones.
+Removed components: `service/core/config_suggestion.py`, `service/core/bedrock_client.py`, `service/core/date_disambiguation.py`, `/configs` route, `/api/configs/confirm` and `/api/configs/confirm-all` endpoints, config suggestion S3 prefix.
 
 ## Anomaly Detection Logic
 
@@ -689,12 +687,12 @@ The Bedrock Converse API requires model access to be enabled in the AWS console.
   - Example: “Balance brought forward” or “Amount due” in a reference field is flagged; “Balance 2023” is not flagged by the single‑token “balance” rule because it includes digits.
 
 - **Rule: Flags are additive and preserved**
-  - Logic: Flagged items get `_flags` (list of strings) plus `FlagDetails[FLAG_LABEL]` with structured issues/details; `remove=False` keeps rows and only annotates them. `run_textraction` calls `apply_outlier_flags(..., remove=False)` so items are preserved (`lambda_functions/textraction_lambda/core/validation/anomaly_detection.py`, `lambda_functions/textraction_lambda/core/textract_statement.py`).
+  - Logic: Flagged items get `_flags` (list of strings) plus `FlagDetails[FLAG_LABEL]` with structured issues/details; `remove=False` keeps rows and only annotates them. `run_textraction` calls `apply_outlier_flags(..., remove=False)` so items are preserved (`lambda_functions/textraction_lambda/core/validation/anomaly_detection.py`, `lambda_functions/textraction_lambda/core/statement_processor.py`).
   - Why it exists: enables UI warnings without dropping data. `_flags` is kept as legacy to not break UI logic currently. Once UI is updated it will be completely replaced by `FlagDetails`
   - Example: A row with `ml-outlier` is still shown in the UI but highlighted as anomalous.
 
 - **Rule: Best‑effort reference validation (non‑blocking)**
-  - Logic: `validate_references_roundtrip(...)` compares extracted references against PDF text (pdfplumber) and raises `ItemCountDisagreementError` on mismatch, but the call is wrapped in `try/except` in `run_textraction`, so failures only log warnings and do not block output (`lambda_functions/textraction_lambda/core/validation/validate_item_count.py`, `lambda_functions/textraction_lambda/core/textract_statement.py`).
+  - Logic: `validate_references_roundtrip(...)` compares extracted references against PDF text (pdfplumber) and raises `ItemCountDisagreementError` on mismatch, but the call is wrapped in `try/except` in `run_textraction`, so failures only log warnings and do not block output (`lambda_functions/textraction_lambda/core/validation/validate_item_count.py`, `lambda_functions/textraction_lambda/core/statement_processor.py`).
   - Why it exists: provides a safety check while preserving pipeline availability when PDFs are noisy or scanned.
   - Example: If the PDF is image‑only (no extractable text), validation is skipped to avoid false mismatches.
 
@@ -706,7 +704,6 @@ The Bedrock Converse API requires model access to be enabled in the AWS console.
 
 This script clears the resources configured in `service/.env`:
 - `S3_BUCKET_NAME`
-- `TENANT_CONTACTS_CONFIG_TABLE_NAME`
 - `TENANT_STATEMENTS_TABLE_NAME`
 - `TENANT_DATA_TABLE_NAME`
 
@@ -737,22 +734,19 @@ python3.13 scripts/clear_ddb_and_s3/clear_ddb_and_s3.py --tenant-id <tenant_id> 
 
 ## Tenant Snapshot Script (`scripts/tenant_snapshot/tenant_snapshot.py`)
 
-This script backs up and restores **contact configs + statement PDFs** for a single tenant using environment variables only (no CLI args).
+This script backs up and restores **statement PDFs** for a single tenant using environment variables only (no CLI args).
 
 ### What it does
 - **Backup mode** (`TENANT_SNAPSHOT_MODE=backup`):
-  - Reads all rows for `TENANT_ID` from `TenantContactsConfigTable`.
   - Reads statement header rows for `TENANT_ID` from `TenantStatementsTable` (`RecordType=statement` / missing).
   - Downloads each statement PDF from `s3://$S3_BUCKET_NAME/{tenant_id}/statements/{statement_id}.pdf`.
   - Writes snapshot files under `TENANT_SNAPSHOT_DIR/<TENANT_ID>/`:
-    - `contact_configs.json`
     - `statements_manifest.json`
     - `pdfs/<statement_id>.pdf`
 - **Restore mode** (`TENANT_SNAPSHOT_MODE=restore`):
-  - Rewrites contact configs from `contact_configs.json` back to `TenantContactsConfigTable`.
   - Re-uploads PDFs from `pdfs/` to S3 using **new** statement IDs.
   - Recreates statement header rows in `TenantStatementsTable` (new IDs, fresh `UploadedAt`, `Completed=false`).
-  - Optionally starts Textraction Step Functions for each restored statement to regenerate JSON/item rows.
+  - Optionally starts Textraction Step Functions for each restored statement to regenerate JSON/item rows via Bedrock.
 
 ### Environment variables
 - Required:
@@ -760,7 +754,6 @@ This script backs up and restores **contact configs + statement PDFs** for a sin
   - `TENANT_SNAPSHOT_MODE` (`backup` or `restore`)
 - Usually loaded from `service/.env` (or set manually):
   - `S3_BUCKET_NAME`
-  - `TENANT_CONTACTS_CONFIG_TABLE_NAME`
   - `TENANT_STATEMENTS_TABLE_NAME`
 - Optional:
   - `TENANT_SNAPSHOT_ENV_FILE` (default: `service/.env`)
@@ -793,7 +786,7 @@ python3.13 scripts/tenant_snapshot/tenant_snapshot.py
 
 ## Sonnet Extraction Test Script (`scripts/replace_textract_test/run.py`)
 
-Test script that validates replacing Textract with Sonnet 4.6 (via Bedrock) for statement line-item extraction. Textract struggles with structurally diverse PDFs — misidentifies section titles as headers, can't handle multi-line headers, and requires growing workarounds. Sonnet gives structural understanding at comparable cost (~10% more).
+Exploratory test script that validated the feasibility of replacing Textract with an LLM (Sonnet 4.6 via Bedrock) for statement extraction. This script was the precursor to the production migration, which uses haiku-4-5 instead of Sonnet for cost reasons (see **Textract to Bedrock Migration** section above).
 
 ### How it works
 
@@ -894,12 +887,8 @@ This fixture locks the end-to-end statement rendering logic against a known PDF 
 3) Upload the PDF via the UI:
    - Log in to the app and switch to tenant **Demo Company (UK)**.
    - Upload `test_statements_ltd.pdf` for contact **Test Statements Ltd**.
-4) Ensure the contact mapping matches the PDF headers:
-   - Number column: `reference`
-   - Date column: `date`
-   - Total columns: `debit`, `credit`
-   - Date format: `YYYY-MM-DD`
-5) Populate Xero from the extracted statement JSON:
+   - Bedrock will auto-detect column mappings during extraction (no manual config step needed).
+4) Populate Xero from the extracted statement JSON:
    - Run `python3.13 scripts/populate_xero/populate_xero.py`.
    - The script defaults to Demo Company (UK) and the Test Statements Ltd statement/contact IDs; override as needed with `TENANT_ID`, `STATEMENT_ID`, and `CONTACT_ID` env vars.
 6) Capture the Excel baseline:

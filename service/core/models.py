@@ -1,16 +1,9 @@
-"""
-Shared models for statement processing.
-
-These models provide:
-- A typed representation of extracted statement items (`StatementItem`)
-- A typed representation of contact mapping config (`ContactConfig`)
-- A comparison payload for statement vs. Xero values (`CellComparison`)
-"""
+"""Pydantic models used across the service."""
 
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 Number = int | float | str
 
@@ -29,7 +22,7 @@ class StatementItem(BaseModel):
 
     @classmethod
     def _coerce_number(cls, v: Any) -> Any:
-        """Convert numeric-looking values into int/float when possible."""
+        """Best-effort conversion of numeric-looking values into int/float."""
         if v is None:
             return ""
         if isinstance(v, (int, float)):
@@ -45,15 +38,15 @@ class StatementItem(BaseModel):
     @field_validator("total", mode="before")
     @classmethod
     def _coerce_total(cls, v: Any) -> dict[str, Number]:
-        """Normalize `total` into a `{label: value}` mapping from dict input."""
+        """Normalize `total` into a simple `{label: value}` mapping."""
 
         def _coerce_val(val: Any) -> Number:
             return cls._coerce_number(val)
 
+        coerced: dict[str, Number] = {}
         if v is None:
             return {}
         if isinstance(v, dict):
-            coerced: dict[str, Number] = {}
             for key, value in v.items():
                 label = str(key or "").strip()
                 if not label:
@@ -63,51 +56,9 @@ class StatementItem(BaseModel):
         return {}
 
 
-class ContactConfig(BaseModel):
-    """Contact-specific mapping config persisted for statement extraction and rendering."""
-
-    model_config = ConfigDict(extra="allow")
-
-    date: str = ""
-    due_date: str = ""
-    number: str = ""
-    total: list[str] = Field(default_factory=list)
-    date_format: str = ""
-    decimal_separator: str = "."
-    thousands_separator: str = ","
-    raw: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("total", mode="before")
-    @classmethod
-    def _coerce_total(cls, value: Any) -> list[str]:
-        """Normalize configured total headers into a trimmed string list."""
-        if value is None:
-            return []
-        if not isinstance(value, list):
-            raise TypeError("total must be a list")
-        return [str(item).strip() for item in value if str(item).strip()]
-
-
-class ConfigSuggestion(BaseModel):
-    """LLM-suggested config stored in S3 for user confirmation.
-
-    Saved at ``<tenant_id>/config-suggestions/<statement_id>.json`` and
-    loaded by the /configs page to render pending review cards.
-    """
-
-    contact_id: str
-    contact_name: str
-    statement_id: str
-    filename: str
-    page_count: int
-    suggested_config: dict[str, Any]
-    detected_headers: list[str]
-    confidence_notes: str = ""
-
-
 @dataclass(frozen=True)
 class CellComparison:
-    """Represents the comparison of a single statement cell versus the Xero value."""
+    """Per-cell comparison between statement and Xero values."""
 
     header: str
     statement_value: str

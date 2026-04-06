@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from banner_service import Banner, config_review_banner_provider, get_banners, register_banner_provider, welcome_grant_banner_provider
+from banner_service import Banner, get_banners, register_banner_provider, welcome_grant_banner_provider
 
 
 def test_banner_dataclass_defaults() -> None:
@@ -64,38 +64,6 @@ def test_get_banners_keeps_undismissed_dismissible(monkeypatch) -> None:
     banners = get_banners("tenant-1", dismissed_keys={"unrelated-key"})
     assert len(banners) == 1
     assert banners[0].message == "still here"
-
-
-def test_config_review_provider_returns_banner_when_count_positive(monkeypatch) -> None:
-    """Should return an info banner when there are pending suggestions."""
-    monkeypatch.setattr("banner_service.get_pending_suggestion_count", lambda tid: 3)
-
-    banner = config_review_banner_provider("tenant-1")
-
-    assert banner is not None
-    assert banner.alert_type == "info"
-    assert "3" in banner.message
-    assert banner.link_url == "/configs"
-    assert banner.dismissible is False
-
-
-def test_config_review_provider_returns_none_when_count_zero(monkeypatch) -> None:
-    """Should return None when no pending suggestions exist."""
-    monkeypatch.setattr("banner_service.get_pending_suggestion_count", lambda tid: 0)
-
-    banner = config_review_banner_provider("tenant-1")
-
-    assert banner is None
-
-
-def test_config_review_provider_singular_grammar(monkeypatch) -> None:
-    """Should use singular grammar for exactly 1 statement."""
-    monkeypatch.setattr("banner_service.get_pending_suggestion_count", lambda tid: 1)
-
-    banner = config_review_banner_provider("tenant-1")
-
-    assert banner is not None
-    assert "1 statement needs" in banner.message
 
 
 def test_welcome_grant_provider_always_returns_banner() -> None:

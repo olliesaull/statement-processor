@@ -123,7 +123,7 @@ def test_anomaly_flag_details_survive_dynamodb_sanitization() -> None:
     Returns:
         None.
     """
-    from core.textract_statement import _sanitize_for_dynamodb
+    from core.statement_processor import _sanitize_for_dynamodb
 
     statement = {"statement_items": [{"number": "", "reference": "Balance brought forward"}]}
     output, _summary = apply_outlier_flags(statement, remove=False)

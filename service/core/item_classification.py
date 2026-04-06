@@ -2,7 +2,7 @@
 Heuristics for classifying statement rows.
 
 The classifier uses:
-- Configured column labels (from contact mapping config)
+- Column labels from header_mapping and total_entries in statement JSON
 - Presence of debit/credit values in a row
 - Text matching against synonym lists (invoice/credit/payment)
 
@@ -15,7 +15,6 @@ from collections.abc import Iterable, Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from core.models import ContactConfig
 from logger import logger
 
 _DEBIT_HINTS: tuple[str, ...] = ("debit", "dr")
@@ -91,24 +90,29 @@ def _has_amount(value: Any) -> bool:
     return dec is not None and dec != 0
 
 
-def _collect_config_amount_labels(contact_config: ContactConfig | None) -> tuple[set[str], set[str]]:
-    """Collect normalized debit/credit labels from contact config."""
-    total_cfg = contact_config.total if contact_config else []
+def _collect_amount_labels(header_mapping: dict[str, str] | None = None, total_entries: dict[str, Any] | None = None) -> tuple[set[str], set[str]]:
+    """Collect normalized debit/credit labels from header_mapping and total keys."""
     debit_norms: set[str] = set()
     credit_norms: set[str] = set()
 
-    def _record(labels: Iterable[str], bucket: str | None) -> None:
-        for label in labels:
-            norm = _normalize_label(label)
-            if not norm:
-                continue
-            if bucket == "debit" or _is_debit_norm(norm):
-                debit_norms.add(norm)
-            if bucket == "credit" or _is_credit_norm(norm):
-                credit_norms.add(norm)
+    # From header_mapping: entries mapping to "total" are amount columns.
+    if header_mapping:
+        for raw_header, canonical in header_mapping.items():
+            if canonical == "total":
+                norm = _normalize_label(raw_header)
+                if _is_debit_norm(norm):
+                    debit_norms.add(norm)
+                elif _is_credit_norm(norm):
+                    credit_norms.add(norm)
 
-    labels = _flatten_labels(total_cfg)
-    _record(labels, None)
+    # From total dict keys on the item itself.
+    if total_entries:
+        for label in total_entries:
+            norm = _normalize_label(label)
+            if _is_debit_norm(norm):
+                debit_norms.add(norm)
+            elif _is_credit_norm(norm):
+                credit_norms.add(norm)
 
     return debit_norms, credit_norms
 
@@ -182,14 +186,13 @@ def _scan_inverse_amounts(inverse_raw: dict[str, tuple[str, Any]], norms: set[st
     return False, []
 
 
-def _evaluate_amount_hint(raw_row: dict[str, Any], total_entries: dict[str, Any] | None, contact_config: ContactConfig | None) -> tuple[str | None, bool, bool, list[str], list[str]]:
-    """
-    Infer debit/credit signals and return a type hint plus evidence details.
+def _evaluate_amount_hint(raw_row: dict[str, Any], total_entries: dict[str, Any] | None, header_mapping: dict[str, str] | None = None) -> tuple[str | None, bool, bool, list[str], list[str]]:
+    """Infer debit/credit signals and return a type hint plus evidence details.
 
     Returns:
         (amount_hint, debit_has_value, credit_has_value, debit_labels_used, credit_labels_used)
     """
-    debit_norms, credit_norms = _collect_config_amount_labels(contact_config)
+    debit_norms, credit_norms = _collect_amount_labels(header_mapping, total_entries)
 
     _extend_amount_norms(raw_row, debit_norms, credit_norms)
     debit_has_value, credit_has_value, debit_labels_used, credit_labels_used = _scan_total_entries(total_entries, debit_norms, credit_norms)
@@ -308,9 +311,9 @@ def _choose_best_type(candidate_types: set[str], joined_text: str, tokens: list[
     return best_type, best_score, type_details
 
 
-def guess_statement_item_type(raw_row: dict[str, Any], total_entries: dict[str, Any] | None = None, contact_config: ContactConfig | None = None) -> str:
+def guess_statement_item_type(raw_row: dict[str, Any], total_entries: dict[str, Any] | None = None, header_mapping: dict[str, str] | None = None) -> str:
     """Heuristically classify a row as ``invoice``, ``credit_note``, or ``payment``."""
-    amount_hint, debit_has_value, credit_has_value, debit_labels, credit_labels = _evaluate_amount_hint(raw_row or {}, total_entries, contact_config)
+    amount_hint, debit_has_value, credit_has_value, debit_labels, credit_labels = _evaluate_amount_hint(raw_row or {}, total_entries, header_mapping)
 
     candidate_types = _candidate_types_from_hint(amount_hint)
 

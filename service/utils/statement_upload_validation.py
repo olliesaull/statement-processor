@@ -10,7 +10,6 @@ from typing import Any
 
 from werkzeug.datastructures import FileStorage
 
-from core.get_contact_config import get_contact_config
 from logger import logger
 from tenant_billing_repository import TenantBillingRepository
 from utils.pdf_page_count import PDFPageCountError, count_pdf_pages
@@ -65,7 +64,6 @@ class PreparedStatementUpload:
     contact_id: str
     contact_name: str
     page_count: int
-    needs_config_review: bool = False
 
 
 def validate_upload_payload(files: list[FileStorage], names: list[str]) -> bool:
@@ -113,30 +111,13 @@ def build_statement_upload_preflight(tenant_id: str | None, files: list[FileStor
     )
 
 
-def _ensure_contact_config(tenant_id: str | None, contact_id: str, contact_name: str, filename: str, error_messages: list[str]) -> str:
-    """Check whether the contact has a saved config.
-
-    Returns:
-        ``"ok"`` if config exists, ``"needs_config_review"`` if missing
-        (upload can proceed for auto-suggestion), or ``"error"`` if
-        lookup itself failed (upload should be skipped).
-    """
-    try:
-        get_contact_config(tenant_id, contact_id)
-    except KeyError:
-        # Config missing — the upload can still proceed; the auto-suggestion
-        # pipeline will attempt to generate one from the PDF.
-        logger.info("Config missing; upload will proceed for auto-suggestion", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=filename)
-        return "needs_config_review"
-    except Exception as exc:
-        logger.exception("Upload blocked; config lookup failed", tenant_id=tenant_id, contact_id=contact_id, contact_name=contact_name, statement_filename=filename, error=exc)
-        error_messages.append(f"Could not load the config for '{contact_name}'. Please try again later.")
-        return "error"
-    return "ok"
-
-
 def prepare_statement_uploads(tenant_id: str | None, files: list[FileStorage], names: list[str], contact_lookup: dict[str, str], error_messages: list[str]) -> list[PreparedStatementUpload]:
-    """Validate submitted rows and return the subset that can proceed."""
+    """Validate submitted rows and return the subset that can proceed.
+
+    Config lookup is no longer required — the Bedrock extraction pipeline
+    derives header mappings directly from the PDF, so every valid upload
+    goes straight to token reservation and workflow start.
+    """
     prepared_uploads: list[PreparedStatementUpload] = []
 
     for uploaded_file, contact in zip(files, names, strict=False):
@@ -159,18 +140,6 @@ def prepare_statement_uploads(tenant_id: str | None, files: list[FileStorage], n
             error_messages.append(f"Contact '{contact_name}' was not recognised. Please select a contact from the list.")  # nosec B608 - user-facing message only, no SQL execution
             continue
 
-        config_status = _ensure_contact_config(tenant_id, contact_id, contact_name, filename, error_messages)
-        if config_status == "error":
-            continue
-
-        prepared_uploads.append(
-            PreparedStatementUpload(
-                uploaded_file=uploaded_file,
-                contact_id=contact_id,
-                contact_name=contact_name,
-                page_count=page_count_result.page_count or 0,
-                needs_config_review=(config_status == "needs_config_review"),
-            )
-        )
+        prepared_uploads.append(PreparedStatementUpload(uploaded_file=uploaded_file, contact_id=contact_id, contact_name=contact_name, page_count=page_count_result.page_count or 0))
 
     return prepared_uploads

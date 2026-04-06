@@ -9,9 +9,7 @@ so no Redis connection is required.
 
 from __future__ import annotations
 
-import os
 import tempfile
-from unittest.mock import MagicMock, patch
 
 import pytest
 

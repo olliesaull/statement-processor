@@ -8,13 +8,13 @@ from config import S3_BUCKET_NAME, TEXTRACTION_STATE_MACHINE_ARN, stepfunctions_
 from logger import logger
 
 
-def start_textraction_state_machine(tenant_id: str, contact_id: str, statement_id: str, pdf_key: str, json_key: str) -> bool:
+def start_textraction_state_machine(tenant_id: str, contact_id: str, statement_id: str, pdf_key: str, json_key: str, page_count: int) -> bool:
     """Kick off the Step Functions textraction workflow."""
     if not TEXTRACTION_STATE_MACHINE_ARN:
         logger.error("Textraction state machine ARN not configured; skipping execution", tenant_id=tenant_id, statement_id=statement_id)
         return False
 
-    payload = {"tenant_id": tenant_id, "contact_id": contact_id, "statement_id": statement_id, "s3Bucket": S3_BUCKET_NAME, "pdfKey": pdf_key, "jsonKey": json_key}
+    payload = {"tenant_id": tenant_id, "contact_id": contact_id, "statement_id": statement_id, "s3Bucket": S3_BUCKET_NAME, "pdfKey": pdf_key, "jsonKey": json_key, "pageCount": page_count}
     exec_name = f"{tenant_id}-{statement_id}"[:80]
 
     try:

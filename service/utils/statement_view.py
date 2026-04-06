@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from core.date_utils import coerce_datetime_with_template, format_iso_with
-from core.models import CellComparison, ContactConfig
+from core.models import CellComparison
 from core.statement_detail_types import MatchedInvoiceMap, StatementItemPayload, XeroDocumentPayload
 from logger import logger
 from utils.formatting import _to_decimal, format_money
@@ -51,22 +51,6 @@ def _equal(a: Any, b: Any) -> bool:
 def _normalize_header_name(value: Any) -> str:
     """Normalize a header label for matching."""
     return " ".join(str(value or "").split()).strip().lower()
-
-
-def _header_mapping_from_template(items_template: ContactConfig) -> dict[str, str]:
-    """Build normalized header -> canonical field mappings from config."""
-    header_to_field_norm: dict[str, str] = {}
-    template = items_template.model_dump()
-    for canonical_field, mapped in template.items():
-        if canonical_field in {"raw", "date_format", "item_type", "reference"}:
-            continue
-        if isinstance(mapped, str) and mapped.strip():
-            header_to_field_norm[_normalize_header_name(mapped)] = canonical_field
-
-    for header in items_template.total:
-        if header.strip():
-            header_to_field_norm[_normalize_header_name(header)] = "total"
-    return header_to_field_norm
 
 
 def _filter_display_headers(raw_headers: list[str], header_to_field_norm: dict[str, str]) -> tuple[list[str], dict[str, str]]:
@@ -129,49 +113,48 @@ def _find_item_number_header(display_headers: list[str], header_to_field: dict[s
     return None
 
 
-def get_date_format_from_config(contact_config: ContactConfig) -> str | None:
-    """Extract the configured date format from a contact configuration."""
-    fmt = contact_config.date_format
-    return str(fmt) if fmt else None
-
-
-def get_number_separators_from_config(contact_config: ContactConfig) -> tuple[str, str]:
-    """Return (decimal_separator, thousands_separator) with sensible defaults."""
-    dec_raw = contact_config.decimal_separator
-    thou_raw = contact_config.thousands_separator
-
-    dec = str(dec_raw).strip() if isinstance(dec_raw, str) else dec_raw
-    thou = str(thou_raw) if isinstance(thou_raw, str) else thou_raw
-
+def _get_separators_from_data(statement_data: dict[str, Any]) -> tuple[str, str]:
+    """Return (decimal_separator, thousands_separator) from statement JSON."""
+    dec = str(statement_data.get("decimal_separator", ".")).strip()
+    thou = str(statement_data.get("thousands_separator", ","))
     if dec not in _ALLOWED_DECIMAL_SEPARATORS:
         dec = _DEFAULT_DECIMAL_SEPARATOR
     if thou not in _ALLOWED_THOUSANDS_SEPARATORS:
         thou = _DEFAULT_THOUSANDS_SEPARATOR
-
     return (dec or _DEFAULT_DECIMAL_SEPARATOR, thou if thou is not None else _DEFAULT_THOUSANDS_SEPARATOR)
 
 
-def prepare_display_mappings(items: list[StatementItemPayload], contact_config: ContactConfig) -> tuple[list[str], list[dict[str, str]], dict[str, str], str | None]:
-    """
-    Build the display headers, filtered left rows, header->invoice_field map,
-    and detect which header corresponds to the invoice "number".
+def prepare_display_mappings(items: list[StatementItemPayload], statement_data: dict[str, Any]) -> tuple[list[str], list[dict[str, str]], dict[str, str], str | None]:
+    """Build display headers, filtered rows, header->field map, and item_number_header.
 
-    Returns: (display_headers, rows_by_header, header_to_field, item_number_header)
+    Reads header_mapping, date_format, and separators from the
+    self-describing statement JSON instead of ContactConfig.
     """
-    # Derive raw headers from the JSON statement (order preserved)
     raw_headers = list(items[0].get("raw", {}).keys()) if items else []
 
-    header_to_field_norm = _header_mapping_from_template(contact_config)
+    # Read header_mapping directly from statement JSON.
+    header_mapping = statement_data.get("header_mapping", {})
+    header_to_field_norm: dict[str, str] = {}
+    for raw_header, canonical in header_mapping.items():
+        header_to_field_norm[_normalize_header_name(raw_header)] = canonical
+
     display_headers, header_to_field = _filter_display_headers(raw_headers, header_to_field_norm)
     display_headers = _order_display_headers(display_headers, header_to_field)
 
-    # Convert raw rows into dicts filtered by display headers, normalizing date fields for display
-    date_fmt = get_date_format_from_config(contact_config)
-    dec_sep, thou_sep = get_number_separators_from_config(contact_config)
+    date_fmt = statement_data.get("date_format") or None
+    dec_sep, thou_sep = _get_separators_from_data(statement_data)
     rows_by_header = _build_rows_by_header(items, display_headers, header_to_field, date_fmt, dec_sep, thou_sep)
 
-    # Identify which header maps to the canonical "number" field
     item_number_header = _find_item_number_header(display_headers, header_to_field)
+
+    # Fallback: if no header maps to "number" but one maps to "reference",
+    # use the reference column for invoice matching.
+    if not item_number_header:
+        for header in display_headers:
+            if header_to_field.get(header) == "reference":
+                item_number_header = header
+                logger.info("Falling back to reference column for item_number_header", header=header)
+                break
 
     return display_headers, rows_by_header, header_to_field, item_number_header
 
