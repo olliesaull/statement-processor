@@ -68,10 +68,11 @@
 │   ├── populate_xero/
 │   │   ├── populate_xero.py
 │   │   └── requirements.txt
-│   └── replace_textract_test/
-│       ├── run.py
-│       ├── system_prompt.md
-│       └── requirements.txt
+│   ├── replace_textract_test/
+│   │   ├── run.py
+│   │   ├── system_prompt.md
+│   │   └── requirements.txt
+│   └── update-vendor-assets.sh
 └── service/
     ├── app.py
     ├── banner_service.py
@@ -101,6 +102,7 @@
     │   └── tests/
     ├── static/
     │   └── assets/
+    │       └── vendor/
     ├── templates/
     ├── tests/
     └── utils/
@@ -442,9 +444,9 @@ Review the diff and commit the updated `nginx-routes.conf`.
 
 ## Frontend Design System
 
-The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer in `service/static/assets/css/main.css`. The design is intentionally approachable and trustworthy — targeting SMB finance teams who use Xero.
+The site uses Bootstrap 5.3.3 with a custom design token layer in `service/static/assets/css/main.css`. The design is intentionally approachable and trustworthy — targeting SMB finance teams who use Xero. Bootstrap and fonts are self-hosted under `service/static/assets/vendor/` — see **Vendor Assets** below.
 
-- **Fonts**: Source Serif 4 (display/headings) + Outfit (body), loaded via Google Fonts CDN in `base.html`.
+- **Fonts**: Source Serif 4 (display/headings) + Outfit (body), served from `service/static/assets/vendor/fonts/` via `@font-face` declarations in `vendor/fonts.css` (included by `base.html`).
 - **Colour palette**: Blue-600 primary (`#2563eb`), teal-600 accent (`#0d9488`), slate scale for text/borders, light white backgrounds. All colours are CSS custom properties in `:root`.
 - **Bootstrap integration**: Bootstrap's `--bs-*` variables are mapped to the custom tokens, so Bootstrap components (forms, tables, alerts, badges, buttons) automatically use the palette. Custom component classes (`.page-panel`, `.page-kicker`, `.value-card`, etc.) layer on top.
 - **Navbar**: Bootstrap navbar markup restyled with frosted-glass `backdrop-filter: blur(12px)`. The `navbar-scrolled` class is toggled by `main.js` on scroll but styled as a subtle no-op (no colour inversion).
@@ -458,7 +460,29 @@ The site uses Bootstrap 5.3.3 (loaded via CDN) with a custom design token layer 
 - **Bootstrap kept**: Authenticated pages (forms, tables, modals) depend heavily on Bootstrap grid and components. Replacing Bootstrap would be a disproportionate effort. Instead, Bootstrap's colour system is overridden via `--bs-*` custom properties.
 - **No CSS reset added**: The new design system does not add `* { margin:0; padding:0 }` or redefine `.container` — these would break Bootstrap's own layout assumptions.
 - **Sticky footer**: `body` uses `display: flex; flex-direction: column; min-height: 100dvh` with `.site-shell-main { flex: 1 }` to push the footer to the bottom on short-content pages (checkout success/cancel/failed).
-- **Google Fonts CDN over self-hosting**: Simpler to implement. Fonts are loaded via `<link>` tags in `base.html`, not `@import` in CSS (avoids render-blocking waterfall).
+- **Self-hosted fonts and Bootstrap**: Bootstrap CSS/JS and Google Fonts (Source Serif 4 + Outfit, woff2) are served from `service/static/assets/vendor/` instead of external CDNs. This eliminates runtime dependencies on jsdelivr and Google Fonts, removes the need for CDN entries in the nginx CSP, and avoids privacy implications of third-party font requests. The download script (`service/scripts/update-vendor-assets.sh`) fetches all vendor files and generates `fonts.css` with `@font-face` declarations.
+
+## Vendor Assets (Self-Hosted)
+
+All third-party CSS, JS, and fonts are self-hosted under `service/static/assets/vendor/`
+instead of loading from external CDNs. This eliminates runtime dependencies on jsdelivr
+and Google Fonts.
+
+### What's vendored
+- **Bootstrap 5.3.3** — CSS and JS bundle
+- **Google Fonts** — Source Serif 4 (display) and Outfit (body), woff2 format
+
+### Updating vendor assets
+Run the download script to fetch the latest files:
+```bash
+./service/scripts/update-vendor-assets.sh
+```
+
+To update Bootstrap, change `BOOTSTRAP_VERSION` at the top of the script and re-run.
+To change fonts or weights, update `GOOGLE_FONTS_URL` in the script and re-run.
+
+The script downloads files into `service/static/assets/vendor/` and generates
+`fonts.css` with `@font-face` declarations. Commit the updated files after running.
 
 ## Data Model
 
