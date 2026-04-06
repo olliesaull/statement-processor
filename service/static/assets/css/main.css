@@ -1771,8 +1771,6 @@ a:focus-visible {
 /* ---------- Sticky horizontal scrollbar proxy ---------- */
 .scroll-proxy {
   position: fixed;
-  left: 0;
-  right: 0;
   bottom: calc(1rem + env(safe-area-inset-bottom));
   height: 14px;
   overflow-x: auto;

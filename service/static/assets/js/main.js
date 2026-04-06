@@ -162,6 +162,11 @@ const setupScrollProxy = () => {
 
     proxy.classList.toggle("is-visible", shouldShow);
 
+    /* Align proxy horizontally with the table wrapper. */
+    const wrapperRect = wrapper.getBoundingClientRect();
+    proxy.style.left = wrapperRect.left + "px";
+    proxy.style.width = wrapperRect.width + "px";
+
     /* Position above the sticky dock when it is visible. */
     if (dock && dock.classList.contains("is-visible")) {
       const dockHeight = dock.offsetHeight;
