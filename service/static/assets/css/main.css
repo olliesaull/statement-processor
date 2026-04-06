@@ -1569,20 +1569,26 @@ a:focus-visible {
   word-break: normal;
 }
 
-/* Fixed column widths for the comparison table.
-   Type and action columns are narrow; data columns share remaining space. */
+/* Column widths for the fixed-layout comparison table.
+   Assigned via <colgroup> using canonical field types. */
+.col-w-type     { width: 3%; }
+.col-w-date     { width: 7%; }
+.col-w-number   { width: 7%; }
+.col-w-due_date { width: 7%; }
+.col-w-reference { width: 10%; }
+.col-w-total    { width: 6%; }
+.col-w-xero-link { width: 4%; }
+.col-w-status   { width: 6.5%; }
+
 .col-type {
-  width: 3.5%;
   white-space: nowrap;
 }
 
 .col-xero-link {
-  width: 4.5%;
   white-space: nowrap;
 }
 
 .col-status {
-  width: 6%;
   white-space: nowrap;
 }
 
