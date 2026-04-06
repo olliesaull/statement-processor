@@ -211,7 +211,7 @@ def generate_single_location(route: dict, upstream_name: str, allowed_params: di
         lines.append("    access_log off;")
 
     # Public pages: strip query strings (UTMs logged by CloudFront)
-    public_pages = ["/", "/about", "/cookies", "/instructions", "/pricing"]
+    public_pages = ["/", "/about", "/cookies", "/faq", "/instructions", "/llm.txt", "/pricing", "/privacy", "/robots.txt", "/sitemap.xml", "/terms"]
 
     route_params = allowed_params.get(route["original"]) if allowed_params else None
     is_public = route["original"] in public_pages
