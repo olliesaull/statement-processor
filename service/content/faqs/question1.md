@@ -1,0 +1,1 @@
+A tenant is a Xero organisation (company). If you manage finances for multiple Xero organisations, you can connect them all to Statement Processor and switch between them on the Tenant Management page. Each tenant maintains its own set of uploaded statements and token balance.

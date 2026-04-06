@@ -1,0 +1,1 @@
+Yes. Use the "Download Excel" button on the statement detail page to export the full reconciliation as an Excel spreadsheet. The export includes all statement rows, their match status, corresponding Xero data, and any notes. This is useful for sharing results, archiving, or audit preparation.

@@ -1,0 +1,1 @@
+When you first select a tenant, Statement Processor imports your supplier contacts and recent transactions (invoices, credit notes, and payments) from Xero. The tenant status will show as "Loading" until this is complete. This usually takes a few moments, depending on the size of your Xero organisation. You do not need to do anything during this process.

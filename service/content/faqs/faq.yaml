@@ -1,0 +1,80 @@
+sections:
+  - title: "Getting Started"
+    order: 1
+    questions:
+      - order: 1
+        question: "What is a tenant and can I connect multiple tenants?"
+        answer: "question1.md"
+      - order: 2
+        question: "How do I connect my Xero account?"
+        answer: "question2.md"
+      - order: 3
+        question: "What happens during the first-time tenant load?"
+        answer: "question3.md"
+
+  - title: "Uploading & Processing"
+    order: 2
+    questions:
+      - order: 1
+        question: "What file formats are supported for upload?"
+        answer: "question4.md"
+      - order: 2
+        question: "Can I upload multiple statements at once?"
+        answer: "question5.md"
+      - order: 3
+        question: "How long does processing take?"
+        answer: "question6.md"
+
+  - title: "Reviewing Statements"
+    order: 3
+    questions:
+      - order: 1
+        question: "What do the row colours mean (match, mismatch, anomaly)?"
+        answer: "question7.md"
+      - order: 2
+        question: "What is the difference between a mismatch and an anomaly?"
+        answer: "question8.md"
+      - order: 3
+        question: "How does Statement Processor match rows to Xero records?"
+        answer: "question9.md"
+      - order: 4
+        question: "Can I mark individual rows as reviewed?"
+        answer: "question10.md"
+      - order: 5
+        question: "How do I mark a statement as complete?"
+        answer: "question11.md"
+      - order: 6
+        question: "Can I export my reconciliation results?"
+        answer: "question12.md"
+
+  - title: "Billing & Tokens"
+    order: 4
+    questions:
+      - order: 1
+        question: "How much does it cost to process a statement?"
+        answer: "question13.md"
+      - order: 2
+        question: "Do unused tokens expire?"
+        answer: "question14.md"
+      - order: 3
+        question: "What is the minimum token purchase?"
+        answer: "question15.md"
+      - order: 4
+        question: "Can I get a refund on purchased tokens?"
+        answer: "question16.md"
+      - order: 5
+        question: "What payment methods are accepted?"
+        answer: "question17.md"
+      - order: 6
+        question: "Will I be charged VAT?"
+        answer: "question18.md"
+
+  - title: "Security & Data"
+    order: 5
+    questions:
+      - order: 1
+        question: "What Xero data does Statement Processor access?"
+        answer: "question19.md"
+      - order: 2
+        question: "Can I disconnect my Xero account?"
+        answer: "question20.md"

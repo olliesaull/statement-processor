@@ -1,0 +1,1 @@
+A **mismatch** means Statement Processor found a related Xero record (for example, the same invoice number) but something does not line up, such as the total amount. An **anomaly** means no related Xero record could be found at all. Mismatches typically need investigation, while anomalies may indicate missing records in Xero.

@@ -1,0 +1,1 @@
+The minimum purchase is **10 tokens** (£1.00 plus VAT).

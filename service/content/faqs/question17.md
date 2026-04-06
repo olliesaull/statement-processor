@@ -1,0 +1,1 @@
+We accept card payments through Stripe. The available card types are shown on the checkout page at the time of purchase.

@@ -1,0 +1,1 @@
+Yes. All prices shown on the site are exclusive of VAT. VAT is added at checkout at the prevailing UK rate.

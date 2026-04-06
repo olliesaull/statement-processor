@@ -1,0 +1,1 @@
+Statement Processor accesses your supplier contacts and their associated invoices, credit notes, and payments from your connected Xero account. This data is used solely for matching against your uploaded supplier statements. Statement Processor does not modify any data in Xero.

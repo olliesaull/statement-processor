@@ -1,0 +1,1 @@
+Yes. You can disconnect your Xero account at any time from the Tenant Management page using the "Disconnect" button. This removes the connection between Statement Processor and your Xero organisation.

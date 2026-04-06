@@ -1,0 +1,1 @@
+Each PDF page costs **1 token** to process. Tokens cost **£0.10 each** (plus VAT). For example, a 5-page supplier statement would cost 5 tokens (£0.50 plus VAT).

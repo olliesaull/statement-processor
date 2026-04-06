@@ -1,0 +1,1 @@
+Yes. On the Upload Statements page, you can select multiple PDF files at once. Each file is paired with the correct supplier contact before uploading.

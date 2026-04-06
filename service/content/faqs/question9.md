@@ -1,0 +1,1 @@
+Statement Processor extracts each row from your uploaded PDF statement and compares it against invoices, credit notes, and payments in Xero for the selected supplier contact. It matches on reference numbers and compares dates and amounts to determine whether rows are matches, mismatches, or anomalies.

@@ -1,0 +1,1 @@
+Once you have reviewed all rows, you can mark the entire statement as complete using the "Mark Complete" button on the statement detail page. Completed statements are separated from incomplete ones on the Statements list for easy tracking.

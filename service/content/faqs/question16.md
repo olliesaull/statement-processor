@@ -1,0 +1,1 @@
+Tokens are non-refundable once purchased. We recommend starting with a small purchase to confirm the service meets your needs before buying in bulk.

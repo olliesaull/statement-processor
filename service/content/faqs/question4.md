@@ -1,0 +1,1 @@
+Only PDF files are supported. Each page of a PDF costs 1 token to process.

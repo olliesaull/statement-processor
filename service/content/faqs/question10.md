@@ -1,0 +1,1 @@
+Yes. On the statement detail page, you can mark individual rows as complete to track your progress through the reconciliation. This is useful when working through a long statement over multiple sessions.

@@ -1,0 +1,1 @@
+Processing typically takes between a few seconds and a couple of minutes, depending on the size and complexity of the statement. The page will update automatically when processing is complete. You can leave the page open or navigate away and check back later.

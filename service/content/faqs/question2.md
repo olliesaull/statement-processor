@@ -1,0 +1,1 @@
+Click "Login" in the navigation bar. You will be redirected to Xero where you can sign in and authorise Statement Processor to access your accounting data. Once authorised, you will be redirected back to the Tenant Management page where you can select which tenant to work with.
