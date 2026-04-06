@@ -1562,11 +1562,14 @@ a:focus-visible {
 /* General cell text behavior */
 .table-compare th,
 .table-compare td {
-  hyphens: auto;
-  overflow-wrap: anywhere;
   vertical-align: middle;
   white-space: normal;
   word-break: normal;
+}
+
+.table-compare td {
+  hyphens: auto;
+  overflow-wrap: anywhere;
 }
 
 /* Reasonable minimum widths per column */
