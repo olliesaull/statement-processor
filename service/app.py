@@ -13,7 +13,7 @@ import redis
 import stripe
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
-from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
@@ -581,6 +581,69 @@ def terms():
     """Render the terms and conditions page from markdown content."""
     content = load_legal_page("terms.md")
     return render_template("terms.html", content=content)
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    """Serve robots.txt with crawling policy for search engines."""
+    body = f"""# Crawling policy for {DOMAIN_NAME}
+# Public pages are allowed. Private/system routes are disallowed.
+
+User-agent: *
+Allow: /
+
+Disallow: /tenant_management
+Disallow: /upload-statements
+Disallow: /statements
+Disallow: /statement/
+Disallow: /buy-tokens
+Disallow: /billing-details
+Disallow: /checkout/
+Disallow: /login
+Disallow: /logout
+Disallow: /callback
+Disallow: /api/
+
+Sitemap: https://{DOMAIN_NAME}/sitemap.xml
+"""
+    return Response(body, mimetype="text/plain")
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    """Serve sitemap.xml listing all public pages."""
+    urls = ["/", "/about", "/pricing", "/instructions", "/faq", "/privacy", "/terms", "/cookies"]
+    lines = ["<?xml version='1.0' encoding='UTF-8'?>", "<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>"]
+    for path in urls:
+        lines.append(f"<url><loc>https://{DOMAIN_NAME}{path}</loc></url>")
+    lines.append("</urlset>")
+    return Response("\n".join(lines), mimetype="text/xml")
+
+
+@app.route("/llm.txt")
+def llm_txt():
+    """Serve llm.txt with crawling policy for LLM agents."""
+    body = f"""# LLM crawling policy for {DOMAIN_NAME}
+# Public pages are allowed. Private/system routes are disallowed.
+
+User-agent: *
+Allow: /
+
+Disallow: /tenant_management
+Disallow: /upload-statements
+Disallow: /statements
+Disallow: /statement/
+Disallow: /buy-tokens
+Disallow: /billing-details
+Disallow: /checkout/
+Disallow: /login
+Disallow: /logout
+Disallow: /callback
+Disallow: /api/
+
+Sitemap: https://{DOMAIN_NAME}/sitemap.xml
+"""
+    return Response(body, mimetype="text/plain")
 
 
 @app.route("/statements")
