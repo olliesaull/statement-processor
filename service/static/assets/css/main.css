@@ -1735,6 +1735,39 @@ a:focus-visible {
   color: var(--slate-500);
 }
 
+/* ---------- Landscape tip banner (mobile portrait only) ---------- */
+.landscape-tip {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  margin-bottom: 1rem;
+  border-radius: var(--radius);
+  background: var(--slate-50);
+  border: 1px solid var(--slate-200);
+  color: var(--slate-500);
+  font-size: 0.8125rem;
+}
+
+.landscape-tip-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+  animation: phone-tilt 2s ease-in-out infinite;
+}
+
+@keyframes phone-tilt {
+  0%, 100% { transform: rotate(0deg); }
+  40% { transform: rotate(90deg); }
+  60% { transform: rotate(90deg); }
+}
+
+@media (max-width: 575.98px) and (orientation: portrait) {
+  .landscape-tip {
+    display: flex;
+  }
+}
+
 /* ---------- 17. Responsive media queries ---------- */
 
 /* Tablet and below */
