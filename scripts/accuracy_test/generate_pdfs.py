@@ -112,8 +112,6 @@ def _scenario_simple() -> tuple[bytes, dict[str, Any]]:
         },
         "date_format": "DD/MM/YYYY",
         "date_confidence": "high",
-        "decimal_separator": ".",
-        "thousands_separator": ",",
         "statement_items": [
             _item(
                 date="15/01/2024", number="INV-001",
@@ -194,8 +192,6 @@ def _scenario_multipage() -> tuple[bytes, dict[str, Any]]:
         },
         "date_format": "DD/MM/YYYY",
         "date_confidence": "high",
-        "decimal_separator": ".",
-        "thousands_separator": ",",
         "statement_items": all_rows,
     }
     return pdf_bytes, expected
@@ -256,8 +252,6 @@ def _scenario_chunk_boundary_duplication() -> tuple[bytes, dict[str, Any]]:
         },
         "date_format": "DD/MM/YYYY",
         "date_confidence": "high",
-        "decimal_separator": ".",
-        "thousands_separator": "",
         "statement_items": all_expected_items,
     }
     return pdf_bytes, expected
@@ -294,8 +288,6 @@ def _scenario_ambiguous_dates() -> tuple[bytes, dict[str, Any]]:
         },
         "date_format": "DD/MM/YYYY",
         "date_confidence": "low",
-        "decimal_separator": ".",
-        "thousands_separator": ",",
         "statement_items": [
             _item(
                 date="03/04/2024", number="INV-101",
@@ -358,8 +350,6 @@ def _scenario_reference_as_invoice() -> tuple[bytes, dict[str, Any]]:
         },
         "date_format": "DD/MM/YYYY",
         "date_confidence": "high",
-        "decimal_separator": ".",
-        "thousands_separator": ",",
         "statement_items": [
             _item(
                 date="15/01/2024", number="INV-2001", reference="PO-5501",
@@ -419,8 +409,6 @@ def _scenario_comma_decimal() -> tuple[bytes, dict[str, Any]]:
         },
         "date_format": "DD.MM.YYYY",
         "date_confidence": "high",
-        "decimal_separator": ",",
-        "thousands_separator": " ",
         "statement_items": [
             _item(
                 date="15.03.2024", number="FKT-001",
@@ -471,8 +459,6 @@ def _scenario_currency_symbols() -> tuple[bytes, dict[str, Any]]:
         },
         "date_format": "DD/MM/YYYY",
         "date_confidence": "high",
-        "decimal_separator": ".",
-        "thousands_separator": ",",
         "statement_items": [
             _item(
                 date="15/01/2024", number="INV-301",
@@ -538,8 +524,6 @@ def _scenario_mixed_payments() -> tuple[bytes, dict[str, Any]]:
         },
         "date_format": "DD/MM/YYYY",
         "date_confidence": "high",
-        "decimal_separator": ".",
-        "thousands_separator": ",",
         "statement_items": [
             _item(
                 date="01/02/2024", number="",

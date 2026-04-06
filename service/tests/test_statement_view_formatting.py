@@ -36,21 +36,17 @@ class DateFormatCase:
 @dataclass(frozen=True)
 class NumberFormatCase:
     """
-    Represents a number formatting case driven by separator settings.
+    Represents a number formatting case for heuristic separator detection.
 
-    This test-only model keeps separator-driven cases readable.
+    This test-only model keeps numeric formatting cases readable.
 
     Attributes:
         name: Human-friendly case id for pytest output.
-        dec_sep: Decimal separator character.
-        thou_sep: Thousands separator character.
         raw_value: Input numeric string.
         expected: Expected formatted output.
     """
 
     name: str
-    dec_sep: str
-    thou_sep: str
     raw_value: str
     expected: str
 
@@ -92,7 +88,7 @@ _DATE_FORMAT_CASES = [
 
 @pytest.mark.parametrize("case", _DATE_FORMAT_CASES, ids=[case.name for case in _DATE_FORMAT_CASES])
 def test_date_formatting(case: DateFormatCase) -> None:
-    result = _format_statement_value(case.raw_value, "date", case.date_fmt, ".", ",")
+    result = _format_statement_value(case.raw_value, "date", case.date_fmt)
     assert result == case.expected
 
 
@@ -101,12 +97,14 @@ def test_date_formatting(case: DateFormatCase) -> None:
 
 # region Number formatting
 _NUMBER_FORMAT_CASES = [
-    # EU separators should parse and normalize into the default UI format.
-    NumberFormatCase(name="eu separators", dec_sep=",", thou_sep=".", raw_value="1.234,50", expected="1,234.50"),
-    # Space thousands separators should normalize into standard output.
-    NumberFormatCase(name="space thousands", dec_sep=".", thou_sep=" ", raw_value="1 234.5", expected="1,234.50"),
-    # Mismatched separator configs should return the original value.
-    NumberFormatCase(name="mismatched separators", dec_sep=".", thou_sep=" ", raw_value="1,234.50", expected="1,234.50"),
+    # EU separators: heuristic detects comma-decimal from 2 digits after last separator.
+    NumberFormatCase(name="eu separators", raw_value="1.234,50", expected="1,234.50"),
+    # Standard format: comma-thousands, dot-decimal.
+    NumberFormatCase(name="standard format", raw_value="1,234.50", expected="1,234.50"),
+    # Space thousands with dot-decimal.
+    NumberFormatCase(name="space thousands", raw_value="1 234.50", expected="1,234.50"),
+    # Trailing minus (common in SA statements).
+    NumberFormatCase(name="trailing minus", raw_value="126.50-", expected="-126.50"),
 ]
 
 
@@ -122,7 +120,7 @@ _FORMAT_MONEY_CASES = [
 
 @pytest.mark.parametrize("case", _NUMBER_FORMAT_CASES, ids=[case.name for case in _NUMBER_FORMAT_CASES])
 def test_number_formatting_with_separators(case: NumberFormatCase) -> None:
-    result = format_money(case.raw_value, decimal_separator=case.dec_sep, thousands_separator=case.thou_sep)
+    result = format_money(case.raw_value)
     assert result == case.expected
 
 

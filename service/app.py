@@ -1126,8 +1126,6 @@ def statement(statement_id: str):
         matched_map=matched_invoice_to_statement_item,
         item_number_header=item_number_header,
         date_format=data.get("date_format"),
-        decimal_separator=data.get("decimal_separator", "."),
-        thousands_separator=data.get("thousands_separator", ","),
     )
 
     # 4) Compare LEFT (statement) vs RIGHT (Xero) for per-cell indicators

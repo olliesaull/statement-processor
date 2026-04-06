@@ -6,49 +6,62 @@ from core.extraction import build_header_mapping, convert_amount, reconstruct_it
 
 
 class TestConvertAmount:
-    """convert_amount: raw monetary string -> float."""
+    """convert_amount: heuristic-based raw monetary string -> float."""
 
     def test_simple_decimal(self) -> None:
-        assert convert_amount("1234.56", ".", ",") == 1234.56
+        assert convert_amount("1234.56") == 1234.56
 
-    def test_thousands_comma(self) -> None:
-        assert convert_amount("3,848.97", ".", ",") == 3848.97
+    def test_thousands_comma_dot_decimal(self) -> None:
+        assert convert_amount("3,848.97") == 3848.97
 
     def test_trailing_minus(self) -> None:
-        assert convert_amount("126.50-", ".", ",") == -126.50
+        assert convert_amount("126.50-") == -126.50
 
     def test_parenthetical_negative(self) -> None:
-        assert convert_amount("(126.50)", ".", ",") == -126.50
+        assert convert_amount("(126.50)") == -126.50
 
     def test_leading_minus(self) -> None:
-        assert convert_amount("-1234.56", ".", ",") == -1234.56
+        assert convert_amount("-1234.56") == -1234.56
 
-    def test_comma_decimal(self) -> None:
-        assert convert_amount("1.234,56", ",", ".") == 1234.56
+    def test_european_dot_thousands_comma_decimal(self) -> None:
+        assert convert_amount("1.234,56") == 1234.56
 
-    def test_space_thousands(self) -> None:
-        assert convert_amount("1 234,56", ",", " ") == 1234.56
+    def test_space_thousands_comma_decimal(self) -> None:
+        assert convert_amount("1 234,56") == 1234.56
 
     def test_empty_string(self) -> None:
-        assert convert_amount("", ".", ",") == ""
-
-    def test_same_separator_guard(self) -> None:
-        assert convert_amount("1,234,56", ",", ",") == "1,234,56"
+        assert convert_amount("") == ""
 
     def test_currency_prefix_r(self) -> None:
-        assert convert_amount("R1,234.56", ".", ",") == 1234.56
+        assert convert_amount("R1,234.56") == 1234.56
 
     def test_currency_prefix_zar(self) -> None:
-        assert convert_amount("ZAR 1,234.56", ".", ",") == 1234.56
+        assert convert_amount("ZAR 1,234.56") == 1234.56
 
     def test_currency_prefix_dollar(self) -> None:
-        assert convert_amount("$1,234.56", ".", ",") == 1234.56
+        assert convert_amount("$1,234.56") == 1234.56
 
     def test_currency_prefix_euro(self) -> None:
-        assert convert_amount("\u20ac1,234.56", ".", ",") == 1234.56
+        assert convert_amount("\u20ac1,234.56") == 1234.56
 
     def test_non_numeric_returns_raw(self) -> None:
-        assert convert_amount("N/A", ".", ",") == "N/A"
+        assert convert_amount("N/A") == "N/A"
+
+    def test_whole_number_with_thousands(self) -> None:
+        """3 digits after last separator → thousands, no decimal."""
+        assert convert_amount("1,234") == 1234.0
+
+    def test_multiple_thousands_separators(self) -> None:
+        assert convert_amount("1,234,567.89") == 1234567.89
+
+    def test_european_multiple_thousands(self) -> None:
+        assert convert_amount("1.234.567,89") == 1234567.89
+
+    def test_no_separator(self) -> None:
+        assert convert_amount("500") == 500.0
+
+    def test_zero(self) -> None:
+        assert convert_amount("0.00") == 0.0
 
 
 class TestReconstructItems:

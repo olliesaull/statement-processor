@@ -59,8 +59,7 @@ def compare_results(
 ) -> list[str]:
     """Compare extracted output against expected JSON.
 
-    Exact match on: header_mapping, date_format, date_confidence,
-    decimal_separator, thousands_separator.
+    Exact match on: header_mapping, date_format, date_confidence.
 
     For statement_items: match on count, then per-item comparison
     of date, number, reference, total keys and numeric values
@@ -69,7 +68,7 @@ def compare_results(
     errors: list[str] = []
 
     # Exact-match metadata fields.
-    for field in ["header_mapping", "date_format", "date_confidence", "decimal_separator", "thousands_separator"]:
+    for field in ["header_mapping", "date_format", "date_confidence"]:
         if expected.get(field) != actual.get(field):
             errors.append(f"[{scenario_name}] {field}: expected={expected.get(field)}, actual={actual.get(field)}")
 

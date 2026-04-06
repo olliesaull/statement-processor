@@ -67,8 +67,6 @@ def _map_extraction_to_statement(extraction: ExtractionResult, statement_id: str
         latest_item_date=latest,
         date_format=extraction.date_format,
         date_confidence=extraction.date_confidence,
-        decimal_separator=extraction.decimal_separator,
-        thousands_separator=extraction.thousands_separator,
         detected_headers=extraction.detected_headers,
         header_mapping=extraction.header_mapping,
         input_tokens=extraction.input_tokens,

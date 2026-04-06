@@ -22,8 +22,6 @@ def _single_chunk_tool_input() -> dict[str, Any]:
         "detected_headers": ["Date", "Invoice No.", "Amount"],
         "date_format": "DD/MM/YYYY",
         "date_confidence": "high",
-        "decimal_separator": ".",
-        "thousands_separator": ",",
         "column_order": ["date", "number", "Amount"],
         "items": [["15/01/2024", "INV-001", "1,234.56"], ["20/01/2024", "INV-002", "789.00"]],
     }

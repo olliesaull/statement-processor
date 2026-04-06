@@ -12,11 +12,6 @@ from utils.formatting import _to_decimal, format_money
 
 _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
 
-_ALLOWED_DECIMAL_SEPARATORS = {".", ","}
-_ALLOWED_THOUSANDS_SEPARATORS = {",", ".", " ", "'", ""}
-_DEFAULT_DECIMAL_SEPARATOR = "."
-_DEFAULT_THOUSANDS_SEPARATOR = ","
-
 
 def _norm_number(x: Any) -> Decimal | None:
     """Return Decimal if x looks numeric (incl. currency/commas); else None."""
@@ -53,12 +48,24 @@ def _normalize_header_name(value: Any) -> str:
     return " ".join(str(value or "").split()).strip().lower()
 
 
+_CANONICAL_FIELD_NAMES = {"date", "number", "due_date", "reference"}
+
+
 def _filter_display_headers(raw_headers: list[str], header_to_field_norm: dict[str, str]) -> tuple[list[str], dict[str, str]]:
-    """Filter raw headers to mapped headers and return header->field mapping."""
+    """Filter raw headers to mapped headers and return header->field mapping.
+
+    Standard fields in raw may use canonical names (e.g. "number") while
+    header_mapping uses the original PDF header (e.g. "Invoice No.").
+    Falls back to treating the raw key as its own canonical field name
+    when the header_mapping lookup fails.
+    """
     header_to_field: dict[str, str] = {}
     display_headers: list[str] = []
     for header in raw_headers:
         canon = header_to_field_norm.get(_normalize_header_name(header))
+        # Fallback: raw key is already a canonical field name (e.g. "number").
+        if not canon and header.lower() in _CANONICAL_FIELD_NAMES:
+            canon = header.lower()
         if not canon:
             continue
         header_to_field[header] = canon
@@ -66,32 +73,88 @@ def _filter_display_headers(raw_headers: list[str], header_to_field_norm: dict[s
     return display_headers, header_to_field
 
 
-def _order_display_headers(display_headers: list[str], header_to_field: dict[str, str]) -> list[str]:
-    """Order display headers with preferred fields first."""
-    preferred_field_order = ["date", "due_date", "number", "total"]
-    ordered_headers: list[str] = []
-    for canonical_field in preferred_field_order:
-        header_match = next((hdr for hdr in display_headers if header_to_field.get(hdr) == canonical_field), None)
-        if header_match:
-            ordered_headers.append(header_match)
+_DEBIT_AMOUNT_PATTERNS = ("debit", "dr", "invoices", "charges", "amount")
+_CREDIT_AMOUNT_PATTERNS = ("credit", "cr", "credit notes", "payments")
+
+
+def _is_amount_column(norm_name: str) -> bool:
+    """Return True if the normalized column name looks like a debit or credit amount."""
+    return any(norm_name.startswith(p) or norm_name.endswith(p) for p in _DEBIT_AMOUNT_PATTERNS + _CREDIT_AMOUNT_PATTERNS)
+
+
+def _filter_display_amount_columns(display_headers: list[str], header_to_field: dict[str, str]) -> tuple[list[str], dict[str, str]]:
+    """Keep only debit/credit amount columns from the total-mapped headers.
+
+    Hides noise columns (Balance, Clearing differences, Doc Ref, etc.)
+    while keeping the primary transaction amount columns. If no column
+    matches a known amount pattern but exactly one total column exists,
+    it is kept as the sole amount column (e.g. a statement with only
+    "Total" or "Amount").
+    """
+    amount_headers: list[str] = []
+    non_total_headers: list[str] = []
+
     for header in display_headers:
-        if header not in ordered_headers:
-            ordered_headers.append(header)
-    return ordered_headers
+        if header_to_field.get(header) != "total":
+            non_total_headers.append(header)
+            continue
+        norm = _normalize_header_name(header)
+        if _is_amount_column(norm):
+            amount_headers.append(header)
+
+    # If no pattern matched but there's exactly one total column, keep it.
+    if not amount_headers:
+        all_total = [h for h in display_headers if header_to_field.get(h) == "total"]
+        if len(all_total) == 1:
+            amount_headers = all_total
+
+    filtered = non_total_headers + amount_headers
+    filtered_set = set(filtered)
+    filtered_mapping = {h: f for h, f in header_to_field.items() if h in filtered_set}
+    return filtered, filtered_mapping
 
 
-def _format_statement_value(value: Any, canonical_field: str | None, date_fmt: str | None, dec_sep: str, thou_sep: str) -> Any:
+def _order_display_headers(display_headers: list[str], header_to_field: dict[str, str]) -> list[str]:
+    """Order display headers: non-amount fields first, then amount columns.
+
+    Non-amount fields are ordered by preference: date, due_date, number,
+    reference, then any remaining. Amount (total) columns come last,
+    preserving their original order.
+    """
+    non_amount_preferred = ["date", "due_date", "number", "reference"]
+    non_amount: list[str] = []
+    amount: list[str] = []
+
+    for header in display_headers:
+        if header_to_field.get(header) == "total":
+            amount.append(header)
+        else:
+            non_amount.append(header)
+
+    # Sort non-amount headers by preferred order; unlisted ones go at the end.
+    def _sort_key(header: str) -> int:
+        canon = header_to_field.get(header, "")
+        if canon in non_amount_preferred:
+            return non_amount_preferred.index(canon)
+        return len(non_amount_preferred)
+
+    non_amount.sort(key=_sort_key)
+
+    return non_amount + amount
+
+
+def _format_statement_value(value: Any, canonical_field: str | None, date_fmt: str | None) -> Any:
     """Normalize a statement cell value based on the canonical field."""
     if canonical_field in {"date", "due_date"}:
         dt = coerce_datetime_with_template(value, date_fmt)
         if dt is not None:
             return format_iso_with(dt, date_fmt) if date_fmt else dt.strftime("%Y-%m-%d")
     elif canonical_field == "total":
-        return format_money(value, decimal_separator=dec_sep, thousands_separator=thou_sep)
+        return format_money(value)
     return value
 
 
-def _build_rows_by_header(items: list[StatementItemPayload], display_headers: list[str], header_to_field: dict[str, str], date_fmt: str | None, dec_sep: str, thou_sep: str) -> list[dict[str, str]]:
+def _build_rows_by_header(items: list[StatementItemPayload], display_headers: list[str], header_to_field: dict[str, str], date_fmt: str | None) -> list[dict[str, str]]:
     """Build normalized row dicts for the display headers."""
     rows_by_header: list[dict[str, str]] = []
     for item in items:
@@ -100,7 +163,7 @@ def _build_rows_by_header(items: list[StatementItemPayload], display_headers: li
         for header in display_headers:
             value = raw.get(header, "")
             canon = header_to_field.get(header)
-            row[header] = _format_statement_value(value, canon, date_fmt, dec_sep, thou_sep)
+            row[header] = _format_statement_value(value, canon, date_fmt)
         rows_by_header.append(row)
     return rows_by_header
 
@@ -114,14 +177,12 @@ def _find_item_number_header(display_headers: list[str], header_to_field: dict[s
 
 
 def _get_separators_from_data(statement_data: dict[str, Any]) -> tuple[str, str]:
-    """Return (decimal_separator, thousands_separator) from statement JSON."""
-    dec = str(statement_data.get("decimal_separator", ".")).strip()
-    thou = str(statement_data.get("thousands_separator", ","))
-    if dec not in _ALLOWED_DECIMAL_SEPARATORS:
-        dec = _DEFAULT_DECIMAL_SEPARATOR
-    if thou not in _ALLOWED_THOUSANDS_SEPARATORS:
-        thou = _DEFAULT_THOUSANDS_SEPARATOR
-    return (dec or _DEFAULT_DECIMAL_SEPARATOR, thou if thou is not None else _DEFAULT_THOUSANDS_SEPARATOR)
+    """Return standard separators (dot-decimal, comma-thousands).
+
+    Kept for call-site compatibility but no longer reads from statement
+    JSON — separators are always standard format.
+    """
+    return (".", ",")
 
 
 def prepare_display_mappings(items: list[StatementItemPayload], statement_data: dict[str, Any]) -> tuple[list[str], list[dict[str, str]], dict[str, str], str | None]:
@@ -139,11 +200,11 @@ def prepare_display_mappings(items: list[StatementItemPayload], statement_data: 
         header_to_field_norm[_normalize_header_name(raw_header)] = canonical
 
     display_headers, header_to_field = _filter_display_headers(raw_headers, header_to_field_norm)
+    display_headers, header_to_field = _filter_display_amount_columns(display_headers, header_to_field)
     display_headers = _order_display_headers(display_headers, header_to_field)
 
     date_fmt = statement_data.get("date_format") or None
-    dec_sep, thou_sep = _get_separators_from_data(statement_data)
-    rows_by_header = _build_rows_by_header(items, display_headers, header_to_field, date_fmt, dec_sep, thou_sep)
+    rows_by_header = _build_rows_by_header(items, display_headers, header_to_field, date_fmt)
 
     item_number_header = _find_item_number_header(display_headers, header_to_field)
 
@@ -310,14 +371,7 @@ def _mark_invoice_used(invoice_obj: XeroDocumentPayload, invoice_number: str, us
 
 
 def build_right_rows(
-    rows_by_header: list[dict[str, str]],
-    display_headers: list[str],
-    header_to_field: dict[str, str],
-    matched_map: MatchedInvoiceMap,
-    item_number_header: str | None,
-    date_format: str | None = None,
-    decimal_separator: str | None = None,
-    thousands_separator: str | None = None,
+    rows_by_header: list[dict[str, str]], display_headers: list[str], header_to_field: dict[str, str], matched_map: MatchedInvoiceMap, item_number_header: str | None, date_format: str | None = None
 ) -> list[dict[str, str]]:
     """
     Using the matched map, build the right-hand table rows with values from
@@ -344,7 +398,7 @@ def build_right_rows(
                 # Only populate the headers that have a value on the statement side
                 left_val = r.get(h)
                 if left_val is not None and str(left_val).strip():
-                    left_dec = _to_decimal(left_val, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
+                    left_dec = _to_decimal(left_val)
                     if left_dec is not None and left_dec == Decimal(0):
                         row_right[h] = format_money(0)
                     else:

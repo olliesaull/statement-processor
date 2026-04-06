@@ -50,7 +50,6 @@ header as the name in column_order (e.g. "Debit", "Credit", "Balance", "Descript
 
 - Return monetary values exactly as they appear in the PDF (e.g. "3,848.97", "126.50-", "(126.50)")
 - Do NOT strip separators, convert signs, or normalise — return the raw string
-- Report the detected decimal and thousands separators in the `decimal_separator` and `thousands_separator` fields
 
 ## Dates
 

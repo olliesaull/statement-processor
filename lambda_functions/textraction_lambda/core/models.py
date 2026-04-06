@@ -94,8 +94,6 @@ class ExtractionResult(BaseModel):
     header_mapping: dict[str, str]
     date_format: str
     date_confidence: str  # "high" or "low"
-    decimal_separator: str
-    thousands_separator: str
     input_tokens: int
     output_tokens: int
     request_ids: list[str] = Field(default_factory=list)
@@ -113,8 +111,6 @@ class SupplierStatement(BaseModel):
     latest_item_date: str | None = None
     date_format: str = ""
     date_confidence: str = "high"
-    decimal_separator: str = "."
-    thousands_separator: str = ","
     detected_headers: list[str] = Field(default_factory=list)
     header_mapping: dict[str, str] = Field(default_factory=dict)
     input_tokens: int = 0

@@ -58,8 +58,6 @@ EXTRACT_TOOL: dict[str, Any] = {
             "properties": {
                 "detected_headers": {"type": "array", "items": {"type": "string"}, "description": "The column headers detected in the main statement table."},
                 "date_format": {"type": "string", "description": "Detected date format using SDF tokens (e.g. 'DD.MM.YYYY')."},
-                "decimal_separator": {"type": "string", "enum": [".", ","], "description": "Character used as decimal separator in monetary amounts."},
-                "thousands_separator": {"type": "string", "enum": [",", ".", " ", "'", ""], "description": "Character used as thousands separator. Empty string if none."},
                 "column_order": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -75,7 +73,7 @@ EXTRACT_TOOL: dict[str, Any] = {
                     "description": "All rows as arrays of strings, one per line item.",
                 },
             },
-            "required": ["detected_headers", "date_format", "decimal_separator", "thousands_separator", "column_order", "items"],
+            "required": ["detected_headers", "date_format", "column_order", "items"],
         }
     },
 }
@@ -137,21 +135,22 @@ def _build_chunk_bytes(reader: PdfReader, page_start: int, page_end: int) -> lis
 # -- Post-processing ----------------------------------------------------------
 
 
-def convert_amount(raw: str, decimal_sep: str, thousands_sep: str) -> float | str:
+def convert_amount(raw: str) -> float | str:
     """Convert a raw monetary string to a float.
 
     Handles currency prefixes (R, $, ZAR, EUR, etc.), trailing minus
-    signs, parenthetical negatives, thousands/decimal separators.
+    signs, parenthetical negatives. Uses a heuristic to detect
+    decimal vs thousands separators based on digit count after the
+    last separator:
+    - 2 digits after → decimal separator
+    - 3+ digits after → thousands separator (no decimal shown)
+    - 1 digit after → decimal separator
 
     Returns float or original string if conversion fails.
     """
     s = raw.strip()
     if not s:
         return s
-
-    # Guard: identical non-empty separators -> can't parse reliably.
-    if decimal_sep and thousands_sep and decimal_sep == thousands_sep:
-        return raw
 
     # Strip currency prefix (R, $, EUR, ZAR, USD, etc.)
     s = _CURRENCY_PREFIX_RE.sub("", s).strip()
@@ -168,13 +167,28 @@ def convert_amount(raw: str, decimal_sep: str, thousands_sep: str) -> float | st
         negative = True
         s = s[1:].strip()
 
-    # Strip thousands separator.
-    if thousands_sep:
-        s = s.replace(thousands_sep, "")
+    # Heuristic: find the last separator and determine its role
+    # based on how many digits follow it.
+    last_dot = s.rfind(".")
+    last_comma = s.rfind(",")
+    last_sep_pos = max(last_dot, last_comma)
 
-    # Normalise decimal separator to ".".
-    if decimal_sep == ",":
-        s = s.replace(",", ".")
+    if last_sep_pos >= 0:
+        digits_after = len(s) - last_sep_pos - 1
+        last_sep = s[last_sep_pos]
+        other_sep = "," if last_sep == "." else "."
+
+        if digits_after <= 2:
+            # Last separator is decimal — strip all other separators.
+            s = s.replace(other_sep, "").replace(" ", "").replace("'", "")
+            if last_sep != ".":
+                s = s.replace(last_sep, ".")
+        else:
+            # Last separator is thousands (3+ digits after) — no decimal.
+            s = s.replace(",", "").replace(".", "").replace(" ", "").replace("'", "")
+    else:
+        # No separator at all — strip spaces/apostrophes only.
+        s = s.replace(" ", "").replace("'", "")
 
     try:
         value = float(s)
@@ -206,7 +220,7 @@ def reconstruct_items(column_order: list[str], raw_rows: list[list[str]]) -> lis
     return items
 
 
-def postprocess_items(items: list[dict[str, Any]], decimal_sep: str, thousands_sep: str) -> list[dict[str, Any]]:
+def postprocess_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert raw string totals to numeric values.
 
     Also logs conversion failures for post-migration debugging.
@@ -216,9 +230,9 @@ def postprocess_items(items: list[dict[str, Any]], decimal_sep: str, thousands_s
         if "total" in item and isinstance(item["total"], dict):
             converted: dict[str, Any] = {}
             for k, v in item["total"].items():
-                result = convert_amount(str(v), decimal_sep, thousands_sep)
+                result = convert_amount(str(v))
                 if isinstance(result, str) and result:
-                    logger.warning("convert_amount fallback", raw_value=v, decimal_sep=decimal_sep, thousands_sep=thousands_sep, reason="returned_as_string")
+                    logger.warning("convert_amount fallback", raw_value=v, reason="returned_as_string")
                 converted[k] = result
             item["total"] = converted
     return items
@@ -461,10 +475,8 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
     detected_headers = result_0.get("detected_headers", [])
     column_order = result_0.get("column_order", [])
     date_format = result_0.get("date_format", "")
-    decimal_separator = result_0.get("decimal_separator", ".")
-    thousands_separator = result_0.get("thousands_separator", "")
 
-    logger.info("Chunk 1 metadata", detected_headers=detected_headers, column_order=column_order, date_format=date_format, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
+    logger.info("Chunk 1 metadata", detected_headers=detected_headers, column_order=column_order, date_format=date_format)
 
     all_items = reconstruct_items(column_order, result_0.get("items", []))
     logger.info("Chunk 1 items", count=len(all_items))
@@ -499,7 +511,7 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
 
             # Log metadata disagreements with chunk 1 (the canonical source).
             warnings: dict[str, str] = {}
-            canonical_meta = {"date_format": date_format, "decimal_separator": decimal_separator, "thousands_separator": thousands_separator}
+            canonical_meta = {"date_format": date_format}
             for field, canonical in canonical_meta.items():
                 chunk_val = c_result.get(field, "")
                 if chunk_val and chunk_val != canonical:
@@ -531,7 +543,7 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
 
     # -- Post-process --
 
-    all_items = postprocess_items(all_items, decimal_separator, thousands_separator)
+    all_items = postprocess_items(all_items)
     logger.info("Post-merge item count", item_count=len(all_items))
 
     # Compute date_confidence from the actual date values rather than
@@ -556,8 +568,6 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
         header_mapping=header_mapping,
         date_format=date_format,
         date_confidence=date_confidence,
-        decimal_separator=decimal_separator,
-        thousands_separator=thousands_separator,
         input_tokens=total_input_tokens,
         output_tokens=total_output_tokens,
         request_ids=request_ids,
