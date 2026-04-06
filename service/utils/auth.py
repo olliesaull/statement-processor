@@ -283,6 +283,7 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
             return result
         return set_session_is_set_cookie(make_response(result))
 
+    decorated_function._requires_auth = True  # type: ignore[attr-defined]  # noqa: SLF001
     return decorated_function
 
 
@@ -313,6 +314,7 @@ def active_tenant_required(
             session[flash_key] = message
             return redirect(url_for(redirect_endpoint))
 
+        wrapped._requires_auth = True  # type: ignore[attr-defined]  # noqa: SLF001
         return wrapped
 
     return decorator

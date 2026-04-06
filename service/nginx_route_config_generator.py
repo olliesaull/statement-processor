@@ -197,7 +197,25 @@ def generate_param_regex(allowed_params: list[str]) -> str:
     return f"^({param_regex})(&({param_regex}))*$"
 
 
-def generate_single_location(route: dict, upstream_name: str, allowed_params: dict | None = None, route_overrides: dict | None = None) -> list[str]:
+def detect_public_pages(app) -> set[str]:
+    """Detect public (unauthenticated) pages by checking for ``_requires_auth``.
+
+    Routes whose view function has ``_requires_auth = True`` (set by the
+    ``xero_token_required`` and ``active_tenant_required`` decorators) are
+    authenticated.  Everything else is public.
+    """
+    public = set()
+    with app.app_context():
+        for rule in app.url_map.iter_rules():
+            if is_static_route(rule.rule):
+                continue
+            view_func = app.view_functions.get(rule.endpoint)
+            if view_func and not getattr(view_func, "_requires_auth", False):
+                public.add(rule.rule)
+    return public
+
+
+def generate_single_location(route: dict, upstream_name: str, allowed_params: dict | None = None, route_overrides: dict | None = None, public_pages: set | None = None) -> list[str]:
     """Generate a single Nginx location block for a Flask route.
 
     Applies method restrictions, query-string handling (strip, validate,
@@ -210,11 +228,8 @@ def generate_single_location(route: dict, upstream_name: str, allowed_params: di
     if route["original"] == "/healthz":
         lines.append("    access_log off;")
 
-    # Public pages: strip query strings (UTMs logged by CloudFront)
-    public_pages = ["/", "/about", "/cookies", "/faq", "/instructions", "/llm.txt", "/pricing", "/privacy", "/robots.txt", "/sitemap.xml", "/terms"]
-
     route_params = allowed_params.get(route["original"]) if allowed_params else None
-    is_public = route["original"] in public_pages
+    is_public = route["original"] in (public_pages or set())
     has_params = route_params is not None
 
     # Inject per-route directive overrides (e.g. client_max_body_size)
@@ -260,7 +275,7 @@ def generate_single_location(route: dict, upstream_name: str, allowed_params: di
     return lines
 
 
-def generate_location_blocks(routes: list[dict], upstream_name: str = "gunicorn", custom_params_file: str | None = None, overrides_file: str | None = None) -> str:
+def generate_location_blocks(routes: list[dict], upstream_name: str = "gunicorn", custom_params_file: str | None = None, overrides_file: str | None = None, public_pages: set | None = None) -> str:
     """Generate all Nginx location blocks for the given Flask routes.
 
     Loads query-parameter allow list and route overrides, then produces
@@ -291,7 +306,7 @@ def generate_location_blocks(routes: list[dict], upstream_name: str = "gunicorn"
         lines.append("")
 
     for route in routes:
-        lines.extend(generate_single_location(route, upstream_name, allowed_params, route_overrides))
+        lines.extend(generate_single_location(route, upstream_name, allowed_params, route_overrides, public_pages))
 
     return "\n".join(lines)
 
@@ -320,7 +335,12 @@ def main():  # pylint: disable=too-many-locals,too-many-statements
             methods_str = ",".join(route["methods"])
             print(f"  {methods_str:15} {route['original']}", file=sys.stderr)
 
-        location_config = generate_location_blocks(routes, args.upstream, args.route_params, args.route_overrides)
+        public_pages = detect_public_pages(app)
+        print(f"Detected {len(public_pages)} public (unauthenticated) pages:", file=sys.stderr)
+        for page in sorted(public_pages):
+            print(f"  {page}", file=sys.stderr)
+
+        location_config = generate_location_blocks(routes, args.upstream, args.route_params, args.route_overrides, public_pages)
 
         if args.output:
             with open(args.output, "w", encoding="utf-8") as f:
