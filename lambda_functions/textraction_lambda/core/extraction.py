@@ -58,7 +58,6 @@ EXTRACT_TOOL: dict[str, Any] = {
             "properties": {
                 "detected_headers": {"type": "array", "items": {"type": "string"}, "description": "The column headers detected in the main statement table."},
                 "date_format": {"type": "string", "description": "Detected date format using SDF tokens (e.g. 'DD.MM.YYYY')."},
-                "date_confidence": {"type": "string", "enum": ["high", "low"], "description": "high if any day > 12 disambiguates DD/MM; low if all days <= 12."},
                 "decimal_separator": {"type": "string", "enum": [".", ","], "description": "Character used as decimal separator in monetary amounts."},
                 "thousands_separator": {"type": "string", "enum": [",", ".", " ", "'", ""], "description": "Character used as thousands separator. Empty string if none."},
                 "column_order": {
@@ -76,7 +75,7 @@ EXTRACT_TOOL: dict[str, Any] = {
                     "description": "All rows as arrays of strings, one per line item.",
                 },
             },
-            "required": ["detected_headers", "date_format", "date_confidence", "decimal_separator", "thousands_separator", "column_order", "items"],
+            "required": ["detected_headers", "date_format", "decimal_separator", "thousands_separator", "column_order", "items"],
         }
     },
 }
@@ -225,6 +224,64 @@ def postprocess_items(items: list[dict[str, Any]], decimal_sep: str, thousands_s
     return items
 
 
+def compute_date_confidence(date_format: str, items: list[dict[str, Any]]) -> str:
+    """Determine whether the date format is ambiguous from the data itself.
+
+    Parses the date_format to find which component is the year, then
+    checks the other two (day-or-month) components across all items.
+    If either component ever exceeds 12, the format is unambiguous ("high").
+    If both are always <= 12, it's genuinely ambiguous ("low").
+
+    Named-month formats (MMM, MMMM) are always unambiguous.
+    """
+    # Named months make the format unambiguous.
+    if "MMM" in date_format:
+        return "high"
+
+    # Identify the separator from the format string (e.g. "/" in DD/MM/YYYY).
+    sep = ""
+    for ch in date_format:
+        if ch not in "DMYdoy":
+            sep = ch
+            break
+
+    if not sep:
+        return "high"
+
+    # Find which position is the year so we can check the other two.
+    format_parts = date_format.split(sep)
+    year_idx: int | None = None
+    for i, part in enumerate(format_parts):
+        if part.startswith("Y"):
+            year_idx = i
+            break
+
+    if year_idx is None or len(format_parts) != 3:
+        return "high"
+
+    # Check the two non-year components across all date values.
+    for item in items:
+        date_str = item.get("date", "")
+        if not date_str:
+            continue
+
+        parts = date_str.split(sep)
+        if len(parts) != 3:
+            continue
+
+        for i, part in enumerate(parts):
+            if i == year_idx:
+                continue
+            try:
+                if int(part) > 12:
+                    return "high"
+            except ValueError:
+                # Non-numeric component (e.g. month name) — unambiguous.
+                return "high"
+
+    return "low"
+
+
 def build_header_mapping(detected_headers: list[str], column_order: list[str]) -> dict[str, str]:
     """Build header_mapping from detected_headers and column_order.
 
@@ -248,34 +305,46 @@ def build_header_mapping(detected_headers: list[str], column_order: list[str]) -
     return mapping
 
 
-def deduplicate_chunks(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop consecutive identical items from chunk-boundary overlap.
+def strip_overlap_prefix(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Strip the leading overlap block from an incoming chunk's items.
 
-    After merging chunks in page order, scans for adjacent items
-    identical across every field. Drops the second. Safe because:
-    - Chunk-boundary duplicates are always adjacent
-    - Avoids false-positive on payments referencing invoices
-    - Handles both unique-number items and generic rows uniformly
+    Chunks share a 1-page overlap, so the incoming chunk may start with
+    rows already present at the tail of the existing list. This function
+    finds the longest prefix of ``incoming`` that matches a suffix of
+    ``existing`` and returns the non-overlapping remainder.
 
-    All dedup actions are logged for auditability.
+    Safe because it requires exact match across all fields — different
+    rows are never dropped.
     """
-    if not items:
-        return items
+    if not existing or not incoming:
+        return incoming
 
-    result: list[dict[str, Any]] = [items[0]]
-    dedup_count = 0
+    # Find where incoming[0] first appears in the tail of existing.
+    # Only search the tail (up to len(incoming)) to avoid false matches
+    # deep in the list.
+    search_start = max(0, len(existing) - len(incoming))
+    match_start: int | None = None
 
-    for i in range(1, len(items)):
-        if _items_equal(items[i], items[i - 1]):
-            dedup_count += 1
-            logger.info("Chunk boundary dedup: dropped duplicate", dropped_index=i, item_number=items[i].get("number", ""), item_date=items[i].get("date", ""))
-        else:
-            result.append(items[i])
+    for i in range(search_start, len(existing)):
+        if _items_equal(existing[i], incoming[0]):
+            match_start = i
+            break
 
-    if dedup_count:
-        logger.info("Chunk boundary dedup summary", total_dropped=dedup_count)
+    if match_start is None:
+        return incoming
 
-    return result
+    # Verify the full block matches.
+    overlap_len = len(existing) - match_start
+    if overlap_len > len(incoming):
+        return incoming
+
+    for j in range(overlap_len):
+        if not _items_equal(existing[match_start + j], incoming[j]):
+            # Partial match — not a real overlap block.
+            return incoming
+
+    logger.info("Chunk overlap stripped", overlap_items=overlap_len)
+    return incoming[overlap_len:]
 
 
 def _items_equal(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -392,19 +461,10 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
     detected_headers = result_0.get("detected_headers", [])
     column_order = result_0.get("column_order", [])
     date_format = result_0.get("date_format", "")
-    date_confidence = result_0.get("date_confidence", "high")
     decimal_separator = result_0.get("decimal_separator", ".")
     thousands_separator = result_0.get("thousands_separator", "")
 
-    logger.info(
-        "Chunk 1 metadata",
-        detected_headers=detected_headers,
-        column_order=column_order,
-        date_format=date_format,
-        date_confidence=date_confidence,
-        decimal_separator=decimal_separator,
-        thousands_separator=thousands_separator,
-    )
+    logger.info("Chunk 1 metadata", detected_headers=detected_headers, column_order=column_order, date_format=date_format, decimal_separator=decimal_separator, thousands_separator=thousands_separator)
 
     all_items = reconstruct_items(column_order, result_0.get("items", []))
     logger.info("Chunk 1 items", count=len(all_items))
@@ -426,10 +486,6 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
             c_user_text = (
                 f"This is a continuation of a multi-page statement "
                 f"(pages {c_start}-{c_end} of {page_count}).\n"
-                f"The first page of this chunk (page {c_start}) "
-                f"was also the last page of the previous chunk.\n"
-                f"Skip any rows from that page — they have already "
-                f"been extracted.\n"
                 f"The table headers from page 1 are: "
                 f"[{headers_str}]\n"
                 f"Use this exact column_order: {col_order_str}\n"
@@ -437,7 +493,7 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
                 f"header rows.\n"
                 f"If headers are NOT present on these pages, use "
                 f"the headers above to identify columns.\n"
-                f"Extract the data rows only."
+                f"Extract ALL data rows from every page in this chunk."
             )
             c_result, c_in, c_out, c_req_id = _call_bedrock_with_retry(client, system_prompt, c_bytes, c_user_text)
 
@@ -464,9 +520,10 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
                 idx, c_items, c_in, c_out, c_req_id, _ = future.result()
                 chunk_results[idx] = (c_items, c_in, c_out, c_req_id)
 
-        # Merge in chunk order to preserve row ordering.
+        # Merge in chunk order, stripping overlap prefixes.
         for idx in range(1, chunk_count):
             c_items, c_in, c_out, c_req_id = chunk_results[idx]
+            c_items = strip_overlap_prefix(all_items, c_items)
             all_items.extend(c_items)
             total_input_tokens += c_in
             total_output_tokens += c_out
@@ -475,10 +532,13 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
     # -- Post-process --
 
     all_items = postprocess_items(all_items, decimal_separator, thousands_separator)
-    logger.info("reconstruct_items summary", item_count_before_dedup=len(all_items))
+    logger.info("Post-merge item count", item_count=len(all_items))
 
-    all_items = deduplicate_chunks(all_items)
-    logger.info("Post-dedup item count", item_count=len(all_items))
+    # Compute date_confidence from the actual date values rather than
+    # relying on the LLM. If any date has a day-or-month component > 12,
+    # the format is unambiguous. Otherwise it's genuinely ambiguous.
+    date_confidence = compute_date_confidence(date_format, all_items)
+    logger.info("date_confidence", confidence=date_confidence, date_format=date_format)
 
     # Build header_mapping from chunk 1 metadata.
     header_mapping = build_header_mapping(detected_headers, column_order)

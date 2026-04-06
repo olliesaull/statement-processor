@@ -2,7 +2,7 @@
 
 import pytest
 
-from core.extraction import build_header_mapping, convert_amount, deduplicate_chunks, reconstruct_items
+from core.extraction import build_header_mapping, convert_amount, reconstruct_items, strip_overlap_prefix
 
 
 class TestConvertAmount:
@@ -119,41 +119,57 @@ class TestBuildHeaderMapping:
         assert len(mapping) == 2
 
 
-class TestDeduplicateChunks:
-    """deduplicate_chunks: drop consecutive identical items at chunk boundaries."""
+class TestStripOverlapPrefix:
+    """strip_overlap_prefix: remove overlapping block at chunk boundary."""
 
-    def test_identical_adjacent_dropped(self) -> None:
-        items = [
-            {"date": "2024-01-15", "number": "INV-1", "total": {"Amount": 100.0}, "raw": {"date": "2024-01-15"}},
-            {"date": "2024-01-15", "number": "INV-1", "total": {"Amount": 100.0}, "raw": {"date": "2024-01-15"}},
+    def test_full_block_overlap_stripped(self) -> None:
+        """Overlap page produces a block of items at the end of existing
+        that also appears at the start of incoming — block is stripped."""
+        existing = [
+            {"date": "2024-01-10", "number": "INV-1", "total": {"Amount": 100.0}, "raw": {"date": "2024-01-10"}},
+            {"date": "2024-01-15", "number": "INV-2", "total": {"Amount": 200.0}, "raw": {"date": "2024-01-15"}},
+            {"date": "2024-01-20", "number": "INV-3", "total": {"Amount": 300.0}, "raw": {"date": "2024-01-20"}},
         ]
-        result = deduplicate_chunks(items)
+        # Incoming starts with items 2 and 3 (the overlap), then new item 4.
+        incoming = [
+            {"date": "2024-01-15", "number": "INV-2", "total": {"Amount": 200.0}, "raw": {"date": "2024-01-15"}},
+            {"date": "2024-01-20", "number": "INV-3", "total": {"Amount": 300.0}, "raw": {"date": "2024-01-20"}},
+            {"date": "2024-01-25", "number": "INV-4", "total": {"Amount": 400.0}, "raw": {"date": "2024-01-25"}},
+        ]
+        result = strip_overlap_prefix(existing, incoming)
         assert len(result) == 1
+        assert result[0]["number"] == "INV-4"
 
-    def test_different_dates_kept(self) -> None:
-        items = [{"date": "2024-01-15", "number": "EFT", "total": {"Amount": 100.0}, "raw": {}}, {"date": "2024-01-16", "number": "EFT", "total": {"Amount": 100.0}, "raw": {}}]
-        result = deduplicate_chunks(items)
+    def test_no_overlap_keeps_all(self) -> None:
+        """No matching items — incoming is returned as-is."""
+        existing = [{"date": "2024-01-10", "number": "INV-1", "total": {}, "raw": {}}]
+        incoming = [{"date": "2024-02-10", "number": "INV-2", "total": {}, "raw": {}}]
+        result = strip_overlap_prefix(existing, incoming)
+        assert len(result) == 1
+        assert result[0]["number"] == "INV-2"
+
+    def test_different_raw_not_stripped(self) -> None:
+        """Items with matching standard fields but different raw are NOT stripped."""
+        existing = [{"date": "2024-01-15", "number": "EFT", "total": {"Amount": 100.0}, "raw": {"Desc": "Payment A"}}]
+        incoming = [{"date": "2024-01-15", "number": "EFT", "total": {"Amount": 100.0}, "raw": {"Desc": "Payment B"}}, {"date": "2024-01-20", "number": "INV-2", "total": {"Amount": 200.0}, "raw": {}}]
+        result = strip_overlap_prefix(existing, incoming)
         assert len(result) == 2
 
-    def test_same_amount_different_raw_kept(self) -> None:
-        items = [
-            {"date": "2024-01-15", "number": "EFT", "total": {"Amount": 100.0}, "raw": {"Desc": "Payment A"}},
-            {"date": "2024-01-15", "number": "EFT", "total": {"Amount": 100.0}, "raw": {"Desc": "Payment B"}},
-        ]
-        result = deduplicate_chunks(items)
-        assert len(result) == 2
-
-    def test_non_adjacent_same_number_kept(self) -> None:
-        items = [
-            {"date": "2024-01-15", "number": "INV-1", "total": {"Amount": 100.0}, "raw": {}},
-            {"date": "2024-01-20", "number": "INV-2", "total": {"Amount": 200.0}, "raw": {}},
-            {"date": "2024-02-15", "number": "INV-1", "total": {"Amount": 100.0}, "raw": {}},
-        ]
-        result = deduplicate_chunks(items)
-        assert len(result) == 3
-
-    def test_three_consecutive_identical_reduced_to_one(self) -> None:
-        item = {"date": "2024-01-15", "number": "INV-1", "total": {"Amount": 100.0}, "raw": {}}
-        items = [item.copy(), item.copy(), item.copy()]
-        result = deduplicate_chunks(items)
+    def test_partial_match_not_stripped(self) -> None:
+        """First item matches but second doesn't — no stripping."""
+        existing = [{"date": "2024-01-15", "number": "INV-1", "total": {}, "raw": {}}, {"date": "2024-01-20", "number": "INV-2", "total": {}, "raw": {}}]
+        incoming = [{"date": "2024-01-20", "number": "INV-2", "total": {}, "raw": {}}, {"date": "2024-01-25", "number": "INV-DIFFERENT", "total": {}, "raw": {}}]
+        # incoming[0] matches existing[-1], overlap_len=1, should strip 1 item.
+        result = strip_overlap_prefix(existing, incoming)
         assert len(result) == 1
+        assert result[0]["number"] == "INV-DIFFERENT"
+
+    def test_empty_existing_keeps_all(self) -> None:
+        incoming = [{"date": "2024-01-15", "number": "INV-1", "total": {}, "raw": {}}]
+        result = strip_overlap_prefix([], incoming)
+        assert len(result) == 1
+
+    def test_empty_incoming_returns_empty(self) -> None:
+        existing = [{"date": "2024-01-15", "number": "INV-1", "total": {}, "raw": {}}]
+        result = strip_overlap_prefix(existing, [])
+        assert len(result) == 0

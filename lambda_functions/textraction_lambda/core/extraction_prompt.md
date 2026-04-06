@@ -60,13 +60,6 @@ header as the name in column_order (e.g. "Debit", "Credit", "Balance", "Descript
   use that to disambiguate DD vs MM ordering. For example, if you see "15.07.2023", the 15 cannot be
   a month, so the format is DD.MM.YYYY.
 
-## Date confidence
-
-In the `date_confidence` field:
-- Return `"high"` if any date value has a day > 12, which disambiguates DD vs MM ordering.
-- Return `"low"` if ALL date values have day ≤ 12 (e.g. all dates between 1st-12th of the month),
-  making the format genuinely ambiguous between DD/MM and MM/DD.
-
 ### SDF Token Reference
 
 | Token  | Meaning            | Example     |
