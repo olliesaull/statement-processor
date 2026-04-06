@@ -18,3 +18,5 @@ pypdf
 redis
 gunicorn
 stripe
+markdown
+pyyaml
