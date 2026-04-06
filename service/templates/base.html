@@ -65,6 +65,10 @@
                             href="{{ url_for('instructions') }}">Instructions</a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'faq' %}active{% endif %}"
+                            href="{{ url_for('faq') }}">FAQ</a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'tenant_management' %}active{% endif %}"
                             href="{{ url_for('tenant_management') }}">Tenant Management</a>
                     </li>
@@ -120,12 +124,14 @@
                 <div>
                     <div class="footer-heading">Contact</div>
                     <div class="footer-links">
-                        <a href="mailto:hello@example.com">hello@example.com</a>
+                        <a href="mailto:TBD@example.com">TBD@example.com</a>
                     </div>
                 </div>
                 <div>
                     <div class="footer-heading">Legal</div>
                     <div class="footer-links">
+                        <a href="{{ url_for('privacy') }}">Privacy Policy</a>
+                        <a href="{{ url_for('terms') }}">Terms and Conditions</a>
                         <a href="{{ url_for('cookies') }}">Cookie Policy</a>
                     </div>
                 </div>
