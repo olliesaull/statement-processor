@@ -1768,6 +1768,30 @@ a:focus-visible {
   }
 }
 
+/* ---------- Sticky horizontal scrollbar proxy ---------- */
+.scroll-proxy {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+  height: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  z-index: 1039;
+  opacity: 0;
+  pointer-events: none;
+  transition: bottom 180ms ease, opacity 180ms ease;
+}
+
+.scroll-proxy.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.scroll-proxy-inner {
+  height: 1px;
+}
+
 /* ---------- 17. Responsive media queries ---------- */
 
 /* Tablet and below */
