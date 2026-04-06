@@ -15,13 +15,35 @@ Cost: ~$0.10-0.20 per run for 8 PDFs through Haiku.
 
 import io
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 SCRIPT_DIR = Path(__file__).parent
+
+# Load AWS_REGION and AWS_PROFILE from .env before importing Lambda code.
+load_dotenv(SCRIPT_DIR / ".env")
 OUTPUT_DIR = SCRIPT_DIR / "output"
+LOG_FILE = SCRIPT_DIR / "accuracy_test.log"
 FLOAT_TOLERANCE = 0.01
+
+
+def _configure_logging() -> None:
+    """Route all library logs (Lambda powertools, boto3, etc.) to a log file.
+
+    Keeps stdout clean for test progress output only.
+    """
+    file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+
+    # Capture everything from the root logger.
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    root.addHandler(file_handler)
 
 # Add Lambda source to path so we can import extract_statement post-migration.
 LAMBDA_DIR = Path(__file__).parent.parent.parent / "lambda_functions" / "textraction_lambda"
@@ -92,7 +114,9 @@ def main() -> None:
     from core.extraction import extract_statement  # noqa: E402
     from pypdf import PdfReader  # noqa: E402
 
+    _configure_logging()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"Logs → {LOG_FILE}")
 
     scenarios = generate_all_scenarios()
     all_errors: list[str] = []

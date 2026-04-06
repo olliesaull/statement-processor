@@ -12,6 +12,7 @@
 .env
 *.json
 *.xlsx
+*.log
 .worktrees/
 .playwright-mcp/
 plans/
