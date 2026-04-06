@@ -1543,7 +1543,7 @@ a:focus-visible {
   --split-border: 6px solid var(--bs-border-color);
   table-layout: fixed;
   width: 100%;
-  min-width: 1300px;
+  min-width: 1440px;
 }
 
 /* Split border between Statement and Xero halves */
@@ -1571,7 +1571,7 @@ a:focus-visible {
 
 /* Column widths for the fixed-layout comparison table.
    Assigned via <colgroup> using canonical field types. */
-.col-w-type     { width: 2.5%; }
+.col-w-type     { width: 3.5%; }
 .col-w-date     { width: 7.5%; }
 .col-w-number   { width: 6.5%; }
 .col-w-due_date { width: 7.5%; }
@@ -1580,7 +1580,8 @@ a:focus-visible {
 .col-w-xero-link { width: 3.5%; }
 .col-w-status   { width: 6%; }
 
-.col-type {
+.col-type,
+.table-compare td.col-type {
   white-space: nowrap;
 }
 
