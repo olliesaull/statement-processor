@@ -115,9 +115,9 @@
   <div class="page-panel page-panel-flat d-flex justify-content-between align-items-center flex-wrap gap-3 mt-4 statements-page-toggle" id="statements-footer-actions">
     <span class="action-count-chip">{{ statement_count }} statement{% if statement_count != 1 %}s{% endif %}</span>
     {% if show_completed %}
-      <a href="{{ url_for('statements', sort=current_sort, dir=current_dir) }}" class="btn btn-secondary">View incomplete</a>
+      <a href="{{ url_for('statements', sort=current_sort, dir=current_dir, per_page=per_page) }}" class="btn btn-secondary">View incomplete</a>
     {% else %}
-      <a href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir) }}" class="btn btn-outline-secondary">View completed</a>
+      <a href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}" class="btn btn-outline-secondary">View completed</a>
     {% endif %}
   </div>
 
@@ -125,9 +125,9 @@
     <span class="action-count-chip">{{ statement_count }} statement{% if statement_count != 1 %}s{% endif %}</span>
     {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url, compact=true) }}
     {% if show_completed %}
-      <a href="{{ url_for('statements', sort=current_sort, dir=current_dir) }}" class="btn btn-secondary">View incomplete</a>
+      <a href="{{ url_for('statements', sort=current_sort, dir=current_dir, per_page=per_page) }}" class="btn btn-secondary">View incomplete</a>
     {% else %}
-      <a href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir) }}" class="btn btn-outline-secondary">View completed</a>
+      <a href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}" class="btn btn-outline-secondary">View completed</a>
     {% endif %}
   </div>
 </div>
