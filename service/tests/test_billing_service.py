@@ -56,6 +56,7 @@ def test_reserve_statement_uploads_builds_atomic_billing_transaction(monkeypatch
     assert transact_items[1]["Put"]["Item"]["EntryType"] == {"S": ENTRY_TYPE_RESERVE}
     assert transact_items[2]["Put"]["Item"]["PdfPageCount"] == {"N": "2"}
     assert transact_items[2]["Put"]["Item"]["TokenReservationStatus"] == {"S": TOKEN_RESERVATION_STATUS_RESERVED}
+    assert transact_items[2]["Put"]["Item"]["ProcessingStage"] == {"S": "queued"}
 
 
 def test_reserve_statement_uploads_surfaces_insufficient_balance(monkeypatch) -> None:

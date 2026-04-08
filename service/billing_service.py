@@ -150,6 +150,10 @@ class BillingService:
             # Settlement can be retried by Step Functions; we need one persisted
             # state flag to make consume/release operations conditionally idempotent.
             "TokenReservationStatus": TOKEN_RESERVATION_STATUS_RESERVED,
+            # Set initial processing stage so the UI can track progress
+            # from the moment of upload. The Lambda transitions this
+            # through chunking → extracting → post_processing → complete.
+            "ProcessingStage": "queued",
         }
 
     @classmethod
