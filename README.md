@@ -519,9 +519,10 @@ The script downloads files into `service/static/assets/vendor/` and generates
   - Single-table pattern storing both statement headers and statement line items.
   - `RecordType` distinguishes row types: `"statement"` for headers (`service/billing_service.py:reserve_statement_uploads`) and `"statement_item"` for line items (`lambda_functions/textraction_lambda/core/statement_processor.py:_persist_statement_items`).
 - **Writers**
-  - Statement headers: `service/billing_service.py:reserve_statement_uploads` (initial record with billing metadata).
+  - Statement headers: `service/billing_service.py:reserve_statement_uploads` (initial record with billing metadata and `ProcessingStage=queued`).
+  - Processing progress: `lambda_functions/textraction_lambda/core/processing_progress.py:update_processing_stage` (stage transitions during extraction).
   - Item rows + header updates: `lambda_functions/textraction_lambda/core/statement_processor.py` (writes item rows; sets `EarliestItemDate` and `LatestItemDate` on header).
-  - Status updates: `service/utils/dynamo.py` (completion flags and item type updates).
+  - Status updates: `service/utils/dynamo.py` (completion flags, item type updates, and `repair_processing_stage` read-repair on failure).
 - **Readers**
   - `service/utils/dynamo.py` (list statements, read header + item status, delete statement data).
   - `service/app.py` (statement list/detail flows).
@@ -540,6 +541,7 @@ The script downloads files into `service/static/assets/vendor/` and generates
   "PdfPageCount": 8,
   "ReservationLedgerEntryID": "reserve#<statement_id>",
   "TokenReservationStatus": "reserved",
+  "ProcessingStage": "queued",
   "EarliestItemDate": "YYYY-MM-DD",
   "LatestItemDate": "YYYY-MM-DD"
 }
@@ -567,6 +569,20 @@ The script downloads files into `service/static/assets/vendor/` and generates
 }
 ```
 - `statement_item.total` is now treated as a dict-only `{label: value}` mapping in both service and textraction code paths; legacy list-style totals are no longer supported.
+- **Processing stage lifecycle** — tracks extraction progress on statement header rows for the UI. S3 JSON existence remains the source of truth for "done vs not done" (avoids ordering issues between S3 upload and DynamoDB update); `ProcessingStage` only enriches the processing UI with granular progress.
+
+  | Stage | Set by | Meaning |
+  |---|---|---|
+  | `queued` | Flask upload (`billing_service.py`) | Statement uploaded, waiting for Lambda |
+  | `chunking` | Lambda (`statement_processor.py`) | Lambda started, splitting PDF into sections |
+  | `extracting` | Lambda (`statement_processor.py`) | Bedrock extracting data from each section |
+  | `post_processing` | Lambda (`statement_processor.py`) | Extraction complete, running validation |
+  | `complete` | Lambda (`statement_processor.py`) | All processing finished, results available |
+  | `failed` | Lambda (`main.py`) / Flask read-repair | Processing failed, tokens refunded |
+
+  - `ProcessingProgress` (e.g. `"3/10"`) and `ProcessingTotalSections` (e.g. `10`) are transient — set during `extracting` stage, removed at `post_processing`.
+  - If `ProcessingStage` is missing after migration, treat as `"failed"`.
+  - Writers: `service/billing_service.py` (sets `queued`), `lambda_functions/textraction_lambda/core/processing_progress.py` (all other transitions), `service/utils/dynamo.py:repair_processing_stage` (read-repair on failure).
 
 **TenantContactsConfigTable** — **REMOVED**
 - This table has been removed as part of the Textract-to-Bedrock migration. Bedrock returns self-describing statement JSON that includes `header_mapping`, `date_format`, `date_confidence`, `decimal_separator`, and `thousands_separator` directly in the output. The service reads these metadata fields from the statement JSON in S3 instead of needing a per-contact `ContactConfig` in DynamoDB.
