@@ -67,9 +67,10 @@
                         <button class="btn btn-outline-primary btn-sm" type="submit">Switch to Tenant</button>
                       </form>
                     {% endif %}
-                    <form method="post" action="{{ url_for('disconnect_tenant') }}">
+                    <form method="post" action="{{ url_for('disconnect_tenant') }}" class="disconnect-form">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
+                      <input type="hidden" name="erasure_days" value="14">
                       <button class="btn btn-outline-danger btn-sm" type="submit">Disconnect Tenant</button>
                     </form>
                   </div>
@@ -86,4 +87,43 @@
     </div>
   {% endif %}
 </div>
+
+  {# Housekeeping modal — shown when disconnecting a tenant #}
+  {% from "macros/modal.html" import modal %}
+  {% call modal(id="housekeeping-modal", title="Disconnect Tenant",
+                confirm_label="Confirm Disconnect", danger=true) %}
+    {% include "modals/housekeeping_body.html" %}
+  {% endcall %}
+
+  <script type="module">
+    import { appModal } from "/static/assets/js/modal.js";
+
+    let activeDisconnectForm = null;
+
+    // Intercept disconnect form submissions to show the housekeeping modal.
+    // If JS fails, the form submits directly with the default erasure_days=14.
+    document.querySelectorAll(".disconnect-form").forEach((form) => {
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        activeDisconnectForm = form;
+        // Reset radio to default (2 weeks).
+        const defaultRadio = document.getElementById("erasure-14");
+        if (defaultRadio) defaultRadio.checked = true;
+        appModal.show("housekeeping-modal");
+      });
+    });
+
+    // Confirm button in the modal submits the original form with the selected option.
+    const confirmBtn = document.getElementById("housekeeping-modal-confirm");
+    if (confirmBtn) {
+      confirmBtn.addEventListener("click", () => {
+        if (!activeDisconnectForm) return;
+        const selected = document.querySelector('input[name="erasure_days"]:checked');
+        if (selected) {
+          activeDisconnectForm.querySelector('input[name="erasure_days"]').value = selected.value;
+        }
+        activeDisconnectForm.submit();
+      });
+    }
+  </script>
 {% endblock %}
