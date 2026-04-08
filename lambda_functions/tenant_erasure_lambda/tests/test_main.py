@@ -87,6 +87,9 @@ def test_handler_handles_conditional_check_failure(monkeypatch) -> None:
 
     assert result["skipped"] == 1
     assert result["failed"] == 0
+    # Claim failed, so data deletion must NOT have been attempted.
+    fake_s3.get_paginator.assert_not_called()
+    fake_stmt_table.query.assert_not_called()
 
 
 def test_handler_continues_after_single_failure(monkeypatch) -> None:
