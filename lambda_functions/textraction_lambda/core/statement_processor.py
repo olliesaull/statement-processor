@@ -265,12 +265,12 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
 
     logger.info("SupplierStatement built", statement_id=statement_id, date_range=f"{supplier_statement.earliest_item_date} to {supplier_statement.latest_item_date}")
 
+    # -- Progress: post-processing --
+    update_processing_stage(tenant_id, statement_id, "post_processing")
+
     # Flag outliers without removing them.
     statement_dict, summary = apply_outlier_flags(statement_dict, remove=False)
     logger.info("Anomaly detection complete", summary=json.dumps(summary, indent=2))
-
-    # -- Progress: post-processing --
-    update_processing_stage(tenant_id, statement_id, "post_processing")
 
     # Persist items to DynamoDB (best effort).
     try:
