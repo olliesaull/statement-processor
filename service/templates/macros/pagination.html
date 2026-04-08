@@ -1,0 +1,34 @@
+{#
+  Reusable pagination navigation controls.
+
+  Usage:
+    {% from "macros/pagination.html" import pagination_nav %}
+    {{ pagination_nav(page=2, total_pages=5, prev_url="/statements?page=1", next_url="/statements?page=3") }}
+    {{ pagination_nav(page=2, total_pages=5, prev_url="...", next_url="...", compact=true) }}
+
+  Parameters:
+    page        — current page number (1-based)
+    total_pages — total number of pages
+    prev_url    — URL for the previous page
+    next_url    — URL for the next page
+    compact     — if true, renders smaller controls for sticky docks (default: false)
+
+  Controls are hidden entirely when total_pages <= 1.
+#}
+{% macro pagination_nav(page, total_pages, prev_url, next_url, compact=false) %}
+  {% if total_pages > 1 %}
+    <nav class="pagination-nav{% if compact %} pagination-nav-compact{% endif %}" aria-label="Pagination">
+      <a
+        href="{{ prev_url }}"
+        class="btn btn-sm btn-outline-primary{% if page <= 1 %} disabled{% endif %}"
+        {% if page <= 1 %}aria-disabled="true" tabindex="-1"{% endif %}
+      >&lsaquo; Previous</a>
+      <span class="pagination-indicator">Page {{ page }} of {{ total_pages }}</span>
+      <a
+        href="{{ next_url }}"
+        class="btn btn-sm btn-outline-primary{% if page >= total_pages %} disabled{% endif %}"
+        {% if page >= total_pages %}aria-disabled="true" tabindex="-1"{% endif %}
+      >Next &rsaquo;</a>
+    </nav>
+  {% endif %}
+{% endmacro %}
