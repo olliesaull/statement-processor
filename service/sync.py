@@ -189,10 +189,16 @@ def _s3_data_exists(tenant_id: str) -> bool:
     try:
         s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=canary_key)
         return True
-    except s3_client.exceptions.NoSuchKey:
-        return False
+    except ClientError as exc:
+        # head_object returns a 404 ClientError when the object is missing
+        # (not NoSuchKey, which is specific to get_object).
+        status_code = exc.response.get("Error", {}).get("Code", "")
+        if status_code in ("404", "NoSuchKey"):
+            return False
+        logger.exception("S3 head_object failed, assuming data exists", tenant_id=tenant_id, key=canary_key)
+        return True
     except Exception:
-        # On S3 errors, assume data exists to avoid unnecessary reloads.
+        # Non-AWS errors (network, etc.) — assume data exists to be safe.
         logger.exception("S3 head_object failed, assuming data exists", tenant_id=tenant_id, key=canary_key)
         return True
 

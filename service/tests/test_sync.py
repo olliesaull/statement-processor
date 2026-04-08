@@ -140,7 +140,6 @@ def test_s3_data_exists_returns_true_when_canary_present(monkeypatch) -> None:
     """Should return True when contacts.json exists in S3."""
     fake_s3 = MagicMock()
     fake_s3.head_object.return_value = {}
-    fake_s3.exceptions = MagicMock()
     monkeypatch.setattr(sync, "s3_client", fake_s3)
     monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
 
@@ -149,22 +148,44 @@ def test_s3_data_exists_returns_true_when_canary_present(monkeypatch) -> None:
 
 
 def test_s3_data_exists_returns_false_when_canary_missing(monkeypatch) -> None:
-    """Should return False when contacts.json does not exist in S3."""
+    """Should return False when head_object returns 404 (object missing)."""
+    from botocore.exceptions import ClientError
+
     fake_s3 = MagicMock()
-    no_such_key = type("NoSuchKey", (Exception,), {})
-    fake_s3.exceptions.NoSuchKey = no_such_key
-    fake_s3.head_object.side_effect = no_such_key("Not found")
+    fake_s3.head_object.side_effect = ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
     monkeypatch.setattr(sync, "s3_client", fake_s3)
     monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
 
     assert sync._s3_data_exists("t1") is False
 
 
-def test_s3_data_exists_returns_true_on_s3_error(monkeypatch) -> None:
-    """On unexpected S3 errors, assume data exists to avoid unnecessary reloads."""
+def test_s3_data_exists_returns_false_for_no_such_key_code(monkeypatch) -> None:
+    """Should also return False when error code is NoSuchKey (some S3 implementations)."""
+    from botocore.exceptions import ClientError
+
     fake_s3 = MagicMock()
-    fake_s3.exceptions = MagicMock()
-    fake_s3.exceptions.NoSuchKey = type("NoSuchKey", (Exception,), {})
+    fake_s3.head_object.side_effect = ClientError({"Error": {"Code": "NoSuchKey", "Message": "Not Found"}}, "HeadObject")
+    monkeypatch.setattr(sync, "s3_client", fake_s3)
+    monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
+
+    assert sync._s3_data_exists("t1") is False
+
+
+def test_s3_data_exists_returns_true_on_other_client_error(monkeypatch) -> None:
+    """Non-404 ClientErrors should assume data exists to avoid unnecessary reloads."""
+    from botocore.exceptions import ClientError
+
+    fake_s3 = MagicMock()
+    fake_s3.head_object.side_effect = ClientError({"Error": {"Code": "AccessDenied", "Message": "Forbidden"}}, "HeadObject")
+    monkeypatch.setattr(sync, "s3_client", fake_s3)
+    monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
+
+    assert sync._s3_data_exists("t1") is True
+
+
+def test_s3_data_exists_returns_true_on_non_aws_error(monkeypatch) -> None:
+    """Non-AWS errors (network, etc.) should assume data exists to be safe."""
+    fake_s3 = MagicMock()
     fake_s3.head_object.side_effect = RuntimeError("S3 timeout")
     monkeypatch.setattr(sync, "s3_client", fake_s3)
     monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
