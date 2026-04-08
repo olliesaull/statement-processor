@@ -30,6 +30,7 @@ def test_check_load_required_does_not_grant_for_existing_tenant(monkeypatch) -> 
     # Simulate existing row.
     fake_table.get_item.return_value = {"Item": {"TenantID": "existing-tenant", "TenantStatus": "FREE"}}
     monkeypatch.setattr(sync, "tenant_data_table", fake_table)
+    monkeypatch.setattr(sync, "_s3_data_exists", lambda _tid: True)
 
     mock_billing = MagicMock()
     monkeypatch.setattr(sync, "BillingService", mock_billing)
@@ -102,6 +103,7 @@ def test_check_load_required_returns_false_for_free_with_erasure_pending(monkeyp
     fake_table = MagicMock()
     fake_table.get_item.return_value = {"Item": {"TenantID": "free-tenant", "TenantStatus": "FREE", "EraseTenantDataTime": 1700000000000}}
     monkeypatch.setattr(sync, "tenant_data_table", fake_table)
+    monkeypatch.setattr(sync, "_s3_data_exists", lambda _tid: True)
 
     mock_billing = MagicMock()
     monkeypatch.setattr(sync, "BillingService", mock_billing)
@@ -113,3 +115,58 @@ def test_check_load_required_returns_false_for_free_with_erasure_pending(monkeyp
 
     assert result is False
     mock_repo.cancel_erasure.assert_called_once_with("free-tenant")
+
+
+def test_check_load_required_triggers_reload_when_s3_data_missing(monkeypatch) -> None:
+    """FREE tenant with missing S3 data should trigger a fresh LOADING sync."""
+    fake_table = MagicMock()
+    fake_table.get_item.return_value = {"Item": {"TenantID": "orphan-tenant", "TenantStatus": "FREE"}}
+    monkeypatch.setattr(sync, "tenant_data_table", fake_table)
+    monkeypatch.setattr(sync, "_s3_data_exists", lambda _tid: False)
+
+    mock_billing = MagicMock()
+    monkeypatch.setattr(sync, "BillingService", mock_billing)
+
+    result = sync.check_load_required("orphan-tenant")
+
+    assert result is True
+    # Should set status to LOADING.
+    fake_table.update_item.assert_called_once()
+    call_kwargs = fake_table.update_item.call_args.kwargs
+    assert call_kwargs["ExpressionAttributeValues"][":loading"] == TenantStatus.LOADING
+
+
+def test_s3_data_exists_returns_true_when_canary_present(monkeypatch) -> None:
+    """Should return True when contacts.json exists in S3."""
+    fake_s3 = MagicMock()
+    fake_s3.head_object.return_value = {}
+    fake_s3.exceptions = MagicMock()
+    monkeypatch.setattr(sync, "s3_client", fake_s3)
+    monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
+
+    assert sync._s3_data_exists("t1") is True
+    fake_s3.head_object.assert_called_once_with(Bucket="test-bucket", Key="t1/data/contacts.json")
+
+
+def test_s3_data_exists_returns_false_when_canary_missing(monkeypatch) -> None:
+    """Should return False when contacts.json does not exist in S3."""
+    fake_s3 = MagicMock()
+    no_such_key = type("NoSuchKey", (Exception,), {})
+    fake_s3.exceptions.NoSuchKey = no_such_key
+    fake_s3.head_object.side_effect = no_such_key("Not found")
+    monkeypatch.setattr(sync, "s3_client", fake_s3)
+    monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
+
+    assert sync._s3_data_exists("t1") is False
+
+
+def test_s3_data_exists_returns_true_on_s3_error(monkeypatch) -> None:
+    """On unexpected S3 errors, assume data exists to avoid unnecessary reloads."""
+    fake_s3 = MagicMock()
+    fake_s3.exceptions = MagicMock()
+    fake_s3.exceptions.NoSuchKey = type("NoSuchKey", (Exception,), {})
+    fake_s3.head_object.side_effect = RuntimeError("S3 timeout")
+    monkeypatch.setattr(sync, "s3_client", fake_s3)
+    monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
+
+    assert sync._s3_data_exists("t1") is True

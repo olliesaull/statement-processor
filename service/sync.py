@@ -179,6 +179,24 @@ def sync_payments(api: AccountingApi, tenant_id: str, modified_since: datetime |
     return _sync_resource(api, tenant_id, get_payments, XeroType.PAYMENTS, "Syncing payments", "Synced payments", modified_since=modified_since)
 
 
+def _s3_data_exists(tenant_id: str) -> bool:
+    """Check whether the tenant's core data files exist in S3.
+
+    Uses a single head_object call on contacts.json as a canary. If this
+    file is missing, the other datasets are likely missing too.
+    """
+    canary_key = f"{tenant_id}/data/contacts.json"
+    try:
+        s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=canary_key)
+        return True
+    except s3_client.exceptions.NoSuchKey:
+        return False
+    except Exception:
+        # On S3 errors, assume data exists to avoid unnecessary reloads.
+        logger.exception("S3 head_object failed, assuming data exists", tenant_id=tenant_id, key=canary_key)
+        return True
+
+
 def check_load_required(tenant_id: str) -> bool:
     """Check whether a tenant needs a full data load on connection.
 
@@ -235,6 +253,14 @@ def check_load_required(tenant_id: str) -> bool:
         if has_pending_erasure:
             TenantDataRepository.cancel_erasure(tenant_id)
             logger.info("Cancelled pending erasure for reconnecting tenant", tenant_id=tenant_id)
+
+        # Verify S3 data actually exists. DynamoDB may say FREE but data could
+        # be missing (e.g. manual deletion, partial sync on first load). Check a
+        # canary file — if contacts.json is absent, trigger a full reload.
+        if status == TenantStatus.FREE and not _s3_data_exists(tenant_id):
+            tenant_data_table.update_item(Key={"TenantID": tenant_id}, UpdateExpression="SET TenantStatus = :loading", ExpressionAttributeValues={":loading": TenantStatus.LOADING})
+            logger.warning("S3 data missing for FREE tenant, triggering reload", tenant_id=tenant_id)
+            return True
 
         logger.info("Checked tenant sync requirement", tenant_id=tenant_id, sync_required=False)
         return False
