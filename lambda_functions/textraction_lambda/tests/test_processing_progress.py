@@ -53,6 +53,7 @@ class TestUpdateProcessingStage:
 
         call_kwargs = mock_table.update_item.call_args[1]
         assert call_kwargs["ExpressionAttributeValues"][":progress"] == "3/5"
+        assert "REMOVE" in call_kwargs["UpdateExpression"]
         assert "ProcessingTotalSections" in call_kwargs["UpdateExpression"]
 
     def test_post_processing_removes_progress_fields(self, mock_table):
