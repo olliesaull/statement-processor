@@ -560,6 +560,87 @@ a:focus-visible {
   font-size: 0.8125rem;
 }
 
+/* -- Page jump dropdown -- */
+.pagination-jump {
+  position: relative;
+}
+
+.pagination-indicator-btn {
+  all: unset;
+  cursor: pointer;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  white-space: nowrap;
+  padding: 0 0.25rem;
+  border-radius: 0.25rem;
+  transition: background 0.15s;
+}
+
+.pagination-indicator-btn:hover,
+.pagination-indicator-btn:focus-visible {
+  background: var(--slate-100, #f1f5f9);
+}
+
+.pagination-chevron {
+  font-size: 0.7em;
+  margin-left: 0.125rem;
+  opacity: 0.6;
+}
+
+.pagination-jump-popover {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff;
+  border: 1px solid var(--slate-200, #e2e8f0);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  padding: 0.5rem;
+  z-index: 1060;
+  min-width: 3rem;
+  max-width: min(20rem, 90vw);
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.pagination-jump-popover[data-open] {
+  display: block;
+}
+
+.pagination-jump-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2rem, 1fr));
+  gap: 0.25rem;
+}
+
+.pagination-jump-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  height: 2rem;
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--slate-700, #334155);
+  transition: background 0.1s;
+}
+
+.pagination-jump-item:hover {
+  background: var(--slate-100, #f1f5f9);
+  color: var(--slate-900, #0f172a);
+}
+
+.pagination-jump-item-current {
+  background: var(--bs-primary, #0d6efd);
+  color: #fff;
+  pointer-events: none;
+}
+
 .pagination-per-page {
   display: flex;
   align-items: center;
