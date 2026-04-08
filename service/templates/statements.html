@@ -77,7 +77,7 @@
                     {% if is_reserved %}
                       <button type="button" class="btn btn-sm btn-outline-secondary" disabled>Processing</button>
                     {% else %}
-                      <form method="post" action="{{ url_for('delete_statement', statement_id=stmt['StatementID']) }}" class="d-inline" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
+                      <form method="post" action="{{ url_for('delete_statement', statement_id=stmt['StatementID'], page=page, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') }}" class="d-inline" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
                       </form>

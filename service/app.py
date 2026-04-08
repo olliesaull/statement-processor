@@ -813,13 +813,26 @@ def statements():
 @route_handler_logging
 @block_when_loading
 def delete_statement(statement_id: str):
-    """Delete the statement and redirect back to the list view."""
+    """Delete the statement and redirect back to the list view.
+
+    Pagination and sort state (page, per_page, sort, dir, view) are forwarded
+    via query params on the form action URL so the user lands back on the same
+    page they were on rather than the default first page.
+    """
     tenant_id = session.get("xero_tenant_id")
+
+    # Preserve the caller's pagination and sort state for the redirect.
+    redirect_args: dict[str, str] = {}
+    for param in ("page", "per_page", "sort", "dir", "view"):
+        val = request.args.get(param)
+        if val:
+            redirect_args[param] = val
+
     record = get_statement_record(tenant_id, statement_id)
     if record and str(record.get("TokenReservationStatus") or "").strip().lower() == "reserved":
         logger.info("Delete rejected; statement still processing", tenant_id=tenant_id, statement_id=statement_id)
         session["tenant_error"] = "This statement is still processing and cannot be deleted yet."
-        return redirect(url_for("statements"))
+        return redirect(url_for("statements", **redirect_args))
 
     try:
         delete_statement_data(tenant_id, statement_id)
@@ -828,7 +841,7 @@ def delete_statement(statement_id: str):
         logger.exception("Failed to delete statement", tenant_id=tenant_id, statement_id=statement_id, error=exc)
         session["tenant_error"] = "Unable to delete the statement. Please try again."
 
-    return redirect(url_for("statements"))
+    return redirect(url_for("statements", **redirect_args))
 
 
 def _parse_items_view(raw_value: str | None) -> str:
