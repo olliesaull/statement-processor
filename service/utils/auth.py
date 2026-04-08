@@ -281,7 +281,12 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
         result = f(*args, **kwargs)
         if is_api_request:
             return result
-        return set_session_is_set_cookie(make_response(result))
+        # Don't re-set the session cookie if the handler cleared the session
+        # (e.g., disconnect_tenant on last tenant removal).
+        response = make_response(result)
+        if session.get("xero_tenant_id"):
+            return set_session_is_set_cookie(response)
+        return response
 
     decorated_function._requires_auth = True  # type: ignore[attr-defined]  # noqa: SLF001
     return decorated_function
