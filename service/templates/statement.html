@@ -49,9 +49,46 @@
 
   {% if is_processing %}
     <div class="page-panel page-panel-flat text-center py-5">
-      <div class="spinner-border text-primary" role="status" aria-hidden="true"></div>
-      <p class="mt-3 mb-1">We're still preparing this statement. This can take anywhere from 5 seconds to 10 minutes.</p>
-      <p class="text-muted mb-0">This page will refresh automatically analysis is complete.</p>
+      <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
+
+      {% if processing_progress %}
+        {# Multi-section PDF: show progress bar + stage label #}
+        {% set parts = processing_progress.split('/') %}
+        {% set completed_sections = parts[0]|int %}
+        {% set total_sections = parts[1]|int %}
+        {% set pct = (completed_sections / total_sections * 100)|round|int if total_sections > 0 else 0 %}
+
+        <div class="mx-auto mb-3" style="max-width: 400px;">
+          <div class="progress" role="progressbar" aria-valuenow="{{ pct }}" aria-valuemin="0" aria-valuemax="100" aria-label="Extraction progress">
+            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: {{ pct }}%">{{ pct }}%</div>
+          </div>
+        </div>
+
+        {% if processing_stage == 'queued' %}
+          <p class="mt-2 mb-1">Queued for processing...</p>
+        {% elif processing_stage == 'chunking' %}
+          <p class="mt-2 mb-1">Preparing your document...</p>
+        {% elif processing_stage == 'extracting' %}
+          <p class="mt-2 mb-1">Extracting data: section {{ completed_sections }} of {{ total_sections }} complete</p>
+        {% elif processing_stage == 'post_processing' %}
+          <p class="mt-2 mb-1">Finalising results...</p>
+        {% else %}
+          <p class="mt-2 mb-1">Processing your statement...</p>
+        {% endif %}
+
+        <p class="text-muted small mb-0">Large PDFs are split into sections of approximately 10 pages for processing.</p>
+
+      {% else %}
+        {# Single-section PDF or stage without progress info: simple message #}
+        {% if processing_stage == 'queued' %}
+          <p class="mt-3 mb-1">Queued for processing...</p>
+        {% elif processing_stage == 'post_processing' %}
+          <p class="mt-3 mb-1">Finalising results...</p>
+        {% else %}
+          <p class="mt-3 mb-1">Processing your statement &mdash; should be done shortly.</p>
+        {% endif %}
+        <p class="text-muted mb-0">This page will refresh automatically when analysis is complete.</p>
+      {% endif %}
     </div>
     <script>
       setTimeout(function () { window.location.reload(); }, 5000);
