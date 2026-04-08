@@ -3,12 +3,13 @@
 ## Repository Structure
 - Major domains (top‑level directories):
   - `cdk/`: Infrastructure‑as‑code for provisioning AWS resources (CDK app and stacks).
-  - `lambda_functions/`: Lambda/container workloads; currently hosts the Textraction Lambda codebase.
+  - `lambda_functions/`: Lambda/container workloads; hosts the Textraction Lambda and the Tenant Erasure Lambda.
   - `service/`: Flask service, web assets, and service‑level tests.
   - `scripts/`: One‑off utilities and operational scripts (e.g. data maintenance, sample artefacts).
 - Shared libraries (internal to this repo):
   - `service/core` and `service/utils`: shared domain logic and helpers for the Flask service.
   - `lambda_functions/textraction_lambda/core`: shared extraction, transformation, and validation logic for the Textraction Lambda.
+  - `lambda_functions/tenant_erasure_lambda/`: scheduled Lambda that erases data for disconnected tenants past their erasure deadline.
 - Directory tree (excluding `.git`, `venv`, `__pycache__`, `node_modules`, and build artefacts):
 ```text
 .
@@ -23,6 +24,18 @@
 │       ├── __init__.py
 │       └── statement_processor.py
 ├── lambda_functions/
+│   ├── tenant_erasure_lambda/
+│   │   ├── Dockerfile
+│   │   ├── config.py
+│   │   ├── logger.py
+│   │   ├── main.py
+│   │   ├── pyproject.toml
+│   │   ├── requirements.txt
+│   │   ├── requirements-dev.txt
+│   │   └── tests/
+│   │       ├── __init__.py
+│   │       ├── conftest.py
+│   │       └── test_main.py
 │   └── textraction_lambda/
 │       ├── Dockerfile
 │       ├── config.py
@@ -128,6 +141,7 @@
   - `dexero-statement-processor-{stage}` (`s3_bucket`): shared object store referenced by both App Runner and the Textraction Lambda. The previous Textract bucket policy has been removed — the Lambda now downloads PDFs directly from S3 and sends them to Bedrock.
 - **Lambda**
   - `TextractionLambda` (`textraction_lambda`): container‑image Lambda built from `lambda_functions/textraction_lambda` to perform statement extraction; invoked by the Step Functions state machine (`ProcessStatement` task).
+  - `TenantErasureLambda` (`tenant_erasure_lambda`): container‑image Lambda built from `lambda_functions/tenant_erasure_lambda`; triggered daily at 02:00 UTC by an EventBridge scheduler rule. Scans `TenantDataTable` for tenants whose `EraseTenantDataTime` has passed, deletes all S3 objects under the tenant prefix and all `TenantStatementsTable` rows, then sets `TenantStatus` to `ERASED` via a conditional write. The conditional write uses `attribute_exists(EraseTenantDataTime)` to prevent a race condition where the tenant reconnects between the scan and the status update — if `ConditionalCheckFailedException` is raised, the tenant is skipped rather than failed. Tenants with `LOADING` or `SYNCING` status at erasure time are also skipped to avoid interfering with an active reconnection sync. The Lambda continues to the next tenant on any per-tenant error, returning a summary of `erased`, `skipped`, and `failed` counts.
   - `TextractionLambda` and `StatementProcessorWebLambda` are explicitly configured for `arm64`, and their Docker image assets are built as `linux/arm64` to avoid architecture mismatches and improve cold-start efficiency on Graviton.
   - `TextractionLambdaLogGroup` (`textraction_log_group`): explicit log group with stage‑dependent retention (3 months in prod, 1 week otherwise).
 - **Step Functions**
