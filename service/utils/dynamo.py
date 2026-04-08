@@ -154,6 +154,27 @@ def set_all_statement_items_completed(tenant_id: str, statement_id: str, complet
         set_statement_item_completed(tenant_id, statement_item_id, completed)
 
 
+def repair_processing_stage(tenant_id: str, statement_id: str) -> None:
+    """Best-effort read-repair: set ProcessingStage to failed.
+
+    Called when the Flask route detects a failed statement (S3 JSON
+    missing + TokenReservationStatus == released) but ProcessingStage
+    has not been updated. This self-heals stale progress data.
+    """
+    try:
+        tenant_statements_table.update_item(
+            Key={"TenantID": tenant_id, "StatementID": statement_id},
+            UpdateExpression="SET #stage = :failed REMOVE #progress, #total_sections",
+            ConditionExpression="#stage <> :failed",
+            ExpressionAttributeNames={"#stage": "ProcessingStage", "#progress": "ProcessingProgress", "#total_sections": "ProcessingTotalSections"},
+            ExpressionAttributeValues={":failed": "failed"},
+        )
+        logger.info("Read-repaired ProcessingStage to failed", tenant_id=tenant_id, statement_id=statement_id)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # Best-effort — do not fail the page render.
+        logger.debug("Read-repair skipped or failed", tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
+
+
 def delete_statement_data(tenant_id: str, statement_id: str) -> None:
     """Delete statement header, items, and associated S3 artifacts."""
     if not tenant_id or not statement_id:

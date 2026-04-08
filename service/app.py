@@ -49,6 +49,7 @@ from utils.dynamo import (
     get_statement_record,
     mark_statement_completed,
     persist_item_types_to_dynamo,
+    repair_processing_stage,
     set_all_statement_items_completed,
     set_statement_item_completed,
 )
@@ -1225,6 +1226,8 @@ def statement(statement_id: str):
         reservation_status = str(record.get("TokenReservationStatus") or "").strip().lower()
         if reservation_status == "released":
             logger.info("Statement processing failed; JSON missing after release", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
+            # Best-effort read-repair: ensure ProcessingStage reflects failure.
+            repair_processing_stage(tenant_id, statement_id)
             return render_template(
                 "statement.html",
                 is_processing=False,
@@ -1237,11 +1240,20 @@ def statement(statement_id: str):
                 has_payment_rows=False,
                 **base_context,
             )
+        # S3 JSON existence is the source of truth for "done vs not done".
+        # ProcessingStage/ProcessingProgress enrich the processing UI only.
+        # See plans/2026-04-08-extraction-progress-tracking-design.md for rationale.
         logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
+        processing_stage = str(record.get("ProcessingStage") or "").strip().lower()
+        processing_progress = record.get("ProcessingProgress")  # e.g. "3/10" or None
+        processing_total_sections = record.get("ProcessingTotalSections")  # e.g. 10 or None
         return render_template(
             "statement.html",
             is_processing=True,
             processing_failed=False,
+            processing_stage=processing_stage,
+            processing_progress=processing_progress,
+            processing_total_sections=processing_total_sections,
             incomplete_count=0,
             completed_count=0,
             all_statement_rows=[],
