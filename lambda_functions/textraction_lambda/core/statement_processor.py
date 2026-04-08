@@ -23,6 +23,7 @@ from config import S3_BUCKET_NAME, s3_client, tenant_statements_table
 from core.date_utils import parse_with_format
 from core.extraction import extract_statement
 from core.models import ExtractionResult, StatementItem, SupplierStatement
+from core.processing_progress import update_processing_stage
 from core.validation.anomaly_detection import apply_outlier_flags
 from core.validation.validate_item_count import validate_references_roundtrip
 from logger import logger
@@ -222,10 +223,29 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
     obj = s3_client.get_object(Bucket=bucket or S3_BUCKET_NAME, Key=pdf_key)
     pdf_bytes = obj["Body"].read()
 
+    # -- Progress: chunking --
+    update_processing_stage(tenant_id, statement_id, "chunking")
+
     logger.info("Starting extraction", tenant_id=tenant_id, statement_id=statement_id, page_count=page_count)
 
+    # -- Progress: extracting (callback fires after chunking and each chunk) --
+    def _on_chunk_complete(completed: int, total: int) -> None:
+        """Progress callback from extract_statement.
+
+        Called with completed=0 after chunking (extraction starting),
+        then once per completed chunk thereafter.
+        """
+        if total <= 1:
+            # Single-chunk PDF: set stage without progress info.
+            # Stages still transition but there is only one Bedrock call
+            # so chunk-level progress is meaningless.
+            update_processing_stage(tenant_id, statement_id, "extracting")
+        else:
+            # Multi-chunk PDF: set stage with progress and total_sections.
+            update_processing_stage(tenant_id, statement_id, "extracting", progress=f"{completed}/{total}", total_sections=total)
+
     # Run extraction.
-    extraction_result = extract_statement(pdf_bytes, page_count)
+    extraction_result = extract_statement(pdf_bytes, page_count, on_chunk_complete=_on_chunk_complete)
 
     logger.info(
         "Extraction complete",
@@ -248,6 +268,9 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
     # Flag outliers without removing them.
     statement_dict, summary = apply_outlier_flags(statement_dict, remove=False)
     logger.info("Anomaly detection complete", summary=json.dumps(summary, indent=2))
+
+    # -- Progress: post-processing --
+    update_processing_stage(tenant_id, statement_id, "post_processing")
 
     # Persist items to DynamoDB (best effort).
     try:
@@ -282,6 +305,9 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Failed to store Bedrock request IDs on statement", statement_id=statement_id, error=str(exc), exc_info=True)
+
+    # -- Progress: complete --
+    update_processing_stage(tenant_id, statement_id, "complete")
 
     filename = f"{Path(pdf_key).stem}.json"
     return {"filename": filename, "statement": statement_dict}

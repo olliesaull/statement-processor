@@ -14,7 +14,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pypdf import PdfReader, PdfWriter
 
@@ -445,7 +445,7 @@ def _call_bedrock_with_retry(client: Any, system_prompt: str, pdf_bytes: bytes, 
 # -- Main entry point ---------------------------------------------------------
 
 
-def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
+def extract_statement(pdf_bytes: bytes, page_count: int, on_chunk_complete: Callable[[int, int], None] | None = None) -> "ExtractionResult":
     """Extract structured line items from a statement PDF.
 
     This is the sole entry point for statement extraction. Callers
@@ -454,6 +454,15 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
     The implementation chunks the PDF, calls Bedrock Haiku for each
     chunk (parallel for chunks 2+), reconstructs items, runs numeric
     post-processing, and deduplicates chunk boundaries.
+
+    Args:
+        pdf_bytes: Raw PDF bytes to extract from.
+        page_count: Total page count (used in continuation prompts).
+        on_chunk_complete: Optional progress callback. Called as
+            ``on_chunk_complete(completed, total)`` after each chunk
+            finishes. ``completed=0`` signals extraction start (all
+            chunks known). Subsequent calls increment ``completed``
+            up to ``total``.
     """
     from core.models import ExtractionResult, StatementItem  # pylint: disable=import-outside-toplevel
 
@@ -463,6 +472,10 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
     chunks = chunk_pdf(reader)
     chunk_count = len(chunks)
     request_ids: list[str] = []
+
+    # Signal extraction start so the caller can transition to "extracting".
+    if on_chunk_complete:
+        on_chunk_complete(0, chunk_count)
 
     # -- Process chunk 1 (provides headers + metadata for rest) --
 
@@ -480,6 +493,9 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
 
     all_items = reconstruct_items(column_order, result_0.get("items", []))
     logger.info("Chunk 1 items", count=len(all_items))
+
+    if on_chunk_complete:
+        on_chunk_complete(1, chunk_count)
 
     total_input_tokens = in_tok_0
     total_output_tokens = out_tok_0
@@ -531,6 +547,10 @@ def extract_statement(pdf_bytes: bytes, page_count: int) -> "ExtractionResult":
             for future in as_completed(futures):
                 idx, c_items, c_in, c_out, c_req_id, _ = future.result()
                 chunk_results[idx] = (c_items, c_in, c_out, c_req_id)
+                if on_chunk_complete:
+                    # +1 because chunk 0 was already completed before parallel dispatch.
+                    completed_so_far = len(chunk_results) + 1
+                    on_chunk_complete(completed_so_far, chunk_count)
 
         # Merge in chunk order, stripping overlap prefixes.
         for idx in range(1, chunk_count):

@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from config import S3_BUCKET_NAME
 from core.billing import SOURCE_EXTRACTION_FAILURE, SOURCE_EXTRACTION_SUCCESS, BillingSettlementError, BillingSettlementService
 from core.models import TextractionEvent
+from core.processing_progress import update_processing_stage
 from core.statement_processor import run_extraction
 from logger import logger
 
@@ -65,6 +66,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # py
         logger.info("Extraction complete", tenant_id=tenant_id, statement_id=statement_id, json_key=json_key)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Extraction lambda failed", tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
+        update_processing_stage(tenant_id, statement_id, "failed")
         released = _release_reserved_tokens(tenant_id, statement_id, source=SOURCE_EXTRACTION_FAILURE)
         message = str(exc)
         if not released:
