@@ -58,17 +58,7 @@ def extract_monetary_values(headers: list[str], rows: list[list[str]], total_col
 
     # Fallback: column names didn't match headers. Scan all cells for
     # monetary-looking values, skipping excluded columns (dates).
-    exclude_indices: set[int] = set()
-    if exclude_columns:
-        for col_name in exclude_columns:
-            if not col_name:
-                continue
-            needle = col_name.lower().strip()
-            for idx, h in enumerate(header_lower):
-                if h == needle:
-                    exclude_indices.add(idx)
-                    break
-
+    exclude_indices = _build_exclude_indices(exclude_columns, header_lower)
     for row in rows:
         for idx, cell in enumerate(row):
             if idx in exclude_indices:
@@ -78,6 +68,30 @@ def extract_monetary_values(headers: list[str], rows: list[list[str]], total_col
                 values.append(stripped)
 
     return values
+
+
+def _build_exclude_indices(exclude_columns: list[str] | None, header_lower: list[str]) -> set[int]:
+    """Map excluded column names to their header indices.
+
+    Args:
+        exclude_columns: Column names to skip (e.g. date columns).
+        header_lower: Lowered/stripped header names.
+
+    Returns:
+        Set of column indices to exclude.
+    """
+    indices: set[int] = set()
+    if not exclude_columns:
+        return indices
+    for col_name in exclude_columns:
+        if not col_name:
+            continue
+        needle = col_name.lower().strip()
+        for idx, h in enumerate(header_lower):
+            if h == needle:
+                indices.add(idx)
+                break
+    return indices
 
 
 # Date-like pattern: digits separated by "/", "-", or "."
@@ -218,18 +232,28 @@ def _analyse_value(raw: str, evidence: dict[str, set[str]]) -> None:
 
     # Rule: two different separators in one value → last one is decimal.
     if len(separators_found) >= 2:
-        # Reinforce: last separator is decimal, others are thousands.
-        last_sep_idx = -1
-        last_sep_char = ""
-        for sep in separators_found:
-            idx = cleaned.rfind(sep)
-            if idx > last_sep_idx:
-                last_sep_idx = idx
-                last_sep_char = sep
-        evidence.setdefault(last_sep_char, set()).add("decimal")
-        for sep in separators_found:
-            if sep != last_sep_char:
-                evidence.setdefault(sep, set()).add("thousands")
+        _reinforce_multi_separator(cleaned, separators_found, evidence)
+
+
+def _reinforce_multi_separator(cleaned: str, separators_found: list[str], evidence: dict[str, set[str]]) -> None:
+    """When multiple separators appear, the rightmost one is the decimal.
+
+    Args:
+        cleaned: The cleaned numeric string.
+        separators_found: Distinct separator characters in order of appearance.
+        evidence: Mutable dict accumulating role evidence per character.
+    """
+    last_sep_idx = -1
+    last_sep_char = ""
+    for sep in separators_found:
+        idx = cleaned.rfind(sep)
+        if idx > last_sep_idx:
+            last_sep_idx = idx
+            last_sep_char = sep
+    evidence.setdefault(last_sep_char, set()).add("decimal")
+    for sep in separators_found:
+        if sep != last_sep_char:
+            evidence.setdefault(sep, set()).add("thousands")
 
 
 def _resolve(evidence: dict[str, set[str]], llm_decimal: str, llm_thousands: str) -> tuple[str, str]:

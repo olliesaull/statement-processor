@@ -11,6 +11,7 @@ from __future__ import annotations
 import tempfile
 
 import pytest
+from cachelib import FileSystemCache
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -31,7 +32,7 @@ def _app():
     import app as app_module
 
     tmpdir = tempfile.mkdtemp(prefix="flask_test_sessions_test_login_")
-    app_module.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False, SESSION_TYPE="filesystem", SESSION_FILE_DIR=tmpdir, SECRET_KEY="test-secret-key-test-login")
+    app_module.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False, SESSION_TYPE="cachelib", SESSION_CACHELIB=FileSystemCache(tmpdir), SECRET_KEY="test-secret-key-test-login")
     Session(app_module.app)
     return app_module.app
 

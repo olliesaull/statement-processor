@@ -12,6 +12,7 @@ from __future__ import annotations
 import tempfile
 
 import pytest
+from cachelib import FileSystemCache
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -32,7 +33,7 @@ def _app():
     # Override session backend — filesystem avoids the Redis dependency that
     # the production app uses, so tests run without a running Valkey/Redis.
     tmpdir = tempfile.mkdtemp(prefix="flask_test_sessions_billing_")
-    app_module.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False, SESSION_TYPE="filesystem", SESSION_FILE_DIR=tmpdir, SECRET_KEY="test-secret-key-billing-details")
+    app_module.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False, SESSION_TYPE="cachelib", SESSION_CACHELIB=FileSystemCache(tmpdir), SECRET_KEY="test-secret-key-billing-details")
     Session(app_module.app)
     return app_module.app
 
