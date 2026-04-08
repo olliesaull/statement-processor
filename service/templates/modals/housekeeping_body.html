@@ -1,0 +1,29 @@
+{# Body content for the tenant disconnect housekeeping modal.
+   Presents three data deletion timeline options as radio buttons. #}
+<p class="mb-3">
+  You are about to disconnect this tenant. How would you like us to handle your data?
+</p>
+
+<div class="form-check mb-2">
+  <input class="form-check-input" type="radio" name="erasure_days" id="erasure-0" value="0">
+  <label class="form-check-label" for="erasure-0">
+    <strong>Delete my data within 24 hours</strong>
+    <br><small class="text-muted">Your statements and cached Xero data will be permanently removed.</small>
+  </label>
+</div>
+
+<div class="form-check mb-2">
+  <input class="form-check-input" type="radio" name="erasure_days" id="erasure-14" value="14" checked>
+  <label class="form-check-label" for="erasure-14">
+    <strong>Delete my data after 2 weeks</strong>
+    <br><small class="text-muted">Grace period to change your mind. Reconnect within 2 weeks and your data is still there.</small>
+  </label>
+</div>
+
+<div class="form-check mb-2">
+  <input class="form-check-input" type="radio" name="erasure_days" id="erasure-365" value="365">
+  <label class="form-check-label" for="erasure-365">
+    <strong>Delete my data after 1 year</strong>
+    <br><small class="text-muted">Keeps your data available if you return within a year — no need to reload from Xero.</small>
+  </label>
+</div>
