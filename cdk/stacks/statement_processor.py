@@ -19,6 +19,8 @@ from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_sns_subscriptions as subs
+from aws_cdk import aws_events as events
+from aws_cdk import aws_events_targets as events_targets
 from aws_cdk import aws_stepfunctions as sfn
 from aws_cdk import aws_stepfunctions_tasks as tasks
 from aws_cdk.aws_lambda import (
@@ -187,6 +189,53 @@ class StatementProcessorStack(Stack):
         s3_bucket.grant_read_write(textraction_lambda)
 
         # endregion ---------- Lambda ----------
+
+        # region ---------- Tenant Erasure Lambda ----------
+
+        tenant_erasure_log_group = logs.LogGroup(
+            self,
+            "TenantErasureLambdaLogGroup",
+            retention=log_retention,
+            removal_policy=RemovalPolicy.DESTROY if not is_production else RemovalPolicy.RETAIN,
+        )
+
+        tenant_erasure_lambda_image = _lambda.EcrImageCode.from_asset_image(
+            directory="../lambda_functions/tenant_erasure_lambda",
+            platform=ecr_assets.Platform.LINUX_ARM64,
+        )
+
+        tenant_erasure_lambda = _lambda.Function(
+            self,
+            "TenantErasureLambda",
+            description="Daily scan and erasure of disconnected tenant data",
+            code=tenant_erasure_lambda_image,
+            memory_size=512,
+            handler=Handler.FROM_IMAGE,
+            runtime=Runtime.FROM_IMAGE,
+            architecture=_lambda.Architecture.ARM_64,
+            timeout=Duration.seconds(300),
+            log_group=tenant_erasure_log_group,
+            environment={
+                "STAGE": "prod" if is_production else "dev",
+                "S3_BUCKET_NAME": S3_BUCKET_NAME,
+                "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
+                "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
+            },
+        )
+
+        tenant_data_table.grant_read_write_data(tenant_erasure_lambda)
+        tenant_statements_table.grant_read_write_data(tenant_erasure_lambda)
+        s3_bucket.grant_read_write(tenant_erasure_lambda)
+
+        # Daily at 02:00 UTC.
+        events.Rule(
+            self,
+            "TenantErasureSchedule",
+            schedule=events.Schedule.cron(hour="2", minute="0"),
+            targets=[events_targets.LambdaFunction(tenant_erasure_lambda)],
+        )
+
+        # endregion ---------- Tenant Erasure Lambda ----------
 
         # region ---------- StepFunctions ----------
 
@@ -428,6 +477,7 @@ class StatementProcessorStack(Stack):
 
         lambda_alarm_targets: list[tuple[str, logs.ILogGroup]] = [
             ("TextractionLambda", textraction_log_group),
+            ("TenantErasureLambda", tenant_erasure_log_group),
         ]
 
         for lambda_name, lambda_log_group in lambda_alarm_targets:
