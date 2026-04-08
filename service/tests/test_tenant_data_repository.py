@@ -53,3 +53,76 @@ def test_dismiss_banner_calls_update_item(monkeypatch) -> None:
     assert calls[0]["Key"] == {"TenantID": "tenant-1"}
     assert "ADD DismissedBanners" in calls[0]["UpdateExpression"]
     assert calls[0]["ExpressionAttributeValues"][":dismiss_key"] == {"welcome-grant"}
+
+
+def test_tenant_status_enum_has_erased_and_load_incomplete() -> None:
+    """Enum should include ERASED and LOAD_INCOMPLETE values."""
+    assert TenantStatus.ERASED == "ERASED"
+    assert TenantStatus.LOAD_INCOMPLETE == "LOAD_INCOMPLETE"
+
+
+def test_determine_status_recognises_erased() -> None:
+    """ERASED status string should parse to the enum member."""
+    item = {"TenantStatus": "ERASED"}
+    result = TenantDataRepository._determine_status(item)
+    assert result == TenantStatus.ERASED
+
+
+def test_determine_status_recognises_load_incomplete() -> None:
+    """LOAD_INCOMPLETE status string should parse to the enum member."""
+    item = {"TenantStatus": "LOAD_INCOMPLETE"}
+    result = TenantDataRepository._determine_status(item)
+    assert result == TenantStatus.LOAD_INCOMPLETE
+
+
+def test_schedule_erasure_sets_attributes(monkeypatch) -> None:
+    """schedule_erasure should SET EraseTenantDataTime and conditionally update status."""
+    calls: list[dict] = []
+
+    class FakeTable:
+        @staticmethod
+        def update_item(**kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+
+    TenantDataRepository.schedule_erasure("tenant-1", erasure_epoch_ms=1700000000000, current_status=TenantStatus.LOADING)
+
+    assert len(calls) == 1
+    assert calls[0]["Key"] == {"TenantID": "tenant-1"}
+    assert ":erasure_time" in calls[0]["ExpressionAttributeValues"]
+    assert calls[0]["ExpressionAttributeValues"].get(":new_status") == TenantStatus.LOAD_INCOMPLETE
+
+
+def test_schedule_erasure_keeps_free_status(monkeypatch) -> None:
+    """FREE status should not be changed during erasure scheduling."""
+    calls: list[dict] = []
+
+    class FakeTable:
+        @staticmethod
+        def update_item(**kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+
+    TenantDataRepository.schedule_erasure("tenant-1", erasure_epoch_ms=1700000000000, current_status=TenantStatus.FREE)
+
+    assert len(calls) == 1
+    assert ":new_status" not in calls[0].get("ExpressionAttributeValues", {})
+
+
+def test_cancel_erasure_removes_attribute(monkeypatch) -> None:
+    """cancel_erasure should REMOVE EraseTenantDataTime."""
+    calls: list[dict] = []
+
+    class FakeTable:
+        @staticmethod
+        def update_item(**kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+
+    TenantDataRepository.cancel_erasure("tenant-1")
+
+    assert len(calls) == 1
+    assert "REMOVE EraseTenantDataTime" in calls[0]["UpdateExpression"]

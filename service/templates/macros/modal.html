@@ -1,0 +1,41 @@
+{#
+  Reusable Bootstrap 5 modal shell.
+
+  Usage:
+    {% from "macros/modal.html" import modal %}
+    {% call modal(id="my-modal", title="Confirm", confirm_label="OK") %}
+      <p>Your custom body content here.</p>
+    {% endcall %}
+
+  Parameters:
+    id             — unique DOM id for the modal (required)
+    title          — header text (required)
+    confirm_label  — text for the primary action button (default: "Confirm")
+    cancel_label   — text for the cancel link (default: "Cancel")
+    danger         — if true, primary button uses btn-danger (default: false)
+    form_id        — if set, the confirm button submits this form id
+#}
+{% macro modal(id, title, confirm_label="Confirm", cancel_label="Cancel", danger=false, form_id=none) %}
+<div class="modal fade" id="{{ id }}" tabindex="-1" aria-labelledby="{{ id }}-label" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="{{ id }}-label">{{ title }}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        {{ caller() }}
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-link text-muted" data-bs-dismiss="modal">{{ cancel_label }}</button>
+        <button type="button"
+                class="btn {{ 'btn-danger' if danger else 'btn-primary' }}"
+                id="{{ id }}-confirm"
+                {% if form_id %}data-form-id="{{ form_id }}"{% endif %}>
+          {{ confirm_label }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endmacro %}

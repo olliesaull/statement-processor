@@ -201,11 +201,61 @@ const setupScrollProxy = () => {
   syncVisibility();
 };
 
+/**
+ * Show a transient toast notification that auto-dismisses after 3 seconds.
+ * Uses the Bootstrap Toast component with accent styling matching banners.
+ *
+ * @param {string} message - Text to display.
+ * @param {"success"|"danger"|"info"|"warning"} type - Alert colour variant.
+ */
+const showToast = (message, type = "info") => {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+
+  const toastEl = document.createElement("div");
+  toastEl.className = `toast align-items-center border-0 toast-${type}`;
+  toastEl.setAttribute("role", "alert");
+  toastEl.setAttribute("aria-live", "assertive");
+  toastEl.setAttribute("aria-atomic", "true");
+  toastEl.innerHTML = `
+    <div class="d-flex">
+      <div class="toast-body">${message}</div>
+      <button type="button" class="btn-close btn-close-dark me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+    </div>
+  `;
+
+  container.appendChild(toastEl);
+  const bsToast = new bootstrap.Toast(toastEl, { delay: 3000 });
+  bsToast.show();
+
+  // Clean up DOM after hidden.
+  toastEl.addEventListener("hidden.bs.toast", () => toastEl.remove());
+};
+
+/**
+ * Check for query-param-driven notifications on page load and strip them
+ * from the URL so refreshing doesn't re-show the toast.
+ */
+const checkQueryParamToasts = () => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("logged_out") === "1") {
+    showToast("All tenants disconnected. You have been logged out.", "info");
+  }
+  // Strip notification params from URL.
+  if (params.has("logged_out")) {
+    params.delete("logged_out");
+    const clean = params.toString();
+    const newUrl = window.location.pathname + (clean ? `?${clean}` : "");
+    window.history.replaceState({}, "", newUrl);
+  }
+};
+
 window.addEventListener("load", () => {
   updateNavbarScrollState();
   window.addEventListener("scroll", updateNavbarScrollState, { passive: true });
   setupCookieConsentButton();
   updateNavbarAuthLink();
+  checkQueryParamToasts();
   setupStickyActionDocks();
   setupScrollProxy();
 
@@ -263,6 +313,9 @@ function updateSyncStatuses(data) {
     const normalizedStatus = typeof rawStatus === "string" ? rawStatus.toUpperCase() : "";
     const isLoading = normalizedStatus === "LOADING";
     const isSyncing = normalizedStatus === "SYNCING";
+    // Defensive: ERASED and LOAD_INCOMPLETE are not expected in the UI (disconnected
+    // tenants are removed from the session) but disable controls if they appear.
+    const isInactive = normalizedStatus === "ERASED" || normalizedStatus === "LOAD_INCOMPLETE";
     const showStatus = isLoading || isSyncing;
 
     statusEl.classList.toggle("d-none", !showStatus);
@@ -278,8 +331,8 @@ function updateSyncStatuses(data) {
     if (row) {
       const syncButton = row.querySelector(".sync-btn");
       if (syncButton) {
-        syncButton.disabled = !!showStatus;
-        syncButton.classList.toggle("disabled", !!showStatus);
+        syncButton.disabled = !!(showStatus || isInactive);
+        syncButton.classList.toggle("disabled", !!(showStatus || isInactive));
       }
     }
 

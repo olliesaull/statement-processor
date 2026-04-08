@@ -180,21 +180,27 @@ def sync_payments(api: AccountingApi, tenant_id: str, modified_since: datetime |
 
 
 def check_load_required(tenant_id: str) -> bool:
-    """
-    Check if a row for the given tenant_id exists in the TenantData DynamoDB table.
-    Returns True if sync is required (row does NOT exist), False otherwise.
+    """Check whether a tenant needs a full data load on connection.
+
+    Handles three cases:
+    - New tenant (no DynamoDB record): seeds the row, grants welcome tokens.
+    - Returning tenant (ERASED or LOAD_INCOMPLETE): resets to LOADING,
+      cancels any pending erasure. No welcome tokens.
+    - Existing tenant (any other status): no action. If a pending erasure
+      exists, cancels it (the tenant reconnected before the Lambda ran).
+
+    Returns True when a full LOADING sync should be triggered.
     """
     try:
         response = tenant_data_table.get_item(Key={"TenantID": tenant_id})
-        item_exists = "Item" in response
-        load_required = not item_exists
+        item = response.get("Item")
 
-        if load_required:
+        if not item:
+            # Case 1: Brand-new tenant — seed record and grant welcome tokens.
             try:
                 tenant_data_table.put_item(Item={"TenantID": tenant_id, "TenantStatus": TenantStatus.LOADING}, ConditionExpression="attribute_not_exists(TenantID)")
                 logger.info("Seeded tenant record with LOADING status", tenant_id=tenant_id)
 
-                # Grant welcome tokens so new users can try the system immediately.
                 try:
                     BillingService.adjust_token_balance(tenant_id, WELCOME_GRANT_TOKENS, source=LAST_MUTATION_SOURCE_WELCOME_GRANT)
                     logger.info("Granted welcome tokens", tenant_id=tenant_id, token_count=WELCOME_GRANT_TOKENS)
@@ -205,13 +211,37 @@ def check_load_required(tenant_id: str) -> bool:
                 if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
                     logger.exception("Failed to seed tenant status for new tenant", tenant_id=tenant_id)
 
-        logger.info("Checked tenant sync requirement", tenant_id=tenant_id, sync_required=load_required)
+            logger.info("New tenant requires initial load", tenant_id=tenant_id)
+            return True
 
-        return load_required
+        # Record exists — parse status directly to avoid coupling to TenantDataRepository
+        # for a simple enum lookup (TenantDataRepository is mocked in tests for cancel_erasure).
+        raw_status = item.get("TenantStatus", "")
+        candidate = raw_status.strip().upper() if isinstance(raw_status, str) else str(raw_status)
+        status: TenantStatus = next((s for s in TenantStatus if candidate == s), TenantStatus.FREE)
+        has_pending_erasure = "EraseTenantDataTime" in item
+
+        if status in (TenantStatus.ERASED, TenantStatus.LOAD_INCOMPLETE):
+            # Case 2: Returning tenant — reset to LOADING and cancel any pending
+            # erasure in a single atomic DynamoDB call to avoid a race window.
+            update_expr = "SET TenantStatus = :loading"
+            if has_pending_erasure:
+                update_expr += " REMOVE EraseTenantDataTime"
+            tenant_data_table.update_item(Key={"TenantID": tenant_id}, UpdateExpression=update_expr, ExpressionAttributeValues={":loading": TenantStatus.LOADING})
+            logger.info("Returning tenant requires fresh load", tenant_id=tenant_id, previous_status=str(status))
+            return True
+
+        # Case 3: Normal reconnection (FREE, SYNCING, etc.) — no reload.
+        if has_pending_erasure:
+            TenantDataRepository.cancel_erasure(tenant_id)
+            logger.info("Cancelled pending erasure for reconnecting tenant", tenant_id=tenant_id)
+
+        logger.info("Checked tenant sync requirement", tenant_id=tenant_id, sync_required=False)
+        return False
 
     except ClientError:
         logger.exception("DynamoDB get_item failed", tenant_id=tenant_id)
-        return True  # In case of failure, assume sync is required as a safe fallback
+        return True
 
 
 def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantStatus.FREE, last_sync_time: int | None = None) -> bool:

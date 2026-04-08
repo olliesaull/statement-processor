@@ -104,6 +104,10 @@
     </div>
     {% endfor %}
 
+    <!-- Toast container for transient notifications -->
+    <div class="toast-container position-fixed top-0 start-0 p-3" style="z-index: 1090;" id="toast-container">
+    </div>
+
     <!-- Main content -->
     <main class="{% block container_class %}container mt-4{% endblock %} site-shell-main">
         {% block content %}{% endblock %}

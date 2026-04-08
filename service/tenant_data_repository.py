@@ -21,6 +21,8 @@ class TenantStatus(StrEnum):
     FREE = "FREE"
     SYNCING = "SYNCING"
     LOADING = "LOADING"
+    LOAD_INCOMPLETE = "LOAD_INCOMPLETE"
+    ERASED = "ERASED"
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,41 @@ class TenantDataRepository:
             dismiss_key: Unique banner identifier to dismiss.
         """
         cls._table.update_item(Key={"TenantID": tenant_id}, UpdateExpression="ADD DismissedBanners :dismiss_key", ExpressionAttributeValues={":dismiss_key": {dismiss_key}})
+
+    @classmethod
+    def schedule_erasure(cls, tenant_id: str, erasure_epoch_ms: int, current_status: TenantStatus) -> None:
+        """Schedule tenant data for erasure at a future time.
+
+        Sets EraseTenantDataTime and transitions status if the tenant was
+        mid-load (LOADING -> LOAD_INCOMPLETE) or mid-sync (SYNCING -> FREE).
+
+        Args:
+            tenant_id: Tenant being disconnected.
+            erasure_epoch_ms: Epoch milliseconds when data should be erased.
+            current_status: Tenant's status at time of disconnect.
+        """
+        update_expr = "SET EraseTenantDataTime = :erasure_time"
+        expr_values: dict[str, object] = {":erasure_time": erasure_epoch_ms}
+
+        # Transition interrupted states to a safe resting state before erasure runs.
+        status_transitions = {TenantStatus.LOADING: TenantStatus.LOAD_INCOMPLETE, TenantStatus.SYNCING: TenantStatus.FREE}
+        new_status = status_transitions.get(current_status)
+        if new_status:
+            update_expr += ", TenantStatus = :new_status"
+            expr_values[":new_status"] = new_status
+
+        cls._table.update_item(Key={"TenantID": tenant_id}, UpdateExpression=update_expr, ExpressionAttributeValues=expr_values)
+
+    @classmethod
+    def cancel_erasure(cls, tenant_id: str) -> None:
+        """Cancel a pending erasure by removing the scheduled time.
+
+        Called when a tenant reconnects before the erasure Lambda runs.
+
+        Args:
+            tenant_id: Tenant reconnecting.
+        """
+        cls._table.update_item(Key={"TenantID": tenant_id}, UpdateExpression="REMOVE EraseTenantDataTime")
 
     @classmethod
     def get_tenant_statuses(cls, tenant_ids: Iterable[str], max_workers: int = 4) -> dict[str, TenantStatus]:

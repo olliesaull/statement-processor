@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from banner_service import Banner, get_banners, register_banner_provider, welcome_grant_banner_provider
+from ui.banner_service import Banner, get_banners, register_banner_provider, welcome_grant_banner_provider
 
 
 def test_banner_dataclass_defaults() -> None:
@@ -18,7 +18,7 @@ def test_banner_dataclass_defaults() -> None:
 
 def test_get_banners_returns_non_none_results(monkeypatch) -> None:
     """Providers returning None should be filtered out."""
-    monkeypatch.setattr("banner_service._providers", [])
+    monkeypatch.setattr("ui.banner_service._providers", [])
 
     def _always(_tid: str) -> Banner:
         return Banner(message="visible", alert_type="info")
@@ -36,7 +36,7 @@ def test_get_banners_returns_non_none_results(monkeypatch) -> None:
 
 def test_get_banners_filters_dismissed(monkeypatch) -> None:
     """Banners whose dismiss_key is in the dismissed set should be excluded."""
-    monkeypatch.setattr("banner_service._providers", [])
+    monkeypatch.setattr("ui.banner_service._providers", [])
 
     def _dismissible(_tid: str) -> Banner:
         return Banner(message="dismiss me", alert_type="success", dismissible=True, dismiss_key="test-key")
@@ -54,7 +54,7 @@ def test_get_banners_filters_dismissed(monkeypatch) -> None:
 
 def test_get_banners_keeps_undismissed_dismissible(monkeypatch) -> None:
     """Dismissible banners should show when not in the dismissed set."""
-    monkeypatch.setattr("banner_service._providers", [])
+    monkeypatch.setattr("ui.banner_service._providers", [])
 
     def _dismissible(_tid: str) -> Banner:
         return Banner(message="still here", alert_type="success", dismissible=True, dismiss_key="other-key")

@@ -1,0 +1,100 @@
+[project]
+name = "statement-processor-tenant-erasure-lambda"
+version = "1.0.0"
+description = "Statement Processor - Tenant Erasure Lambda Function"
+requires-python = ">=3.13"
+
+# Ruff configuration for linting and formatting
+[tool.ruff]
+target-version = "py313"
+line-length = 200
+indent-width = 4
+respect-gitignore = true
+
+include = ["*.py"]
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "*.egg-info",
+    ".pytest_cache",
+    ".ruff_cache",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes (includes unused imports)
+    "I",     # isort (import sorting)
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "UP",    # pyupgrade (modernize Python code)
+    "SIM",   # flake8-simplify
+    "RUF",   # Ruff-specific rules
+]
+
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "B008",   # Do not perform function calls in argument defaults
+    "B024",   # Abstract base class without abstract methods (intentional design)
+]
+
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+skip-magic-trailing-comma = true
+
+# MyPy configuration for type checking
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+warn_no_return = true
+strict_equality = true
+ignore_missing_imports = true
+ignore_errors = true
+namespace_packages = false
+
+# Pylint configuration
+[tool.pylint.main]
+jobs = 0
+persistent = true
+py-version = "3.13"
+
+[tool.pylint.messages_control]
+disable = [
+    "R0903",  # Too few public methods
+    "R0913",  # Too many arguments
+    "R0914",  # Too many local variables
+    "R0915",  # Too many statements
+    "W0613",  # Unused argument
+    "W0718",  # Catching too general exception
+    "C0302",  # Too many lines in module
+    "R0902",  # Too many instance attributes
+    "R0904",  # Too many public methods
+    "W0511",  # TODO/FIXME comments
+]
+
+[tool.pylint.format]
+max-line-length = 200
+max-module-lines = 2000
+indent-string = "    "
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "ex", "_", "id", "pk", "db"]
+
+[tool.pylint.design]
+max-args = 10
+max-attributes = 15
+max-branches = 15
+max-locals = 20
+max-statements = 60

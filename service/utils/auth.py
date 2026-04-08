@@ -281,7 +281,12 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
         result = f(*args, **kwargs)
         if is_api_request:
             return result
-        return set_session_is_set_cookie(make_response(result))
+        # Don't re-set the session cookie if the handler cleared the session
+        # (e.g., disconnect_tenant on last tenant removal).
+        response = make_response(result)
+        if session.get("xero_tenant_id"):
+            return set_session_is_set_cookie(response)
+        return response
 
     decorated_function._requires_auth = True  # type: ignore[attr-defined]  # noqa: SLF001
     return decorated_function
@@ -339,8 +344,13 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
         tenant_id = session.get("xero_tenant_id")
         if tenant_id:
             status = get_tenant_status(tenant_id)
-            if status == TenantStatus.LOADING:
-                logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id)
+            # Also block on ERASED and LOAD_INCOMPLETE as a defensive measure.
+            # In practice these are unlikely to be reached — disconnected tenants
+            # are removed from the session, and reconnection resets status to
+            # LOADING before any protected route runs. The check costs nothing
+            # (same DynamoDB call) and guards against unexpected session state.
+            if status in (TenantStatus.LOADING, TenantStatus.LOAD_INCOMPLETE, TenantStatus.ERASED):
+                logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id, status=str(status))
                 session["tenant_error"] = "Please wait for the initial load to finish before navigating away."
                 return redirect(url_for("tenant_management"))
 

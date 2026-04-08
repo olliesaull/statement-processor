@@ -78,3 +78,9 @@ sections:
       - order: 2
         question: "Can I disconnect my Xero account?"
         answer: "question20.md"
+      - order: 3
+        question: "What is the difference between logging out and disconnecting?"
+        answer: "question21.md"
+      - order: 4
+        question: "What exactly is deleted when I disconnect?"
+        answer: "question22.md"

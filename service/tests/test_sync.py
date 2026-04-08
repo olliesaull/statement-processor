@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 import sync
+from tenant_data_repository import TenantStatus
 
 
 def test_check_load_required_grants_welcome_tokens_for_new_tenant(monkeypatch) -> None:
@@ -54,3 +55,61 @@ def test_check_load_required_continues_if_grant_fails(monkeypatch) -> None:
     result = sync.check_load_required("new-tenant")
 
     assert result is True
+
+
+def test_check_load_required_returns_true_for_erased_tenant(monkeypatch) -> None:
+    """ERASED tenant should trigger a fresh load and cancel pending erasure."""
+    fake_table = MagicMock()
+    fake_table.get_item.return_value = {"Item": {"TenantID": "erased-tenant", "TenantStatus": "ERASED", "EraseTenantDataTime": 1700000000000}}
+    monkeypatch.setattr(sync, "tenant_data_table", fake_table)
+
+    mock_billing = MagicMock()
+    monkeypatch.setattr(sync, "BillingService", mock_billing)
+
+    mock_repo = MagicMock()
+    monkeypatch.setattr(sync, "TenantDataRepository", mock_repo)
+
+    result = sync.check_load_required("erased-tenant")
+
+    assert result is True
+    mock_billing.adjust_token_balance.assert_not_called()
+    # Erasure cancellation and status reset combined in a single atomic update_item call.
+    fake_table.update_item.assert_called_once()
+    call_kwargs = fake_table.update_item.call_args
+    assert "REMOVE EraseTenantDataTime" in call_kwargs.kwargs.get("UpdateExpression", "")
+
+
+def test_check_load_required_returns_true_for_load_incomplete_tenant(monkeypatch) -> None:
+    """LOAD_INCOMPLETE tenant should trigger a fresh load."""
+    fake_table = MagicMock()
+    fake_table.get_item.return_value = {"Item": {"TenantID": "incomplete-tenant", "TenantStatus": "LOAD_INCOMPLETE"}}
+    monkeypatch.setattr(sync, "tenant_data_table", fake_table)
+
+    mock_billing = MagicMock()
+    monkeypatch.setattr(sync, "BillingService", mock_billing)
+
+    mock_repo = MagicMock()
+    monkeypatch.setattr(sync, "TenantDataRepository", mock_repo)
+
+    result = sync.check_load_required("incomplete-tenant")
+
+    assert result is True
+    mock_billing.adjust_token_balance.assert_not_called()
+
+
+def test_check_load_required_returns_false_for_free_with_erasure_pending(monkeypatch) -> None:
+    """FREE tenant with pending erasure should cancel erasure but NOT reload."""
+    fake_table = MagicMock()
+    fake_table.get_item.return_value = {"Item": {"TenantID": "free-tenant", "TenantStatus": "FREE", "EraseTenantDataTime": 1700000000000}}
+    monkeypatch.setattr(sync, "tenant_data_table", fake_table)
+
+    mock_billing = MagicMock()
+    monkeypatch.setattr(sync, "BillingService", mock_billing)
+
+    mock_repo = MagicMock()
+    monkeypatch.setattr(sync, "TenantDataRepository", mock_repo)
+
+    result = sync.check_load_required("free-tenant")
+
+    assert result is False
+    mock_repo.cancel_erasure.assert_called_once_with("free-tenant")

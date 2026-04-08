@@ -305,6 +305,31 @@ a:focus-visible {
   border-left: 4px solid var(--amber-500);
 }
 
+/* ---------- Toast notifications ---------- */
+.toast-success {
+  background-color: var(--white);
+  border-left: 4px solid var(--green-600);
+  color: #0f3b1f;
+}
+
+.toast-danger {
+  background-color: var(--white);
+  border-left: 4px solid var(--red-500);
+  color: #7f1d1d;
+}
+
+.toast-info {
+  background-color: var(--white);
+  border-left: 4px solid var(--blue-500);
+  color: #0f3f52;
+}
+
+.toast-warning {
+  background-color: var(--white);
+  border-left: 4px solid var(--amber-500);
+  color: #78350f;
+}
+
 .badge.bg-secondary {
   --bs-badge-bg: var(--slate-600);
 }
