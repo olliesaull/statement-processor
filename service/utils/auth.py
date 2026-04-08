@@ -339,8 +339,13 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
         tenant_id = session.get("xero_tenant_id")
         if tenant_id:
             status = get_tenant_status(tenant_id)
-            if status == TenantStatus.LOADING:
-                logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id)
+            # Also block on ERASED and LOAD_INCOMPLETE as a defensive measure.
+            # In practice these are unlikely to be reached — disconnected tenants
+            # are removed from the session, and reconnection resets status to
+            # LOADING before any protected route runs. The check costs nothing
+            # (same DynamoDB call) and guards against unexpected session state.
+            if status in (TenantStatus.LOADING, TenantStatus.LOAD_INCOMPLETE, TenantStatus.ERASED):
+                logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id, status=str(status))
                 session["tenant_error"] = "Please wait for the initial load to finish before navigating away."
                 return redirect(url_for("tenant_management"))
 
