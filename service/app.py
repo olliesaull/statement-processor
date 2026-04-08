@@ -18,7 +18,7 @@ from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
 from billing_service import LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
-from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, S3_BUCKET_NAME, STAGE, VALKEY_URL
+from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, LOCAL_DATA_DIR, S3_BUCKET_NAME, STAGE, VALKEY_URL
 from core.item_classification import guess_statement_item_type
 from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, PaymentNumberMap, StatementItemPayload, StatementRowsByHeader, StatementRowViewModel, XeroDocumentPayload
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
@@ -58,6 +58,7 @@ from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
 from utils.statement_upload_validation import PreparedStatementUpload, build_statement_upload_preflight, prepare_statement_uploads, validate_upload_payload
 from utils.statement_view import build_right_rows, build_row_comparisons, match_invoices_to_statement_items, prepare_display_mappings
 from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
+from utils.tenant_status import get_tenant_status
 from utils.workflows import start_textraction_state_machine
 from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
 
@@ -1334,7 +1335,7 @@ def select_tenant():
 @xero_token_required
 @route_handler_logging
 def disconnect_tenant():
-    """Disconnect the tenant from Xero and update the local session state."""
+    """Disconnect a tenant from Xero, schedule data erasure, and update session state."""
     tenant_id = (request.form.get("tenant_id") or "").strip()
     tenants = session.get("xero_tenants") or []
     tenant = next((t for t in tenants if t.get("tenantId") == tenant_id), None)
@@ -1344,16 +1345,30 @@ def disconnect_tenant():
         session["tenant_error"] = "Tenant not found in session."
         return redirect(management_url)
 
+    # Validate erasure_days: default to 14 (progressive enhancement fallback).
+    ALLOWED_ERASURE_DAYS = {0, 14, 365}
+    raw_erasure = request.form.get("erasure_days")
+    if raw_erasure is None:
+        erasure_days = 14
+    else:
+        try:
+            erasure_days = int(raw_erasure)
+        except (ValueError, TypeError):
+            erasure_days = -1
+        if erasure_days not in ALLOWED_ERASURE_DAYS:
+            session["tenant_error"] = "Invalid data deletion option. Please try again."
+            return redirect(management_url)
+
     connection_id = tenant.get("connectionId")
     oauth_token = session.get("xero_oauth2_token")
     access_token = oauth_token.get("access_token") if isinstance(oauth_token, dict) else None
-    logger.info("Tenant disconnect submitted", tenant_id=tenant_id, has_connection=bool(connection_id))
+    logger.info("Tenant disconnect submitted", tenant_id=tenant_id, has_connection=bool(connection_id), erasure_days=erasure_days)
 
     if connection_id and access_token:
-        import requests  # pylint: disable=import-outside-toplevel
+        import requests as http_requests  # pylint: disable=import-outside-toplevel
 
         try:
-            resp = requests.delete(f"https://api.xero.com/connections/{connection_id}", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
+            resp = http_requests.delete(f"https://api.xero.com/connections/{connection_id}", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
             if resp.status_code not in (200, 204):
                 logger.error("Failed to disconnect tenant", tenant_id=tenant_id, status_code=resp.status_code, body=resp.text)
                 session["tenant_error"] = "Unable to disconnect tenant from Xero."
@@ -1363,7 +1378,22 @@ def disconnect_tenant():
             session["tenant_error"] = "An error occurred while disconnecting the tenant."
             return redirect(management_url)
 
-    # Remove tenant locally regardless (in case it was already disconnected).
+    # Schedule data erasure in DynamoDB.
+    erasure_epoch_ms = int(time.time() * 1000) + (erasure_days * 86_400 * 1000)
+    current_status = get_tenant_status(tenant_id)
+    try:
+        TenantDataRepository.schedule_erasure(tenant_id, erasure_epoch_ms, current_status or TenantStatus.FREE)
+        logger.info("Scheduled tenant data erasure", tenant_id=tenant_id, erasure_days=erasure_days)
+    except Exception:
+        logger.exception("Failed to schedule erasure — disconnect continues", tenant_id=tenant_id)
+
+    # Delete local cache.
+    import shutil  # pylint: disable=import-outside-toplevel
+
+    local_cache_path = os.path.join(LOCAL_DATA_DIR, tenant_id)
+    shutil.rmtree(local_cache_path, ignore_errors=True)
+
+    # Remove tenant from session.
     updated = [t for t in tenants if t.get("tenantId") != tenant_id]
     session["xero_tenants"] = updated
 
@@ -1371,10 +1401,15 @@ def disconnect_tenant():
         next_tenant_id = updated[0]["tenantId"] if updated else None
         _set_active_tenant(next_tenant_id)
 
-    session["tenant_message"] = "Tenant disconnected."
-    logger.info("Tenant disconnected", tenant_id=tenant_id, remaining=len(updated))
+    logger.info("Tenant disconnected", tenant_id=tenant_id, remaining=len(updated), erasure_days=erasure_days)
+
     if not updated:
-        return redirect(url_for("index"))
+        # Last tenant disconnected — log the user out.
+        session.clear()
+        response = redirect(url_for("index", logged_out=1))
+        return clear_session_is_set_cookie(response)
+
+    session["tenant_message"] = "Tenant disconnected."
     return redirect(management_url)
 
 
