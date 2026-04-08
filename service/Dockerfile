@@ -36,6 +36,7 @@ COPY templates/ ./templates/
 # Keep static assets in all images for environment parity and direct Function URL fallback.
 # CloudFront serves /static/* in production; removing static saves only ~0.15 MB, so we optimize for simplicity.
 COPY static/ ./static/
+COPY ui/ ./ui/
 COPY utils/ ./utils/
 COPY valkey.conf /etc/valkey/valkey.conf
 COPY nginx.conf /app/nginx.conf
