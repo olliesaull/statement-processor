@@ -17,7 +17,6 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
-from banner_service import get_banners
 from billing_service import LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
 from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, S3_BUCKET_NAME, STAGE, VALKEY_URL
 from core.item_classification import guess_statement_item_type
@@ -29,6 +28,7 @@ from stripe_service import STRIPE_MAX_TOKENS, STRIPE_MIN_TOKENS, STRIPE_PRICE_PE
 from sync import check_load_required, sync_data
 from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
+from ui.banner_service import get_banners
 from utils.auth import (
     active_tenant_required,
     block_when_loading,
