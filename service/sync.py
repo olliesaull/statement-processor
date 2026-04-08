@@ -222,10 +222,12 @@ def check_load_required(tenant_id: str) -> bool:
         has_pending_erasure = "EraseTenantDataTime" in item
 
         if status in (TenantStatus.ERASED, TenantStatus.LOAD_INCOMPLETE):
-            # Case 2: Returning tenant — reset to LOADING, cancel erasure.
-            tenant_data_table.update_item(Key={"TenantID": tenant_id}, UpdateExpression="SET TenantStatus = :loading", ExpressionAttributeValues={":loading": TenantStatus.LOADING})
+            # Case 2: Returning tenant — reset to LOADING and cancel any pending
+            # erasure in a single atomic DynamoDB call to avoid a race window.
+            update_expr = "SET TenantStatus = :loading"
             if has_pending_erasure:
-                TenantDataRepository.cancel_erasure(tenant_id)
+                update_expr += " REMOVE EraseTenantDataTime"
+            tenant_data_table.update_item(Key={"TenantID": tenant_id}, UpdateExpression=update_expr, ExpressionAttributeValues={":loading": TenantStatus.LOADING})
             logger.info("Returning tenant requires fresh load", tenant_id=tenant_id, previous_status=str(status))
             return True
 

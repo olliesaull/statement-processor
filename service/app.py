@@ -1346,7 +1346,7 @@ def disconnect_tenant():
         return redirect(management_url)
 
     # Validate erasure_days: default to 14 (progressive enhancement fallback).
-    ALLOWED_ERASURE_DAYS = {0, 14, 365}
+    allowed_erasure_days = {0, 14, 365}
     raw_erasure = request.form.get("erasure_days")
     if raw_erasure is None:
         erasure_days = 14
@@ -1355,7 +1355,7 @@ def disconnect_tenant():
             erasure_days = int(raw_erasure)
         except (ValueError, TypeError):
             erasure_days = -1
-        if erasure_days not in ALLOWED_ERASURE_DAYS:
+        if erasure_days not in allowed_erasure_days:
             session["tenant_error"] = "Invalid data deletion option. Please try again."
             return redirect(management_url)
 

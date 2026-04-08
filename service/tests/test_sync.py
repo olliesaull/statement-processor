@@ -73,8 +73,10 @@ def test_check_load_required_returns_true_for_erased_tenant(monkeypatch) -> None
 
     assert result is True
     mock_billing.adjust_token_balance.assert_not_called()
-    mock_repo.cancel_erasure.assert_called_once_with("erased-tenant")
+    # Erasure cancellation and status reset combined in a single atomic update_item call.
     fake_table.update_item.assert_called_once()
+    call_kwargs = fake_table.update_item.call_args
+    assert "REMOVE EraseTenantDataTime" in call_kwargs.kwargs.get("UpdateExpression", "")
 
 
 def test_check_load_required_returns_true_for_load_incomplete_tenant(monkeypatch) -> None:
