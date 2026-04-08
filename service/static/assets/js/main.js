@@ -313,6 +313,9 @@ function updateSyncStatuses(data) {
     const normalizedStatus = typeof rawStatus === "string" ? rawStatus.toUpperCase() : "";
     const isLoading = normalizedStatus === "LOADING";
     const isSyncing = normalizedStatus === "SYNCING";
+    // Defensive: ERASED and LOAD_INCOMPLETE are not expected in the UI (disconnected
+    // tenants are removed from the session) but disable controls if they appear.
+    const isInactive = normalizedStatus === "ERASED" || normalizedStatus === "LOAD_INCOMPLETE";
     const showStatus = isLoading || isSyncing;
 
     statusEl.classList.toggle("d-none", !showStatus);
@@ -328,8 +331,8 @@ function updateSyncStatuses(data) {
     if (row) {
       const syncButton = row.querySelector(".sync-btn");
       if (syncButton) {
-        syncButton.disabled = !!showStatus;
-        syncButton.classList.toggle("disabled", !!showStatus);
+        syncButton.disabled = !!(showStatus || isInactive);
+        syncButton.classList.toggle("disabled", !!(showStatus || isInactive));
       }
     }
 
