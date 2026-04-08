@@ -31,6 +31,7 @@ COPY --from=builder /app/packages /usr/local/lib/python3.13/site-packages
 # Copy every top-level Python module so new service modules are not accidentally
 # omitted from the container image during future refactors.
 COPY ./*.py ./
+COPY content/ ./content/
 COPY core/ ./core/
 COPY templates/ ./templates/
 # Keep static assets in all images for environment parity and direct Function URL fallback.
