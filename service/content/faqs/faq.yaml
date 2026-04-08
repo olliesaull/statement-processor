@@ -24,6 +24,9 @@ sections:
       - order: 3
         question: "How long does processing take?"
         answer: "question6.md"
+      - order: 4
+        question: "Why does it say 'section 3 of 10' during processing?"
+        answer: "question23.md"
 
   - title: "Reviewing Statements"
     order: 3

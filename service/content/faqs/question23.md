@@ -1,0 +1,1 @@
+Large statements are split into sections of roughly 10 pages so they can be processed efficiently. The progress bar tracks how many sections have been extracted so far. Single-page or small statements process as one section and will show a simpler progress message instead.
