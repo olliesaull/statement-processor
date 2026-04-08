@@ -25,8 +25,8 @@ import boto3
 from botocore.exceptions import ClientError
 
 AWS_REGION = os.getenv("AWS_REGION", "eu-west-1")
-AWS_PROFILE = os.getenv("AWS_PROFILE")
-TABLE_NAME = os.getenv("TENANT_STATEMENTS_TABLE_NAME", "TenantStatementsTable-prod")
+AWS_PROFILE = os.getenv("AWS_PROFILE", "dotelastic-production")
+TABLE_NAME = os.getenv("TENANT_STATEMENTS_TABLE_NAME", "TenantStatementsTable")
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() != "false"
 
 STATUS_MAP = {
