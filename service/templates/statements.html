@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ 'Completed' if show_completed else 'Incomplete' }} Statements{% endblock %}
 
+{% from "macros/pagination.html" import pagination_nav %}
 {% block content %}
 <div class="page-main">
-  {% set statement_count = statements|length %}
   <header class="page-header">
     <p class="page-kicker mb-1">Reconciliation</p>
     <h1 class="mb-2">{{ 'Completed Statements' if show_completed else 'Incomplete Statements' }}</h1>
@@ -15,6 +15,9 @@
       {{ message }}
     </div>
   {% endif %}
+
+  {% set prev_url = url_for('statements', page=page - 1, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
+  {% set next_url = url_for('statements', page=page + 1, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
 
   {% if statements %}
     <div class="page-panel page-panel-muted mb-3">
@@ -87,6 +90,22 @@
         </table>
       </div>
     </div>
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-3">
+      {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url) }}
+      {% if total_pages > 1 %}
+        <div class="pagination-per-page">
+          <label for="per-page-select">Per page:</label>
+          <select id="per-page-select" class="form-select form-select-sm" onchange="window.location.href=this.value">
+            {% for opt in [25, 50, 100] %}
+              <option
+                value="{{ url_for('statements', page=1, per_page=opt, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') }}"
+                {% if per_page == opt %}selected{% endif %}
+              >{{ opt }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      {% endif %}
+    </div>
   {% else %}
     <div class="alert alert-info" role="alert">
       No {{ 'completed' if show_completed else 'incomplete' }} statements found.
@@ -104,6 +123,7 @@
 
   <div class="sticky-action-dock sticky-action-dock-compact" data-sticky-dock data-sticky-target="#statements-footer-actions" aria-hidden="true">
     <span class="action-count-chip">{{ statement_count }} statement{% if statement_count != 1 %}s{% endif %}</span>
+    {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url, compact=true) }}
     {% if show_completed %}
       <a href="{{ url_for('statements', sort=current_sort, dir=current_dir) }}" class="btn btn-secondary">View incomplete</a>
     {% else %}

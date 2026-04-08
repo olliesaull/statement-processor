@@ -53,6 +53,7 @@ from utils.dynamo import (
     set_statement_item_completed,
 )
 from utils.email import send_login_notification_email
+from utils.pagination import paginate
 from utils.statement_rows import format_item_type_label as _format_item_type_label
 from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
 from utils.statement_upload_validation import PreparedStatementUpload, build_statement_upload_preflight, prepare_statement_uploads, validate_upload_payload
@@ -735,14 +736,34 @@ def statements():
         nonempty.sort(key=lambda r: str(r.get("ContactName")).strip().casefold(), reverse=reverse)
         statement_rows = nonempty + empty
 
+    # Pagination: slice sorted rows to the current page.
+    STATEMENTS_PER_PAGE_OPTIONS = [25, 50, 100]
+    raw_page = request.args.get("page", "1")
+    raw_per_page = request.args.get("per_page", "25")
+    try:
+        req_page = int(raw_page)
+    except (ValueError, TypeError):
+        req_page = 1
+    try:
+        req_per_page = int(raw_per_page)
+    except (ValueError, TypeError):
+        req_per_page = 25
+
+    pagination = paginate(total_items=len(statement_rows), page=req_page, per_page=req_per_page, per_page_options=STATEMENTS_PER_PAGE_OPTIONS)
+
     # Remove helper fields before rendering.
     for row in statement_rows:
         row.pop("_earliest_item_date", None)
         row.pop("_latest_item_date", None)
         row.pop("_uploaded_at", None)
 
-    # Preserve filters when building sort URLs.
-    base_args: dict[str, Any] = {}
+    # Total count before slicing for the item count chip.
+    statement_count = len(statement_rows)
+    statement_rows = statement_rows[pagination.start_index : pagination.end_index]
+
+    # Preserve filters and pagination when building sort URLs.
+    # Page is intentionally omitted — sort changes reset to page 1.
+    base_args: dict[str, Any] = {"per_page": pagination.per_page}
     if show_completed:
         base_args["view"] = "completed"
 
@@ -759,9 +780,31 @@ def statements():
         "uploaded": url_for("statements", **dict(base_args, sort="uploaded", dir=next_dir_for("uploaded"))),
     }
 
-    logger.info("Rendering statements", tenant_id=tenant_id, view=view, sort=sort_key, direction=current_dir, statements=len(statement_rows))
+    logger.info(
+        "Rendering statements",
+        tenant_id=tenant_id,
+        view=view,
+        sort=sort_key,
+        direction=current_dir,
+        page=pagination.page,
+        per_page=pagination.per_page,
+        total_pages=pagination.total_pages,
+        statements=len(statement_rows),
+    )
 
-    return render_template("statements.html", statements=statement_rows, show_completed=show_completed, message=message, current_sort=sort_key, current_dir=current_dir, sort_links=sort_links)
+    return render_template(
+        "statements.html",
+        statements=statement_rows,
+        show_completed=show_completed,
+        message=message,
+        current_sort=sort_key,
+        current_dir=current_dir,
+        sort_links=sort_links,
+        page=pagination.page,
+        per_page=pagination.per_page,
+        total_pages=pagination.total_pages,
+        statement_count=statement_count,
+    )
 
 
 @app.route("/statement/<statement_id>/delete", methods=["POST"])
