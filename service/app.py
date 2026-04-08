@@ -858,7 +858,7 @@ def _parse_show_payments(raw_value: str | None) -> bool:
     return value in {"true", "1", "yes", "on"}
 
 
-def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: Any, items_view: str, show_payments: bool) -> Any:
+def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: Any, items_view: str, show_payments: bool, page: int) -> Any:
     """Handle POST actions for statement detail views, returning a redirect when applicable."""
     action = form.get("action")
     if action in {"mark_complete", "mark_incomplete"}:
@@ -888,7 +888,7 @@ def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: A
                 logger.exception(
                     "Failed to toggle statement item completion", statement_id=statement_id, statement_item_id=statement_item_id, tenant_id=tenant_id, desired_state=desired_state, error=exc
                 )
-        return redirect(url_for("statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false"))
+        return redirect(url_for("statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false", page=page))
 
     return None
 
@@ -1186,6 +1186,15 @@ def statement(statement_id: str):
 
     items_view = _parse_items_view(request.values.get("items_view"))
     show_payments = _parse_show_payments(request.values.get("show_payments"))
+
+    # Parse page from request.values so it works for both GET params and POST form data.
+    # This must happen before the POST check so the value is available in both branches.
+    raw_page_param = request.values.get("page", "1")
+    try:
+        page_param = int(raw_page_param)
+    except (ValueError, TypeError):
+        page_param = 1
+
     logger.info("Statement detail requested", tenant_id=tenant_id, statement_id=statement_id, items_view=items_view, show_payments=show_payments, method=request.method)
 
     raw_contact_name = record.get("ContactName")
@@ -1194,7 +1203,7 @@ def statement(statement_id: str):
 
     if request.method == "POST":
         # TODO: This function forces the entire page to re-render when an event occurs (hide/show payments, mark complete/incomplete, etc) - that is slow for large statements
-        response = _handle_statement_post_actions(tenant_id=tenant_id, statement_id=statement_id, form=request.form, items_view=items_view, show_payments=show_payments)
+        response = _handle_statement_post_actions(tenant_id=tenant_id, statement_id=statement_id, form=request.form, items_view=items_view, show_payments=show_payments, page=page_param)
         if response is not None:
             return response
 
@@ -1338,12 +1347,9 @@ def statement(statement_id: str):
         visible_rows = [row for row in visible_rows if row.get("item_type") != "payment"]
 
     # Pagination: slice filtered rows to the current page.
+    # page_param was already parsed above (shared between GET and POST paths).
     STATEMENT_ITEMS_PER_PAGE = 50
-    raw_page = request.args.get("page", "1")
-    try:
-        req_page = int(raw_page)
-    except (ValueError, TypeError):
-        req_page = 1
+    req_page = page_param
 
     total_visible_count = len(visible_rows)
     pagination = paginate(total_items=total_visible_count, page=req_page, per_page=STATEMENT_ITEMS_PER_PAGE)

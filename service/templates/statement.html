@@ -182,6 +182,7 @@
                           <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
                           <input type="hidden" name="items_view" value="{{ items_view }}">
                           <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
+                          <input type="hidden" name="page" value="{{ page }}">
                           <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap px-2 py-0" data-automation="statement-row-incomplete">Mark incomplete</button>
                         </form>
                       {% else %}
@@ -191,6 +192,7 @@
                           <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
                           <input type="hidden" name="items_view" value="{{ items_view }}">
                           <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
+                          <input type="hidden" name="page" value="{{ page }}">
                           <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap px-2 py-0" data-automation="statement-row-complete">Mark complete</button>
                         </form>
                       {% endif %}
