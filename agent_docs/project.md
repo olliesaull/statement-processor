@@ -19,6 +19,7 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
 - Flask app in [`service/app.py`](service/app.py) serves server-rendered Jinja pages and JSON APIs.
 - Deployed on AWS AppRunner (see [`service/Dockerfile`](service/Dockerfile)).
 - Nginx reverse proxy sits in front of Gunicorn inside the container, providing security headers, CSP, rate limiting, and per-route query string / body size validation. Config lives in `service/nginx.conf` and auto-generated `service/nginx-routes.conf`. See the README "Nginx Reverse Proxy" section for maintenance details.
+- **Nginx regeneration required** when adding/removing Flask routes, changing auth decorators (which affects public-page detection), or adding query parameters to routes. Public routes have query strings stripped unless they have an entry in `service/nginx_route_querystring_allow_list.json`. Run the generator from `service/` and review the `nginx-routes.conf` diff.
 
 ### Extraction pipeline (`lambda_functions/textraction_lambda/`)
 - Container Lambda entry point: [`lambda_functions/textraction_lambda/main.py`](lambda_functions/textraction_lambda/main.py).

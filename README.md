@@ -417,7 +417,10 @@ Client → CloudFront → AppRunner → Nginx (:8080) → Gunicorn (unix:/tmp/fl
 | Adding new Flask routes | Regenerate `nginx-routes.conf` (see command below) |
 | Adding query parameters to a route | Update `service/nginx_route_querystring_allow_list.json` and regenerate |
 | Adding routes that accept large request bodies | Update `service/nginx_route_overrides.json` and regenerate |
+| Making an authenticated route public (removing auth decorator) | Regenerate — public routes without an allow-list entry will have query strings stripped |
 | Changing the listen port | Update `listen` directive in `service/nginx.conf` |
+
+> **Important:** The generator strips query strings from public (unauthenticated) routes that are not in the allow list. If a public route needs query parameters (e.g. `/callback` for OAuth), it **must** have an entry in `nginx_route_querystring_allow_list.json` — otherwise the parameters will be silently dropped by nginx before they reach Flask. Always regenerate and review the diff after any route, decorator, or allow-list change.
 
 ### Regenerating route config
 

@@ -241,17 +241,7 @@ def generate_single_location(route: dict, upstream_name: str, allowed_params: di
     # strips the body) so we don't short-circuit it here.
     lines.append(f"    limit_except {' '.join(route['methods'])} {{ deny all; }}")
 
-    if is_public:
-        lines.extend(
-            [
-                "    # Public page - UTMs logged by CloudFront, drop query strings silently",
-                '    if ($args != "") {',
-                "        rewrite ^(.*)$ $1? last;",
-                "    }",
-                f"    proxy_pass http://{upstream_name};",
-            ]
-        )
-    elif has_params:
+    if has_params:
         param_regex = generate_param_regex(route_params)
         params_str = ", ".join(route_params)
         lines.extend(
@@ -263,6 +253,16 @@ def generate_single_location(route: dict, upstream_name: str, allowed_params: di
                 "    }",
                 '    if ($check_args = "11") {',
                 "        return 404;",
+                "    }",
+                f"    proxy_pass http://{upstream_name};",
+            ]
+        )
+    elif is_public:
+        lines.extend(
+            [
+                "    # Public page - UTMs logged by CloudFront, drop query strings silently",
+                '    if ($args != "") {',
+                "        rewrite ^(.*)$ $1? last;",
                 "    }",
                 f"    proxy_pass http://{upstream_name};",
             ]
