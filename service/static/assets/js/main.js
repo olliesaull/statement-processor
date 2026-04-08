@@ -250,6 +250,38 @@ const checkQueryParamToasts = () => {
   }
 };
 
+const setupPaginationJump = () => {
+  document.querySelectorAll("[data-pagination-jump]").forEach((container) => {
+    const toggle = container.querySelector("[data-pagination-jump-toggle]");
+    const popover = container.querySelector("[data-pagination-jump-popover]");
+    if (!toggle || !popover) return;
+
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = popover.hasAttribute("data-open");
+      closeAllPaginationPopovers();
+      if (!isOpen) {
+        popover.setAttribute("data-open", "");
+        toggle.setAttribute("aria-expanded", "true");
+      }
+    });
+  });
+
+  document.addEventListener("click", closeAllPaginationPopovers);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeAllPaginationPopovers();
+  });
+};
+
+const closeAllPaginationPopovers = () => {
+  document.querySelectorAll("[data-pagination-jump-popover][data-open]").forEach((p) => {
+    p.removeAttribute("data-open");
+  });
+  document.querySelectorAll("[data-pagination-jump-toggle]").forEach((t) => {
+    t.setAttribute("aria-expanded", "false");
+  });
+};
+
 window.addEventListener("load", () => {
   updateNavbarScrollState();
   window.addEventListener("scroll", updateNavbarScrollState, { passive: true });
@@ -258,6 +290,7 @@ window.addEventListener("load", () => {
   checkQueryParamToasts();
   setupStickyActionDocks();
   setupScrollProxy();
+  setupPaginationJump();
 
   // Scroll-reveal animations
   document.querySelectorAll('.reveal, .reveal-subtle').forEach(el => {

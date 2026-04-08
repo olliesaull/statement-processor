@@ -31,7 +31,7 @@ CHUNK_SIZE = 10
 MAX_CHUNK_BYTES = 4 * 1024 * 1024
 
 # Concurrency for parallel chunk processing.
-MAX_PARALLEL_CHUNKS = 3
+MAX_PARALLEL_CHUNKS = 10
 
 # Retry config for transient Bedrock errors.
 MAX_RETRIES = 2

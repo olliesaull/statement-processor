@@ -75,38 +75,44 @@ def _filter_display_headers(raw_headers: list[str], header_to_field_norm: dict[s
 
 _DEBIT_AMOUNT_PATTERNS = ("debit", "dr", "invoices", "charges", "amount")
 _CREDIT_AMOUNT_PATTERNS = ("credit", "cr", "credit notes", "payments")
+_TOTAL_AMOUNT_PATTERNS = ("total",)
+_BALANCE_AMOUNT_PATTERNS = ("balance",)
 
 
-def _is_amount_column(norm_name: str) -> bool:
-    """Return True if the normalized column name looks like a debit or credit amount."""
-    return any(norm_name.startswith(p) or norm_name.endswith(p) for p in _DEBIT_AMOUNT_PATTERNS + _CREDIT_AMOUNT_PATTERNS)
+def _matches_patterns(norm_name: str, patterns: tuple[str, ...]) -> bool:
+    """Return True if the normalized column name starts or ends with any pattern."""
+    return any(norm_name.startswith(p) or norm_name.endswith(p) for p in patterns)
 
 
 def _filter_display_amount_columns(display_headers: list[str], header_to_field: dict[str, str]) -> tuple[list[str], dict[str, str]]:
-    """Keep only debit/credit amount columns from the total-mapped headers.
+    """Keep only relevant amount columns from the total-mapped headers.
 
-    Hides noise columns (Balance, Clearing differences, Doc Ref, etc.)
-    while keeping the primary transaction amount columns. If no column
-    matches a known amount pattern but exactly one total column exists,
-    it is kept as the sole amount column (e.g. a statement with only
-    "Total" or "Amount").
+    Uses a tiered strategy so the most specific columns win:
+      1. Debit/credit columns (e.g. "Debit", "Credit", "DR", "Charges").
+      2. Total columns (e.g. "Total", "Net Total") — used only when no
+         debit/credit columns exist.
+      3. Balance columns (e.g. "Balance") — last resort when neither
+         debit/credit nor total columns exist.
+
+    Each tier is exclusive: once a tier matches, lower tiers are ignored.
+    This prevents noise columns (Balance, Transaction, Doc Ref, etc.)
+    from crowding out the primary amount columns.
     """
-    amount_headers: list[str] = []
     non_total_headers: list[str] = []
+    total_mapped: list[tuple[str, str]] = []
 
     for header in display_headers:
         if header_to_field.get(header) != "total":
             non_total_headers.append(header)
-            continue
-        norm = _normalize_header_name(header)
-        if _is_amount_column(norm):
-            amount_headers.append(header)
+        else:
+            total_mapped.append((header, _normalize_header_name(header)))
 
-    # If no pattern matched but there's exactly one total column, keep it.
-    if not amount_headers:
-        all_total = [h for h in display_headers if header_to_field.get(h) == "total"]
-        if len(all_total) == 1:
-            amount_headers = all_total
+    # Tiered selection: first tier that produces matches wins.
+    amount_headers: list[str] = []
+    for patterns in (_DEBIT_AMOUNT_PATTERNS + _CREDIT_AMOUNT_PATTERNS, _TOTAL_AMOUNT_PATTERNS, _BALANCE_AMOUNT_PATTERNS):
+        amount_headers = [h for h, norm in total_mapped if _matches_patterns(norm, patterns)]
+        if amount_headers:
+            break
 
     filtered = non_total_headers + amount_headers
     filtered_set = set(filtered)
@@ -144,12 +150,20 @@ def _order_display_headers(display_headers: list[str], header_to_field: dict[str
 
 
 def _format_statement_value(value: Any, canonical_field: str | None, date_fmt: str | None) -> Any:
-    """Normalize a statement cell value based on the canonical field."""
+    """Normalize a statement cell value based on the canonical field.
+
+    Amount columns are displayed as absolute values because Xero always
+    stores positive totals — negative signs on the statement (credits,
+    receipts) would cause false mismatches.
+    """
     if canonical_field in {"date", "due_date"}:
         dt = coerce_datetime_with_template(value, date_fmt)
         if dt is not None:
             return format_iso_with(dt, date_fmt) if date_fmt else dt.strftime("%Y-%m-%d")
     elif canonical_field == "total":
+        d = _to_decimal(value)
+        if d is not None:
+            return format_money(abs(d))
         return format_money(value)
     return value
 

@@ -4,18 +4,21 @@
   Usage:
     {% from "macros/pagination.html" import pagination_nav %}
     {{ pagination_nav(page=2, total_pages=5, prev_url="/statements?page=1", next_url="/statements?page=3") }}
-    {{ pagination_nav(page=2, total_pages=5, prev_url="...", next_url="...", compact=true) }}
+    {{ pagination_nav(page=2, total_pages=5, prev_url="...", next_url="...", compact=true, page_url_template="/statements?page=__PAGE__") }}
 
   Parameters:
-    page        — current page number (1-based)
-    total_pages — total number of pages
-    prev_url    — URL for the previous page
-    next_url    — URL for the next page
-    compact     — if true, renders smaller controls for sticky docks (default: false)
+    page               — current page number (1-based)
+    total_pages        — total number of pages
+    prev_url           — URL for the previous page
+    next_url           — URL for the next page
+    compact            — if true, renders smaller controls for sticky docks (default: false)
+    page_url_template  — URL template with __PAGE__ placeholder for jump-to-page dropdown (optional)
 
   Controls are hidden entirely when total_pages <= 1.
+  When page_url_template is provided, the "Page X of Y" indicator becomes
+  a clickable dropdown allowing direct page jumps.
 #}
-{% macro pagination_nav(page, total_pages, prev_url, next_url, compact=false) %}
+{% macro pagination_nav(page, total_pages, prev_url, next_url, compact=false, page_url_template=none) %}
   {% if total_pages > 1 %}
     <nav class="pagination-nav{% if compact %} pagination-nav-compact{% endif %}" aria-label="Pagination">
       <a
@@ -23,7 +26,29 @@
         class="btn btn-sm btn-outline-primary{% if page <= 1 %} disabled{% endif %}"
         {% if page <= 1 %}aria-disabled="true" tabindex="-1"{% endif %}
       >&lsaquo; Previous</a>
-      <span class="pagination-indicator">Page {{ page }} of {{ total_pages }}</span>
+
+      {% if page_url_template and total_pages > 2 %}
+        {# Clickable page indicator with jump-to-page dropdown #}
+        <div class="pagination-jump" data-pagination-jump>
+          <button type="button" class="pagination-indicator pagination-indicator-btn" aria-expanded="false" aria-haspopup="true" data-pagination-jump-toggle>
+            Page {{ page }} of {{ total_pages }} <span class="pagination-chevron">&#x25BE;</span>
+          </button>
+          <div class="pagination-jump-popover" data-pagination-jump-popover>
+            <div class="pagination-jump-grid">
+              {% for p in range(1, total_pages + 1) %}
+                {% if p == page %}
+                  <span class="pagination-jump-item pagination-jump-item-current">{{ p }}</span>
+                {% else %}
+                  <a href="{{ page_url_template.replace('__PAGE__', p|string) }}" class="pagination-jump-item">{{ p }}</a>
+                {% endif %}
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      {% else %}
+        <span class="pagination-indicator">Page {{ page }} of {{ total_pages }}</span>
+      {% endif %}
+
       <a
         href="{{ next_url }}"
         class="btn btn-sm btn-outline-primary{% if page >= total_pages %} disabled{% endif %}"

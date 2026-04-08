@@ -111,6 +111,7 @@
     {% set visible_item_count = total_visible_count %}
     {% set prev_url = url_for('statement', statement_id=statement_id, page=page - 1, items_view=items_view, show_payments='true' if show_payments else 'false') %}
     {% set next_url = url_for('statement', statement_id=statement_id, page=page + 1, items_view=items_view, show_payments='true' if show_payments else 'false') %}
+    {% set page_url_tpl = url_for('statement', statement_id=statement_id, page='__PAGE__', items_view=items_view, show_payments='true' if show_payments else 'false') %}
 
     <div class="landscape-tip">
       <svg class="landscape-tip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -267,7 +268,7 @@
           {{ visible_item_count }} statement item{% if visible_item_count != 1 %}s{% endif %}
         </span>
       </div>
-      {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url) }}
+      {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url, page_url_template=page_url_tpl) }}
       <div class="d-flex align-items-center flex-wrap gap-3">
         {% if is_completed %}
           <span class="badge bg-success fs-6">Completed</span>
@@ -299,7 +300,7 @@
           {{ visible_item_count }} statement item{% if visible_item_count != 1 %}s{% endif %}
         </span>
       </div>
-      {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url, compact=true) }}
+      {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url, compact=true, page_url_template=page_url_tpl) }}
       <div class="d-flex align-items-center flex-wrap gap-2">
         {% if is_completed %}
           <span class="badge bg-success">Completed</span>
