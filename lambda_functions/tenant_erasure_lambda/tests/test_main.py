@@ -178,12 +178,7 @@ def test_delete_statement_rows_batch_deletes_with_correct_keys(monkeypatch) -> N
     """_delete_statement_rows should query by TenantID and batch-delete all rows."""
     fake_table = MagicMock()
     # Simulate two items returned, no pagination.
-    fake_table.query.return_value = {
-        "Items": [
-            {"TenantID": "t1", "StatementID": "stmt-001"},
-            {"TenantID": "t1", "StatementID": "stmt-001#item-1"},
-        ]
-    }
+    fake_table.query.return_value = {"Items": [{"TenantID": "t1", "StatementID": "stmt-001"}, {"TenantID": "t1", "StatementID": "stmt-001#item-1"}]}
     # batch_writer returns a context manager.
     fake_batch = MagicMock()
     fake_table.batch_writer.return_value.__enter__ = MagicMock(return_value=fake_batch)
@@ -201,10 +196,7 @@ def test_delete_statement_rows_batch_deletes_with_correct_keys(monkeypatch) -> N
 def test_delete_statement_rows_handles_pagination(monkeypatch) -> None:
     """_delete_statement_rows should follow LastEvaluatedKey through all pages."""
     fake_table = MagicMock()
-    page1 = {
-        "Items": [{"TenantID": "t1", "StatementID": "stmt-001"}],
-        "LastEvaluatedKey": {"TenantID": "t1", "StatementID": "stmt-001"},
-    }
+    page1 = {"Items": [{"TenantID": "t1", "StatementID": "stmt-001"}], "LastEvaluatedKey": {"TenantID": "t1", "StatementID": "stmt-001"}}
     page2 = {"Items": [{"TenantID": "t1", "StatementID": "stmt-002"}]}
     fake_table.query.side_effect = [page1, page2]
 
@@ -223,15 +215,7 @@ def test_delete_s3_objects_calls_delete_with_correct_keys(monkeypatch) -> None:
     """_delete_s3_objects should list under tenant prefix and batch-delete."""
     fake_s3 = MagicMock()
     paginator = MagicMock()
-    paginator.paginate.return_value = [
-        {
-            "Contents": [
-                {"Key": "t1/statements/stmt-001.pdf"},
-                {"Key": "t1/statements/stmt-001.json"},
-                {"Key": "t1/data/contacts.json"},
-            ]
-        }
-    ]
+    paginator.paginate.return_value = [{"Contents": [{"Key": "t1/statements/stmt-001.pdf"}, {"Key": "t1/statements/stmt-001.json"}, {"Key": "t1/data/contacts.json"}]}]
     fake_s3.get_paginator.return_value = paginator
     monkeypatch.setattr(main, "s3_client", fake_s3)
     monkeypatch.setattr(main, "S3_BUCKET_NAME", "test-bucket")
