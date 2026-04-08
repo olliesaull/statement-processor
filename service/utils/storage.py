@@ -13,15 +13,33 @@ from logger import logger
 ALLOWED_EXTENSIONS = {".pdf", ".PDF"}
 
 
-def is_allowed_pdf(filename: str, mimetype: str) -> bool:
-    """Basic check for PDF uploads by extension and MIME type.
+PDF_MAGIC = b"%PDF-"
+
+
+def is_allowed_pdf(filename: str, mimetype: str, stream: Any = None) -> bool:
+    """Check an upload is a genuine PDF by extension, MIME type, and magic bytes.
 
     Note: We intentionally only accept 'application/pdf' to avoid false positives
     like 'application/octet-stream'. If broader support is desired, revisit this.
+
+    When *stream* is provided, the first bytes are checked for the ``%PDF-``
+    magic header to catch spoofed extensions/MIME types. The stream position
+    is restored after the check.
     """
     ext_ok = Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
     mime_ok = mimetype == "application/pdf"
-    return ext_ok and mime_ok
+    if not (ext_ok and mime_ok):
+        return False
+
+    # If a stream is available, verify the file actually starts with %PDF-.
+    if stream is not None:
+        stream.seek(0)
+        header = stream.read(len(PDF_MAGIC))
+        stream.seek(0)
+        if header != PDF_MAGIC:
+            return False
+
+    return True
 
 
 def _clean_key_segment(value: str | None, label: str) -> str:

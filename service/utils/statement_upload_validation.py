@@ -80,7 +80,7 @@ def validate_upload_payload(files: list[FileStorage], names: list[str]) -> bool:
 def count_uploaded_pdf_pages(tenant_id: str | None, uploaded_file: FileStorage) -> UploadPageCountResult:
     """Count pages for one uploaded PDF and return a user-facing result object."""
     filename = uploaded_file.filename or "Unnamed PDF"
-    if not is_allowed_pdf(filename, uploaded_file.mimetype):
+    if not is_allowed_pdf(filename, uploaded_file.mimetype, stream=uploaded_file.stream):
         logger.info("Upload validation rejected non-PDF", tenant_id=tenant_id, statement_filename=filename, mimetype=uploaded_file.mimetype)
         return UploadPageCountResult(filename=filename, error="Only PDF statements are supported.")
 
