@@ -1337,6 +1337,18 @@ def statement(statement_id: str):
     if not show_payments:
         visible_rows = [row for row in visible_rows if row.get("item_type") != "payment"]
 
+    # Pagination: slice filtered rows to the current page.
+    STATEMENT_ITEMS_PER_PAGE = 50
+    raw_page = request.args.get("page", "1")
+    try:
+        req_page = int(raw_page)
+    except (ValueError, TypeError):
+        req_page = 1
+
+    total_visible_count = len(visible_rows)
+    pagination = paginate(total_items=total_visible_count, page=req_page, per_page=STATEMENT_ITEMS_PER_PAGE)
+    visible_rows = visible_rows[pagination.start_index : pagination.end_index]
+
     logger.info(
         "Statement detail rendered",
         tenant_id=tenant_id,
@@ -1360,6 +1372,9 @@ def statement(statement_id: str):
         "completed_count": completed_count,
         "incomplete_count": incomplete_count,
         "has_payment_rows": has_payment_rows,
+        "page": pagination.page,
+        "total_pages": pagination.total_pages,
+        "total_visible_count": total_visible_count,
     }
     return render_template("statement.html", **context)
 
