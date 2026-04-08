@@ -1412,11 +1412,12 @@ a:focus-visible {
 }
 
 .statements-table {
-  /* Desktop widths; keep totals near 100% to avoid unnecessary horizontal scroll. */
-  --statements-col-contact: 28%;
-  --statements-col-date-range: 16%;
+  /* Desktop widths: date-range and action use fixed widths (content is predictable),
+     contact and filename use percentages to share the remaining space. */
+  --statements-col-contact: 24%;
+  --statements-col-date-range: 23ch;  /* fits YYYY-MM-DD - YYYY-MM-DD exactly */
   --statements-col-filename: 40%;
-  --statements-col-action: 16%;
+  --statements-col-action: 13rem;     /* keeps Reconcile + Delete/Processing side-by-side */
   table-layout: fixed;
   width: 100%;
 }

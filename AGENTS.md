@@ -72,6 +72,12 @@ Do not change behaviour solely for style/cleanup.
 - Make the plan extremely concise. Sacrifice grammar for the sake of concision.
 - At the end of each plan, give mne a list of unanswered questions to answer, if any.
 
+## Browser Testing with Playwright (important)
+
+When using the Playwright MCP to test pages in the browser, you **must** authenticate first by navigating to `http://localhost:8080/test-login`. This seeds a fake session so all authenticated pages are accessible. Without this step, navigating to any protected page (e.g. `/statements`) will redirect to the Xero OAuth login, which cannot be completed in Playwright.
+
+Full details (prerequisites, env vars, limitations) are in `agent_docs/browser_testing.md`.
+
 ## Progressive Documentation
 Each repo may include `agent_docs/` with deeper context (read only when relevant), e.g.:
 - `agent_docs/project.md` (purpose + architecture + repo-specific workflow)
