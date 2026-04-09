@@ -47,7 +47,7 @@ Preferred comment style:
 
 Update docs when behavior changes in:
 - Route/auth/session behavior (`service/app.py`, `service/config.py`, `service/utils/auth.py`)
-- Extraction contracts (`lambda_functions/textraction_lambda/core/*`)
+- Extraction contracts (`lambda_functions/extraction_lambda/core/*`)
 - Persistence contracts (DynamoDB item shapes, S3 key layouts, Step Functions payloads)
 - Operator workflows (sync, upload, reconciliation, export)
 
