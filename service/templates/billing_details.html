@@ -4,12 +4,12 @@
 {% block content %}
 <div class="page-main">
   <header class="page-header">
-    <p class="page-kicker mb-1">Token Purchase</p>
+    <p class="page-kicker mb-1">Page Purchase</p>
     <h1 class="mb-2">Billing Details</h1>
     <p class="page-subtitle mb-0">
       Enter the details you want to appear on your invoice.
-      You are purchasing <strong>{{ token_count }}</strong> token{% if token_count != 1 %}s{% endif %}
-      &mdash; <strong>&pound;{{ "%.2f"|format(token_count * price_pence / 100) }}</strong>.
+      You are purchasing <strong>{{ token_count }}</strong> page{% if token_count != 1 %}s{% endif %}
+      &mdash; <strong>&pound;{{ "%.2f"|format(total_pence / 100) }}</strong>.
     </p>
   </header>
 

@@ -340,14 +340,14 @@ The Bedrock Converse API requires model access to be enabled in the AWS console.
     - `/api/tenants/<tenant_id>/sync` (POST): triggers background Xero sync for a tenant.
     - `/api/banner/dismiss` (POST): permanently dismiss a banner for the current tenant. Accepts `{"dismiss_key": "<key>"}` and writes the key to the tenant's `DismissedBanners` set in `TenantDataTable` via `TenantDataRepository.dismiss_banner`. Returns `204` on success.
     - **Auth behavior for API routes**: When `@xero_token_required` protects a `/api/...` endpoint and the session token is missing or expired, the decorator returns `401` JSON (`{"error": "auth_required"}`) instead of redirecting. The frontend polling/sync code (`service/static/assets/js/main.js`) treats either a 401 response or a redirected login response as a signal to navigate to `/login`, so passive actions still force a full re-login.
-  - **Stripe / token purchasing**
-    - `/pricing` (GET): public-facing pricing page — no auth required, explains token pricing (£0.10/token, min 10 tokens).
-    - `/buy-tokens` (GET): token amount input form with live price display; requires Xero auth.
-    - `/api/checkout/create` (POST): validates billing details submitted from the billing details form, creates a fresh Stripe Customer for this purchase with the user-provided name, email, and address, creates a Stripe Checkout Session with dynamic `price_data`, and redirects to the Stripe-hosted checkout page. A new Customer is created per checkout so each invoice is permanently attached to the billing details entered for that specific purchase.
-    - `/checkout/success` (GET): called by Stripe on payment completion with `?session_id=cs_xxx`. Retrieves the session from Stripe, verifies `payment_status == "paid"`, checks idempotency via `StripeEventStoreTable`, credits tokens via `BillingService.adjust_token_balance` with `source="stripe-checkout"` and a deterministic `ledger_entry_id`, then records the session as processed. Renders the success page with tokens credited and updated balance. Safe to refresh — idempotency check prevents double-crediting.
-    - `/checkout/cancel` (GET): renders a cancellation page with a "Try Again" link; no tokens are credited.
+  - **Stripe / page purchasing**
+    - `/pricing` (GET): public-facing pricing page — no auth required, shows graduated volume pricing (from £0.08/page).
+    - `/buy-pages` (GET): page amount input form with live graduated price calculator and tenant selector dropdown; requires Xero auth. Accepts optional `?tenant_id=` query param to pre-select a tenant. **UI naming convention:** the user-facing UI says "pages" everywhere, but the backend continues to use "tokens" internally (DynamoDB attributes, ledger entries, variable names, function names, routes). This keeps the billing unit decoupled from the display name — the token-to-page ratio could change in the future.
+    - `/api/checkout/create` (POST): validates billing details, creates or reuses a persistent Stripe Customer per tenant (stored in `TenantBillingTable.StripeCustomerID`), creates a Stripe Checkout Session with graduated pricing from `PricingConfig`, and redirects to Stripe. On first purchase a new Customer is created and its ID persisted; on subsequent purchases the existing Customer's billing details are updated via `stripe.Customer.modify`.
+    - `/checkout/success` (GET): called by Stripe on payment completion with `?session_id=cs_xxx`. Retrieves the session from Stripe, verifies `payment_status == "paid"`, checks idempotency via `StripeEventStoreTable`, credits tokens via `BillingService.adjust_token_balance` with `source="stripe-checkout"`, a deterministic `ledger_entry_id`, and the effective `price_per_token_pence` from graduated pricing. Renders the success page with pages credited and updated balance. Safe to refresh — idempotency check prevents double-crediting.
+    - `/checkout/cancel` (GET): renders a cancellation page with a "Try Again" link; no pages are credited.
     - `/checkout/failed` (GET): renders an error page with a hex reference ID for support lookup.
-    - **Preflight shortfall link**: when `/api/upload-statements/preflight` returns `shortfall > 0`, the response JSON now includes `buy_tokens_url: "/buy-tokens"` so the upload page JS can render a "Buy Tokens" link in the red shortfall summary.
+    - **Preflight shortfall link**: when `/api/upload-statements/preflight` returns `shortfall > 0`, the response JSON now includes `buy_tokens_url: "/buy-pages"` so the upload page JS can render a "Buy Pages" link in the red shortfall summary.
   - **Auth**
     - `/login` (GET): start Xero OAuth flow.
     - `/callback` (GET): OAuth callback (token validation + tenant load). For first-time tenants, also grants welcome tokens (see **Welcome token grant** below).
@@ -923,7 +923,7 @@ AWS_PROFILE=my-profile python3.13 run.py
 ## Stripe Setup
 
 ### One-time dashboard steps
-1. A Product named **"Statement Processor Tokens"** already exists in Stripe test mode with ID `prod_UBMoFkqStKFcjg`. No Price objects are needed — pricing is fully dynamic via `price_data` in each checkout session.
+1. A Product named **"Statement Processing Pages"** already exists in Stripe test mode with ID `prod_UBMoFkqStKFcjg`. No Price objects are needed — pricing is fully dynamic via `price_data` in each checkout session.
 2. Enable Invoicing on the Stripe account (Dashboard → Settings → Billing → Invoices). Required because checkout sessions are created with `invoice_creation={"enabled": True}`.
 3. For live mode: repeat the above with live-mode keys and update `STRIPE_PRODUCT_ID` and `STRIPE_API_KEY_SSM_PATH` accordingly.
 
@@ -940,19 +940,19 @@ The path is read at startup via `STRIPE_API_KEY_SSM_PATH` env var (already set i
 | Variable | Example value | Purpose |
 |---|---|---|
 | `STRIPE_API_KEY_SSM_PATH` | `/StatementProcessor/STRIPE_API_KEY` | SSM path for the secret key — resolved at startup |
-| `STRIPE_PRODUCT_ID` | `prod_UBMoFkqStKFcjg` | Stripe Product ID for token purchases |
-| `STRIPE_PRICE_PER_TOKEN_PENCE` | `10` | Price per token in pence (10p = £0.10) |
+| `STRIPE_PRODUCT_ID` | `prod_UBMoFkqStKFcjg` | Stripe Product ID for page purchases |
+| `STRIPE_PRICE_PER_TOKEN_PENCE` | `10` | **Legacy** — no longer read by app code. Graduated pricing is now defined in `service/pricing_config.py` |
 | `STRIPE_CURRENCY` | `gbp` | Stripe currency code |
-| `STRIPE_MIN_TOKENS` | `10` | Minimum tokens per purchase (£1.00 minimum) |
-| `STRIPE_MAX_TOKENS` | `10000` | Maximum tokens per purchase |
+| `STRIPE_MIN_TOKENS` | `10` | **Legacy** — min/max now defined in `service/pricing_config.py` (`MIN_TOKENS`/`MAX_TOKENS`) |
+| `STRIPE_MAX_TOKENS` | `10000` | **Legacy** — see above |
 
 All non-secret variables are plain env vars (in `service/.env` for local dev; in the CDK `environment_variables` block for AppRunner). Only the secret key is stored in SSM.
 
 ### Design decisions
 - **No webhooks for MVP.** Token crediting happens on the success redirect: the session is retrieved from Stripe, `payment_status` is verified, and tokens are credited. Idempotency prevents double-crediting on page refresh. If the user's browser closes before the redirect fires, tokens are credited manually via the admin adjustment tool. Webhooks will be added when subscriptions require reliable async credit.
-- **Dynamic `price_data` not fixed Prices.** Token count is a free-form integer, so a fixed Price object cannot represent every possible purchase. One Product is reused across all purchases for correct Stripe reporting attribution.
-- **Fresh Stripe Customer per checkout, not a persistent one per tenant.** A new Stripe Customer is created on every purchase using the billing details the user enters at that point. The previous approach reused a single persistent Customer per tenant and called `stripe.Customer.modify` on every purchase to overwrite its name, email, and address — which corrupted the customer record on subsequent purchases, since the Stripe Customer (and its attached invoice) for an earlier purchase would then show the billing details from a later one. Creating a fresh Customer per checkout means each invoice is permanently attached to a Customer record whose name, email, and address exactly reflect what the user entered for that specific purchase. Because there is no persistent Customer to pre-fill from, the billing address fields are always blank on the form; only name and email are pre-filled from the active Xero session.
-- **No billing address pre-fill from DynamoDB.** The previous implementation cached billing details (name, email, address) in `TenantBillingTable` after each purchase and read them back to pre-fill the billing details form on repeat visits. This caching is no longer done — since each checkout creates a fresh Customer, there is no persistent record to pre-fill address data from. Name and email are still pre-filled from the Xero session (not DynamoDB) as a convenience.
+- **Dynamic `price_data` not fixed Prices.** Page count is a free-form integer with graduated pricing, so a fixed Price object cannot represent every possible purchase. One Product is reused across all purchases for correct Stripe reporting attribution.
+- **Persistent Stripe Customer per tenant.** A single Stripe Customer is created on first purchase and its ID stored in `TenantBillingTable.StripeCustomerID`. Subsequent purchases call `stripe.Customer.modify` to update billing details before creating the checkout session. Invoices snapshot billing details at creation time, so historical invoices retain the details entered for that specific purchase. This replaces the earlier per-checkout customer approach.
+- **Graduated pricing via `PricingConfig`.** `service/pricing_config.py` defines graduated tiers as the single source of truth for both Python (server-side validation, Stripe session creation) and JavaScript (live price calculator via JSON serialisation). The effective per-token rate is stored in ledger entries (`PricePerTokenPence`) for audit trail; the Stripe invoice remains authoritative for exact per-tier breakdowns.
 - **No VAT.** Not VAT-registered (UK businesses below the £90k threshold). No `tax_rates` on line items.
 
 ### Testing

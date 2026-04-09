@@ -226,7 +226,7 @@ def check_load_required(tenant_id: str) -> bool:
                 logger.info("Seeded tenant record with LOADING status", tenant_id=tenant_id)
 
                 try:
-                    BillingService.adjust_token_balance(tenant_id, WELCOME_GRANT_TOKENS, source=LAST_MUTATION_SOURCE_WELCOME_GRANT)
+                    BillingService.adjust_token_balance(tenant_id, WELCOME_GRANT_TOKENS, source=LAST_MUTATION_SOURCE_WELCOME_GRANT, price_per_token_pence=0)
                     logger.info("Granted welcome tokens", tenant_id=tenant_id, token_count=WELCOME_GRANT_TOKENS)
                 except Exception:
                     logger.exception("Failed to grant welcome tokens — login continues", tenant_id=tenant_id)

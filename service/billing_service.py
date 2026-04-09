@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -186,9 +187,13 @@ class BillingService:
         }
 
     @classmethod
-    def _adjustment_ledger_item(cls, *, tenant_id: str, ledger_entry_id: str, token_delta: int, created_at: str, source: str) -> dict[str, Any]:
+    def _adjustment_ledger_item(cls, *, tenant_id: str, ledger_entry_id: str, token_delta: int, created_at: str, source: str, price_per_token_pence: float | None = None) -> dict[str, Any]:
         """Build an immutable ledger row for a manual balance adjustment."""
-        return {"TenantID": tenant_id, "LedgerEntryID": ledger_entry_id, "EntryType": ENTRY_TYPE_ADJUSTMENT, "TokenDelta": token_delta, "CreatedAt": created_at, "Source": source}
+        item: dict[str, Any] = {"TenantID": tenant_id, "LedgerEntryID": ledger_entry_id, "EntryType": ENTRY_TYPE_ADJUSTMENT, "TokenDelta": token_delta, "CreatedAt": created_at, "Source": source}
+        if price_per_token_pence is not None:
+            # DynamoDB requires Decimal for numeric types (floats are rejected).
+            item["PricePerTokenPence"] = Decimal(str(price_per_token_pence))
+        return item
 
     @classmethod
     def _raise_for_transaction_failure(cls, exc: ClientError, *, tenant_id: str, context: str) -> None:
@@ -390,7 +395,9 @@ class BillingService:
         return reservation_id
 
     @classmethod
-    def adjust_token_balance(cls, tenant_id: str, token_delta: int, *, source: str = LAST_MUTATION_SOURCE_MANUAL_ADJUSTMENT, ledger_entry_id: str | None = None) -> TokenAdjustmentResult:
+    def adjust_token_balance(
+        cls, tenant_id: str, token_delta: int, *, source: str = LAST_MUTATION_SOURCE_MANUAL_ADJUSTMENT, ledger_entry_id: str | None = None, price_per_token_pence: float | None = None
+    ) -> TokenAdjustmentResult:
         """Apply a manual token adjustment atomically to snapshot and ledger.
 
         Args:
@@ -454,7 +461,11 @@ class BillingService:
             {
                 "Put": {
                     "TableName": cls._tenant_token_ledger_table_name,
-                    "Item": cls._serialize_item(cls._adjustment_ledger_item(tenant_id=tenant_id, ledger_entry_id=ledger_entry_id, token_delta=token_delta, created_at=adjusted_at, source=source)),
+                    "Item": cls._serialize_item(
+                        cls._adjustment_ledger_item(
+                            tenant_id=tenant_id, ledger_entry_id=ledger_entry_id, token_delta=token_delta, created_at=adjusted_at, source=source, price_per_token_pence=price_per_token_pence
+                        )
+                    ),
                     "ConditionExpression": "attribute_not_exists(TenantID) AND attribute_not_exists(LedgerEntryID)",
                 }
             },

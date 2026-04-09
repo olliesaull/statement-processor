@@ -23,8 +23,9 @@ from core.item_classification import guess_statement_item_type
 from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, PaymentNumberMap, StatementItemPayload, StatementRowsByHeader, StatementRowViewModel, XeroDocumentPayload
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
+from pricing_config import MAX_TOKENS, MIN_TOKENS, PricingConfig
 from stripe_repository import StripeRepository
-from stripe_service import STRIPE_MAX_TOKENS, STRIPE_MIN_TOKENS, STRIPE_PRICE_PER_TOKEN_PENCE, StripeService
+from stripe_service import StripeService
 from sync import check_load_required, sync_data
 from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
@@ -451,10 +452,10 @@ def _reserve_statement_uploads(tenant_id: str | None, prepared_uploads: list[Pre
         return BillingService.reserve_statement_uploads(tenant_id, prepared_uploads)
     except InsufficientTokensError:
         logger.info("Upload blocked; token reservation failed due to insufficient balance", tenant_id=tenant_id, files=len(prepared_uploads))
-        error_messages.append("The tenant no longer has enough available tokens for this upload. Refresh the page, remove some PDFs, or buy more tokens before trying again.")
+        error_messages.append("The tenant no longer has enough available pages for this upload. Refresh the page, remove some PDFs, or buy more pages before trying again.")
     except BillingServiceError as exc:
         logger.exception("Upload blocked; token reservation failed", tenant_id=tenant_id, files=len(prepared_uploads), error=exc)
-        error_messages.append("Could not reserve tokens for this upload. Please try again.")
+        error_messages.append("Could not reserve pages for this upload. Please try again.")
     return []
 
 
@@ -1728,67 +1729,81 @@ def pricing():
     return render_template("pricing.html")
 
 
-@app.route("/buy-tokens")
+@app.route("/buy-pages")
 @xero_token_required
 @route_handler_logging
 def buy_tokens():
-    """Render the token purchase form with current balance and pricing info."""
+    """Render the token purchase form with current balance and graduated pricing info."""
     tenant_id = session.get("xero_tenant_id")
     token_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
-    return render_template("buy_tokens.html", token_balance=token_balance, min_tokens=STRIPE_MIN_TOKENS, max_tokens=STRIPE_MAX_TOKENS, price_pence=STRIPE_PRICE_PER_TOKEN_PENCE, error=None)
+    tenants = session.get("xero_tenants", [])
+    # Pre-select tenant from query param if provided (does NOT switch session tenant).
+    preselected_tenant_id = request.args.get("tenant_id", tenant_id)
+    return render_template(
+        "buy_tokens.html",
+        token_balance=token_balance,
+        min_tokens=MIN_TOKENS,
+        max_tokens=MAX_TOKENS,
+        pricing_tiers_json=PricingConfig.tiers_as_json(),
+        tenants=tenants,
+        preselected_tenant_id=preselected_tenant_id,
+        current_tenant_id=tenant_id,
+        error=None,
+    )
 
 
-@app.route("/buy-tokens", methods=["POST"])
+@app.route("/buy-pages", methods=["POST"])
 @xero_token_required
 @route_handler_logging
 def buy_tokens_post():
-    """Validate token count, store in session, and redirect to billing details.
-
-    Validates the submitted token count against configured min/max limits.
-    On success the count is stored in ``session["pending_token_count"]`` for
-    the billing details step to consume; the user is then redirected to
-    ``/billing-details`` to enter invoice/billing information before Stripe
-    checkout is created.
-    """
-    tenant_id = session.get("xero_tenant_id")
+    """Validate token count and selected tenant, store in session, redirect to billing."""
     token_count_raw = request.form.get("token_count", "").strip()
+    selected_tenant_id = request.form.get("selected_tenant_id", "").strip()
 
-    # Validate input — re-render form on error (this is a form POST, not AJAX;
-    # JSON responses would render as raw text in the browser).
+    # Validate the selected tenant belongs to this user.
+    tenants = session.get("xero_tenants", [])
+    valid_tenant_ids = {t.get("tenantId") for t in tenants}
+    if selected_tenant_id not in valid_tenant_ids:
+        selected_tenant_id = session.get("xero_tenant_id")
+
     try:
         token_count = int(token_count_raw)
     except (ValueError, TypeError):
-        token_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
+        token_balance = TenantBillingRepository.get_tenant_token_balance(selected_tenant_id)
         return (
             render_template(
                 "buy_tokens.html",
                 token_balance=token_balance,
-                error="Please enter a valid number of tokens.",
-                min_tokens=STRIPE_MIN_TOKENS,
-                max_tokens=STRIPE_MAX_TOKENS,
-                price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
+                error="Please enter a valid number of pages.",
+                min_tokens=MIN_TOKENS,
+                max_tokens=MAX_TOKENS,
+                pricing_tiers_json=PricingConfig.tiers_as_json(),
+                tenants=tenants,
+                preselected_tenant_id=selected_tenant_id,
+                current_tenant_id=session.get("xero_tenant_id"),
             ),
             400,
         )
 
-    if not STRIPE_MIN_TOKENS <= token_count <= STRIPE_MAX_TOKENS:
-        token_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
+    if not MIN_TOKENS <= token_count <= MAX_TOKENS:
+        token_balance = TenantBillingRepository.get_tenant_token_balance(selected_tenant_id)
         return (
             render_template(
                 "buy_tokens.html",
                 token_balance=token_balance,
-                error=f"Token count must be between {STRIPE_MIN_TOKENS} and {STRIPE_MAX_TOKENS}.",
-                min_tokens=STRIPE_MIN_TOKENS,
-                max_tokens=STRIPE_MAX_TOKENS,
-                price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
+                error=f"Please enter between {MIN_TOKENS} and {MAX_TOKENS} pages.",
+                min_tokens=MIN_TOKENS,
+                max_tokens=MAX_TOKENS,
+                pricing_tiers_json=PricingConfig.tiers_as_json(),
+                tenants=tenants,
+                preselected_tenant_id=selected_tenant_id,
+                current_tenant_id=session.get("xero_tenant_id"),
             ),
             400,
         )
 
-    # Store validated token count in session for the billing details step.
-    # Consumed (popped) by POST /api/checkout/create after a successful Stripe
-    # session is created so that retrying the billing form keeps the count.
     session["pending_token_count"] = token_count
+    session["pending_purchase_tenant_id"] = selected_tenant_id
     return redirect(url_for("billing_details"))
 
 
@@ -1796,56 +1811,26 @@ def buy_tokens_post():
 @xero_token_required
 @route_handler_logging
 def billing_details():
-    """Render the billing details form for a token purchase.
-
-    Requires ``session["pending_token_count"]`` to be set by
-    ``POST /buy-tokens``; redirects back to ``/buy-tokens`` if absent so the
-    user cannot land here directly without selecting a token count first.
-
-    Name and email are pre-filled from the Xero session only. Address fields
-    are always blank — each purchase creates a fresh Stripe Customer, so there
-    is no persistent customer record to pre-fill address data from.
-    """
-    if not session.get("pending_token_count"):
-        # User landed here without going through the token count step.
+    """Render billing form with graduated pricing total and optional pre-fill from Stripe."""
+    token_count = session.get("pending_token_count")
+    if not token_count:
         return redirect(url_for("buy_tokens"))
-    return render_template(
-        "billing_details.html",
-        token_count=session["pending_token_count"],
-        price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
-        default_email=session.get("xero_user_email", ""),
-        default_name=session.get("xero_tenant_name", ""),
-    )
+
+    total_pence = PricingConfig.calculate_total_pence(token_count)
+
+    return render_template("billing_details.html", token_count=token_count, total_pence=total_pence, default_email=session.get("xero_user_email", ""), default_name=session.get("xero_tenant_name", ""))
 
 
 @app.route("/api/checkout/create", methods=["POST"])
 @xero_token_required
 @route_handler_logging
 def checkout_create():
-    """Accept billing details, create a fresh Stripe Customer, and create a Checkout Session.
+    """Accept billing details, create/reuse Stripe Customer, and create a Checkout Session.
 
-    Reads the token count from ``session["pending_token_count"]`` (set by
-    ``POST /buy-tokens``). Validates the required billing fields submitted via
-    the billing details form. On validation failure the billing form is
-    re-rendered with an error message and the session key is preserved so the
-    user can correct and resubmit without losing their token count selection.
-
-    On success:
-
-    1. A fresh Stripe Customer is created with the user-provided billing details.
-       A new customer per checkout means each invoice is attached to a customer
-       whose name, email, and address exactly match what was entered — no previous
-       purchase's customer record is ever overwritten.
-    2. A Stripe Checkout Session is created and the browser is redirected to
-       the hosted payment page.
-    3. ``session["pending_token_count"]`` is consumed only after the Stripe
-       session is successfully created.
+    Uses graduated pricing (PricingConfig) and persistent Stripe customers.
     """
     tenant_id = session.get("xero_tenant_id")
 
-    # Guard: token count must have been set by POST /buy-tokens. Redirect back
-    # if the user navigated here directly (e.g. via back button after a prior
-    # successful checkout that already consumed the session key).
     token_count = session.get("pending_token_count")
     if not token_count:
         return redirect(url_for("buy_tokens"))
@@ -1861,8 +1846,6 @@ def checkout_create():
     billing_country = request.form.get("billing_country", "").strip()
 
     # Validate required fields — re-render billing form on failure.
-    # session["pending_token_count"] is intentionally NOT popped here so the
-    # user can correct errors and resubmit without restarting from /buy-tokens.
     missing = []
     if not billing_name:
         missing.append("Name")
@@ -1876,13 +1859,12 @@ def checkout_create():
         missing.append("Country")
 
     if missing:
+        total_pence = PricingConfig.calculate_total_pence(token_count)
         return (
             render_template(
                 "billing_details.html",
                 token_count=token_count,
-                price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
-                # Re-fill the form with what the user typed so they only need to
-                # correct the missing fields rather than re-enter everything.
+                total_pence=total_pence,
                 saved=request.form,
                 default_email=session.get("xero_user_email", ""),
                 default_name=session.get("xero_tenant_name", ""),
@@ -1891,32 +1873,42 @@ def checkout_create():
             400,
         )
 
-    # Build URLs — {CHECKOUT_SESSION_ID} is a Stripe template literal substituted
-    # by Stripe before redirecting the browser to the success page.
+    # Determine which tenant this purchase is for (validated against session).
+    purchase_tenant_id = session.get("pending_purchase_tenant_id", tenant_id)
+    tenants = session.get("xero_tenants", [])
+    valid_tenant_ids = {t.get("tenantId") for t in tenants}
+    if purchase_tenant_id not in valid_tenant_ids:
+        logger.warning("Purchase tenant not in user's tenant list", purchase_tenant_id=purchase_tenant_id)
+        return redirect(url_for("buy_tokens"))
+
+    # Calculate graduated price.
+    total_amount_pence = PricingConfig.calculate_total_pence(token_count)
+
+    address = {"line1": billing_line1, "line2": billing_line2, "city": billing_city, "state": billing_state, "postal_code": billing_postal_code, "country": billing_country}
+
     success_url = url_for("checkout_success", _external=True) + "?session_id={CHECKOUT_SESSION_ID}"
     cancel_url = url_for("checkout_cancel", _external=True)
 
     try:
-        # Create a fresh Stripe Customer for this purchase with the user-provided billing
-        # details. A new customer per checkout means each invoice is attached to a customer
-        # whose name, email, and address exactly match what was entered — no previous
-        # purchase's customer record is ever overwritten.
-        customer_id = stripe_service.create_customer(
-            name=billing_name,
-            email=billing_email,
-            address={"line1": billing_line1, "line2": billing_line2, "city": billing_city, "state": billing_state, "postal_code": billing_postal_code, "country": billing_country},
-            tenant_id=tenant_id,
+        # Persistent customer: reuse existing or create new.
+        existing_customer_id = TenantBillingRepository.get_stripe_customer_id(purchase_tenant_id)
+        if existing_customer_id:
+            stripe_service.update_customer(customer_id=existing_customer_id, name=billing_name, email=billing_email, address=address)
+            customer_id = existing_customer_id
+        else:
+            customer_id = stripe_service.create_customer(name=billing_name, email=billing_email, address=address, tenant_id=purchase_tenant_id)
+            TenantBillingRepository.set_stripe_customer_id(purchase_tenant_id, customer_id)
+
+        stripe_session = stripe_service.create_checkout_session(
+            customer_id=customer_id, token_count=token_count, total_amount_pence=total_amount_pence, tenant_id=purchase_tenant_id, success_url=success_url, cancel_url=cancel_url
         )
-        stripe_session = stripe_service.create_checkout_session(customer_id=customer_id, token_count=token_count, tenant_id=tenant_id, success_url=success_url, cancel_url=cancel_url)
     except stripe.StripeError:
-        logger.exception("Failed to create Stripe checkout session", tenant_id=tenant_id)
+        logger.exception("Failed to create Stripe checkout session", tenant_id=purchase_tenant_id)
         ref = secrets.token_hex(8)
         return redirect(url_for("checkout_failed", ref=ref))
 
-    # Consume the pending token count only after a successful Stripe session
-    # creation so that a Stripe API failure leaves the session key intact and
-    # the user can retry from /billing-details without re-selecting token count.
     session.pop("pending_token_count", None)
+    session.pop("pending_purchase_tenant_id", None)
 
     return redirect(stripe_session.url, code=303)
 
@@ -1967,11 +1959,11 @@ def checkout_success():
 
     token_count = int(stripe_session.metadata["token_count"])
 
-    # Credit tokens. ledger_entry_id ties this ledger row to the Stripe session
-    # in StripeEventStoreTable, enabling audit cross-reference and making the
-    # ledger write conditionally idempotent via attribute_not_exists.
+    # Credit tokens with effective rate for audit trail. ledger_entry_id ties
+    # this ledger row to the Stripe session in StripeEventStoreTable.
+    effective_rate = PricingConfig.effective_rate_pence(token_count)
     ledger_entry_id = f"purchase#{session_id}"
-    BillingService.adjust_token_balance(tenant_id, token_count, source=LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, ledger_entry_id=ledger_entry_id)
+    BillingService.adjust_token_balance(tenant_id, token_count, source=LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, ledger_entry_id=ledger_entry_id, price_per_token_pence=effective_rate)
 
     # Mark session as processed so page refreshes don't re-credit.
     StripeRepository.record_processed_session(session_id=session_id, tenant_id=tenant_id, tokens_credited=token_count, ledger_entry_id=ledger_entry_id)

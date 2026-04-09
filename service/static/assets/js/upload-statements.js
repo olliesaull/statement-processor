@@ -222,7 +222,7 @@ function setPreflightSummaryFromPayload(payload) {
   const availableTokens = Number.isFinite(payload.available_tokens) ? payload.available_tokens : 0;
   const shortfall = Number.isFinite(payload.shortfall) ? payload.shortfall : 0;
   const pageLabel = totalPages === 1 ? "page" : "pages";
-  const tokenLabel = availableTokens === 1 ? "token" : "tokens";
+  const tokenLabel = availableTokens === 1 ? "page" : "pages";
 
   if (payload.has_errors) {
     setPreflightSummary("error", "Server validation failed for one or more PDFs. Fix the files marked above before uploading.");
@@ -237,12 +237,12 @@ function setPreflightSummaryFromPayload(payload) {
   if (!payload.is_sufficient) {
     // Read the buy-tokens URL from the form's data attribute (set server-side via url_for),
     // falling back to the hardcoded path if the attribute is missing.
-    const buyUrl = uploadForm ? uploadForm.dataset.buyTokensUrl || "/buy-tokens" : "/buy-tokens";
+    const buyUrl = uploadForm ? uploadForm.dataset.buyTokensUrl || "/buy-pages" : "/buy-pages";
     // Values are server-supplied integers — no XSS risk using innerHTML here.
     uploadPreflightSummary.innerHTML =
       `Server confirmed ${totalPages} ${pageLabel}. ` +
       `${availableTokens} ${tokenLabel} available, short by ${shortfall}. ` +
-      `<a href="${buyUrl}" class="btn btn-sm btn-outline-primary ms-2">Buy Tokens</a>`;
+      `<a href="${buyUrl}" class="btn btn-sm btn-outline-primary ms-2">Buy Pages</a>`;
     uploadPreflightSummary.dataset.preflightState = "error";
     return;
   }
@@ -324,7 +324,7 @@ async function runPreflight() {
   preflightState.canSubmit = false;
   preflightState.pending = true;
   setPreflightPending(entries);
-  setPreflightSummary("checking", "Checking page counts and token availability...");
+  setPreflightSummary("checking", "Checking page counts and page availability...");
   updatePageSummary();
   updateSubmitState();
 

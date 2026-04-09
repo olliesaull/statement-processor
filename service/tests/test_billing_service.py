@@ -246,3 +246,58 @@ def test_reserve_confirmed_statement_raises_on_insufficient_tokens(monkeypatch) 
         pass
     else:  # pragma: no cover
         raise AssertionError("Expected InsufficientTokensError")
+
+
+# --- price_per_token_pence in ledger entries ---
+
+
+def test_adjust_token_balance_includes_price_per_token_pence_when_provided(monkeypatch) -> None:
+    """When price_per_token_pence is given, it should appear in the ledger entry."""
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_transact_write_items(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(BillingService, "_ddb_client", type("FakeClient", (), {"transact_write_items": staticmethod(_fake_transact_write_items)}))
+
+    result = BillingService.adjust_token_balance("tenant-1", 100, source="stripe-checkout", price_per_token_pence=9.25)
+
+    assert result.tenant_id == "tenant-1"
+    transact_items = calls[0]["TransactItems"]
+    ledger_put = transact_items[1]["Put"]["Item"]
+    assert ledger_put["PricePerTokenPence"] == {"N": "9.25"}
+
+
+def test_adjust_token_balance_omits_price_per_token_pence_when_not_provided(monkeypatch) -> None:
+    """When price_per_token_pence is not given, the ledger entry should not contain it."""
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_transact_write_items(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(BillingService, "_ddb_client", type("FakeClient", (), {"transact_write_items": staticmethod(_fake_transact_write_items)}))
+
+    BillingService.adjust_token_balance("tenant-1", 25)
+
+    transact_items = calls[0]["TransactItems"]
+    ledger_put = transact_items[1]["Put"]["Item"]
+    assert "PricePerTokenPence" not in ledger_put
+
+
+def test_adjust_token_balance_stores_zero_price_for_welcome_grant(monkeypatch) -> None:
+    """Welcome grants should store price_per_token_pence=0."""
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_transact_write_items(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(BillingService, "_ddb_client", type("FakeClient", (), {"transact_write_items": staticmethod(_fake_transact_write_items)}))
+
+    BillingService.adjust_token_balance("tenant-1", 5, source="welcome-grant", price_per_token_pence=0)
+
+    transact_items = calls[0]["TransactItems"]
+    ledger_put = transact_items[1]["Put"]["Item"]
+    assert ledger_put["PricePerTokenPence"] == {"N": "0"}

@@ -85,7 +85,7 @@ def welcome_grant_banner_provider(_tenant_id: str) -> Banner:
         Success banner with welcome message and upload link.
     """
     return Banner(
-        message=f"Welcome! You've been granted {WELCOME_GRANT_TOKENS} free tokens to try things out.",
+        message=f"Welcome! You've been granted {WELCOME_GRANT_TOKENS} free pages to try things out.",
         alert_type="success",
         link_text="Upload a statement",
         link_url="/upload-statements",

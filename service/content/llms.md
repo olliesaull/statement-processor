@@ -21,17 +21,17 @@ Statement Processor is built for accountants, bookkeepers, and businesses that u
 - Side-by-side reconciliation view with match suggestions
 - Excel export of reconciliation results
 - Multi-tenant support (manage multiple Xero organisations)
-- Pay-as-you-go token billing (no subscription)
+- Pay-as-you-go billing per page (no subscription)
 
 ## Pricing
 
-- 5 free tokens for every new Xero organisation connected
-- **£0.10 per token** (1 token = 1 PDF page processed)
-- Minimum purchase: 10 tokens (£1.00)
-- Tokens never expire
+- 5 free pages for every new Xero organisation connected
+- **£0.10 per page** (1 page = 1 PDF page processed)
+- Minimum purchase: 10 pages (£1.00)
+- Unused pages never expire
 - No subscription or commitment
 - All prices exclude VAT (charged at the prevailing UK rate)
-- Tokens are non-refundable once purchased
+- Pages are non-refundable once purchased
 
 ## Links
 

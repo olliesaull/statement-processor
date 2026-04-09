@@ -62,42 +62,64 @@ def test_create_customer_includes_tenant_id_in_metadata() -> None:
 
 
 # ---------------------------------------------------------------------------
+# update_customer
+# ---------------------------------------------------------------------------
+
+
+def test_update_customer_updates_billing_details() -> None:
+    """update_customer should call stripe.Customer.modify with the new details."""
+    with patch.object(stripe_service_module.stripe.Customer, "modify") as mock_modify:
+        service = StripeService()
+        address = {"line1": "3 New St", "line2": "", "city": "London", "state": "", "postal_code": "SW1A 2AA", "country": "GB"}
+        service.update_customer(customer_id="cus_existing", name="New Name", email="new@email.com", address=address)
+
+    mock_modify.assert_called_once_with("cus_existing", name="New Name", email="new@email.com", address=address)
+
+
+# ---------------------------------------------------------------------------
 # create_checkout_session — price calculation
 # ---------------------------------------------------------------------------
 
 
-def test_create_checkout_session_computes_correct_unit_amount(monkeypatch) -> None:
-    """unit_amount must equal token_count x STRIPE_PRICE_PER_TOKEN_PENCE."""
+def test_create_checkout_session_uses_provided_total_amount(monkeypatch) -> None:
+    """unit_amount must match the total_amount_pence passed by the caller."""
     mock_session = _make_session()
-    monkeypatch.setattr(stripe_service_module, "STRIPE_PRICE_PER_TOKEN_PENCE", 10)
     monkeypatch.setattr(stripe_service_module, "STRIPE_PRODUCT_ID", "prod_test")
     monkeypatch.setattr(stripe_service_module, "STRIPE_CURRENCY", "gbp")
 
     with patch.object(stripe_service_module.stripe.checkout.Session, "create", return_value=mock_session) as mock_create:
         service = StripeService()
         service.create_checkout_session(
-            customer_id="cus_test", token_count=50, tenant_id="tenant-1", success_url="https://example.com/success?session_id={CHECKOUT_SESSION_ID}", cancel_url="https://example.com/cancel"
+            customer_id="cus_test",
+            token_count=750,
+            total_amount_pence=7249,
+            tenant_id="tenant-1",
+            success_url="https://example.com/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url="https://example.com/cancel",
         )
 
     call_kwargs = mock_create.call_args.kwargs
     line_items = call_kwargs["line_items"]
-    assert len(line_items) == 1
-    # 50 tokens x 10 pence = 500 pence (£5.00)
-    assert line_items[0]["price_data"]["unit_amount"] == 500
+    # Total amount passed through directly — graduated pricing computed by caller
+    assert line_items[0]["price_data"]["unit_amount"] == 7249
     assert line_items[0]["quantity"] == 1
 
 
 def test_create_checkout_session_passes_correct_metadata(monkeypatch) -> None:
     """tenant_id and token_count must be present in session metadata."""
     mock_session = _make_session()
-    monkeypatch.setattr(stripe_service_module, "STRIPE_PRICE_PER_TOKEN_PENCE", 10)
     monkeypatch.setattr(stripe_service_module, "STRIPE_PRODUCT_ID", "prod_test")
     monkeypatch.setattr(stripe_service_module, "STRIPE_CURRENCY", "gbp")
 
     with patch.object(stripe_service_module.stripe.checkout.Session, "create", return_value=mock_session) as mock_create:
         service = StripeService()
         service.create_checkout_session(
-            customer_id="cus_test", token_count=100, tenant_id="tenant-abc", success_url="https://example.com/success?session_id={CHECKOUT_SESSION_ID}", cancel_url="https://example.com/cancel"
+            customer_id="cus_test",
+            token_count=100,
+            total_amount_pence=1000,
+            tenant_id="tenant-abc",
+            success_url="https://example.com/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url="https://example.com/cancel",
         )
 
     call_kwargs = mock_create.call_args.kwargs
@@ -108,13 +130,12 @@ def test_create_checkout_session_passes_correct_metadata(monkeypatch) -> None:
 def test_create_checkout_session_uses_payment_mode(monkeypatch) -> None:
     """Checkout sessions must use mode='payment' (not subscription)."""
     mock_session = _make_session()
-    monkeypatch.setattr(stripe_service_module, "STRIPE_PRICE_PER_TOKEN_PENCE", 10)
     monkeypatch.setattr(stripe_service_module, "STRIPE_PRODUCT_ID", "prod_test")
     monkeypatch.setattr(stripe_service_module, "STRIPE_CURRENCY", "gbp")
 
     with patch.object(stripe_service_module.stripe.checkout.Session, "create", return_value=mock_session) as mock_create:
         service = StripeService()
-        service.create_checkout_session(customer_id="cus_test", token_count=10, tenant_id="tenant-1", success_url="https://example.com/s", cancel_url="https://example.com/c")
+        service.create_checkout_session(customer_id="cus_test", token_count=10, total_amount_pence=100, tenant_id="tenant-1", success_url="https://example.com/s", cancel_url="https://example.com/c")
 
     assert mock_create.call_args.kwargs["mode"] == "payment"
 
@@ -122,13 +143,12 @@ def test_create_checkout_session_uses_payment_mode(monkeypatch) -> None:
 def test_create_checkout_session_enables_invoice_creation(monkeypatch) -> None:
     """Invoice creation must be enabled so customers receive receipts."""
     mock_session = _make_session()
-    monkeypatch.setattr(stripe_service_module, "STRIPE_PRICE_PER_TOKEN_PENCE", 10)
     monkeypatch.setattr(stripe_service_module, "STRIPE_PRODUCT_ID", "prod_test")
     monkeypatch.setattr(stripe_service_module, "STRIPE_CURRENCY", "gbp")
 
     with patch.object(stripe_service_module.stripe.checkout.Session, "create", return_value=mock_session) as mock_create:
         service = StripeService()
-        service.create_checkout_session(customer_id="cus_test", token_count=10, tenant_id="tenant-1", success_url="https://example.com/s", cancel_url="https://example.com/c")
+        service.create_checkout_session(customer_id="cus_test", token_count=10, total_amount_pence=100, tenant_id="tenant-1", success_url="https://example.com/s", cancel_url="https://example.com/c")
 
     assert mock_create.call_args.kwargs["invoice_creation"] == {"enabled": True}
 
