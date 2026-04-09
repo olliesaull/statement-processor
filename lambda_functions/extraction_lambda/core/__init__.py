@@ -1,1 +1,1 @@
-# Core utilities for textraction lambda
+# Core utilities for extraction lambda

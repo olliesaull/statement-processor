@@ -1,4 +1,4 @@
-"""Test helpers for the textraction Lambda."""
+"""Test helpers for the extraction Lambda."""
 
 import io
 

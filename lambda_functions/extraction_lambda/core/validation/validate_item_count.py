@@ -2,7 +2,7 @@
 Best-effort validation of statement items.
 
 This module is used as a sanity-check step after we build statement JSON:
-it compares text extracted from a statement by Textract (now JSON) with text extracted
+it compares text extracted from a statement (via Bedrock) with text extracted
 via pdfplumber and tries to answer two questions:
 
 1) JSON -> PDF: Do the reference values we extracted (e.g. invoice numbers) actually

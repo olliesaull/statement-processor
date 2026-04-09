@@ -1,4 +1,4 @@
-"""Shared structured logger for the textraction Lambda."""
+"""Shared structured logger for the extraction Lambda."""
 
 import logging
 

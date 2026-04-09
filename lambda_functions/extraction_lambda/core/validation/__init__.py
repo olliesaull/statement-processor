@@ -1,1 +1,1 @@
-# Validation helpers for textraction lambda
+# Validation helpers for extraction lambda

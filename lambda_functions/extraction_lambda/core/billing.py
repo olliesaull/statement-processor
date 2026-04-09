@@ -1,4 +1,4 @@
-"""Billing settlement helpers for the async textraction workflow.
+"""Billing settlement helpers for the async extraction workflow.
 
 The web service reserves tokens before upload processing starts. This module is
 responsible for settling those reservations once the Step Functions workflow

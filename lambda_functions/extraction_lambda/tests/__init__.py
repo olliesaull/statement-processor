@@ -1,1 +1,1 @@
-"""Unit test package for the textraction Lambda."""
+"""Unit test package for the extraction Lambda."""
