@@ -8,7 +8,6 @@
     <h1 class="mb-2">Buy Pages</h1>
     <p class="page-subtitle mb-0">
       Pages are deducted as you upload statement PDFs.
-      Your current balance is <strong>{{ token_balance }}</strong> page{% if token_balance != 1 %}s{% endif %}.
     </p>
   </header>
 
@@ -16,9 +15,30 @@
     <div class="alert alert-danger" role="alert">{{ error }}</div>
   {% endif %}
 
-  <section class="page-panel" style="max-width: 480px;">
+  <section class="page-panel" style="max-width: 520px;">
     <form method="POST" action="{{ url_for('buy_tokens_post') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      {# Tenant selector — pre-filled from query param or current tenant #}
+      {% if tenants|length > 1 %}
+        <div class="mb-3">
+          <label for="selected-tenant" class="form-label fw-semibold">Purchase pages for</label>
+          <select id="selected-tenant" name="selected_tenant_id" class="form-select">
+            {% for tenant in tenants %}
+              <option value="{{ tenant.tenantId }}"
+                {% if tenant.tenantId == preselected_tenant_id %}selected{% endif %}>
+                {{ tenant.tenantName or tenant.tenantId }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+      {% else %}
+        <input type="hidden" name="selected_tenant_id" value="{{ preselected_tenant_id }}">
+        <p class="mb-3">
+          Purchasing for <strong>{{ tenants[0].tenantName if tenants else 'your tenant' }}</strong>.
+          Current balance: <strong>{{ token_balance }}</strong> page{% if token_balance != 1 %}s{% endif %}.
+        </p>
+      {% endif %}
 
       <div class="mb-3">
         <label for="token-count" class="form-label fw-semibold">Number of pages to purchase</label>
@@ -29,7 +49,7 @@
           class="form-control"
           min="{{ min_tokens }}"
           max="{{ max_tokens }}"
-          data-price-pence="{{ price_pence }}"
+          data-pricing-tiers="{{ pricing_tiers_json }}"
           data-min-tokens="{{ min_tokens }}"
           data-max-tokens="{{ max_tokens }}"
           placeholder="e.g. 50"
@@ -38,7 +58,7 @@
         <div class="form-text">Minimum {{ min_tokens }} pages, maximum {{ max_tokens }} pages.</div>
       </div>
 
-      <!-- Live price display — updated by the inline script below as the user types -->
+      <!-- Live price display — updated by the script below using graduated tiers -->
       <p class="mb-3 fw-semibold" id="price-display" aria-live="polite"></p>
 
       <button type="submit" class="btn btn-primary">Next: Billing Details &rarr;</button>
@@ -53,10 +73,26 @@
 
     if (!input || !display) return;
 
-    // pricePence is an integer cost-per-token read from the data attribute
-    // set by the backend (e.g. 10 = £0.10/token). Using a data attribute
-    // keeps the price logic server-authoritative and avoids hardcoding in JS.
-    const pricePence = parseInt(input.dataset.pricePence, 10);
+    // Graduated pricing tiers injected from the server (single source of truth).
+    // Format: [{up_to: 499, rate_pence: 10}, {up_to: 500, rate_pence: 9}, {up_to: null, rate_pence: 8}]
+    const tiers = JSON.parse(input.dataset.pricingTiers || "[]");
+
+    function calculateTotalPence(count) {
+      let total = 0;
+      let remaining = count;
+      for (const tier of tiers) {
+        if (tier.up_to === null) {
+          total += remaining * tier.rate_pence;
+          remaining = 0;
+        } else {
+          const chunk = Math.min(remaining, tier.up_to);
+          total += chunk * tier.rate_pence;
+          remaining -= chunk;
+        }
+        if (remaining <= 0) break;
+      }
+      return total;
+    }
 
     function updateDisplay() {
       const count = parseInt(input.value, 10);
@@ -66,14 +102,12 @@
         return;
       }
 
-      const totalPence = count * pricePence;
-      // Format as pounds with two decimal places (e.g. 500p → "£5.00")
+      const totalPence = calculateTotalPence(count);
       const pounds = (totalPence / 100).toFixed(2);
-      display.textContent = `${count} page${count === 1 ? "" : "s"} = £${pounds}`;
+      display.textContent = count + " page" + (count === 1 ? "" : "s") + " = \u00a3" + pounds;
     }
 
     input.addEventListener("input", updateDisplay);
-    // Run once on load in case the browser restores a previous value
     updateDisplay();
   }());
 </script>
