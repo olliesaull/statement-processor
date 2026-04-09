@@ -143,7 +143,15 @@ const setupStickyActionDocks = () => {
   });
 };
 
+let scrollProxyAbortController = null;
+
 const setupScrollProxy = () => {
+  if (scrollProxyAbortController) {
+    scrollProxyAbortController.abort();
+  }
+  scrollProxyAbortController = new AbortController();
+  const signal = scrollProxyAbortController.signal;
+
   const wrapper = document.querySelector(".statement-table-wrapper");
   const proxy = document.getElementById("scroll-proxy");
   if (!wrapper || !proxy) return;
@@ -189,20 +197,20 @@ const setupScrollProxy = () => {
     syncing = true;
     wrapper.scrollLeft = proxy.scrollLeft;
     syncing = false;
-  });
+  }, { signal });
 
   wrapper.addEventListener("scroll", () => {
     if (syncing) return;
     syncing = true;
     proxy.scrollLeft = wrapper.scrollLeft;
     syncing = false;
-  });
+  }, { signal });
 
-  window.addEventListener("scroll", syncVisibility, { passive: true });
+  window.addEventListener("scroll", syncVisibility, { passive: true, signal });
   window.addEventListener("resize", () => {
     syncWidths();
     syncVisibility();
-  });
+  }, { signal });
 
   syncWidths();
   syncVisibility();
