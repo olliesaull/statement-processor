@@ -1,7 +1,8 @@
-"""Loaders for markdown-based content (FAQ, legal pages).
+"""Loaders for markdown-based content (FAQ, legal pages, llms.txt).
 
 FAQ content uses a YAML index (faq.yaml) pointing to individual markdown
 answer files.  Legal pages are standalone markdown files converted to HTML.
+llms.txt content is a single markdown file served as raw text.
 """
 
 import os
@@ -58,3 +59,23 @@ def load_legal_page(filename: str, legal_dir: str | None = None) -> str:
     md_path = os.path.join(legal_dir, filename)
     with open(md_path, encoding="utf-8") as f:
         return markdown.markdown(f.read())
+
+
+def load_llms_txt(content_dir: str | None = None) -> str:
+    """Load llms.txt markdown content as raw text (no HTML conversion).
+
+    The llms.txt spec (llmstxt.org) defines a markdown file served at /llms.txt
+    that gives LLMs a structured overview of a site. Raw markdown is returned
+    rather than HTML because LLMs consume it directly.
+
+    Args:
+        content_dir: Override directory containing llms.md.
+                     Defaults to ``service/content/``.
+
+    Returns:
+        Raw markdown string.
+    """
+    content_dir = content_dir or _CONTENT_DIR
+    md_path = os.path.join(content_dir, "llms.md")
+    with open(md_path, encoding="utf-8") as f:
+        return f.read()

@@ -1,4 +1,4 @@
-"""Tests for the FAQ and legal page content loaders."""
+"""Tests for the FAQ, legal page, and llms.txt content loaders."""
 
 import os
 import tempfile
@@ -105,3 +105,25 @@ class TestLoadLegalPage:
 
         with pytest.raises(FileNotFoundError):
             load_legal_page("nonexistent.md", legal_dir=str(legal_dir))
+
+
+class TestLoadLlmsTxt:
+    """Tests for load_llms_txt()."""
+
+    def test_returns_raw_markdown(self, tmp_path):
+        """Returns file content as-is, no HTML conversion."""
+        from utils.content import load_llms_txt
+
+        md_file = tmp_path / "llms.md"
+        md_file.write_text("# Statement Processor\n\n> A summary.\n")
+
+        result = load_llms_txt(content_dir=str(tmp_path))
+
+        assert result == "# Statement Processor\n\n> A summary.\n"
+
+    def test_missing_file_raises(self, tmp_path):
+        """Raises FileNotFoundError when llms.md is missing."""
+        from utils.content import load_llms_txt
+
+        with pytest.raises(FileNotFoundError):
+            load_llms_txt(content_dir=str(tmp_path))
