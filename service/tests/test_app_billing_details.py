@@ -1,6 +1,6 @@
 """Tests for the billing details purchase flow.
 
-Covers POST /buy-tokens, GET /billing-details, and the billing validation
+Covers POST /buy-pages, GET /billing-details, and the billing validation
 guard in POST /api/checkout/create. Auth helpers are monkeypatched so the
 xero_token_required decorator passes on all requests. CSRF is disabled.
 Sessions are managed via Flask-Session configured with a filesystem backend
@@ -63,7 +63,7 @@ def client(_app, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# POST /buy-tokens
+# POST /buy-pages
 # ---------------------------------------------------------------------------
 
 
@@ -73,7 +73,7 @@ def test_buy_tokens_post_valid_stores_token_count_in_session_and_redirects(clien
 
     monkeypatch.setattr(tenant_billing_repository.TenantBillingRepository, "get_tenant_token_balance", classmethod(lambda cls, tid: 0))
 
-    response = client.post("/buy-tokens", data={"token_count": "50"})
+    response = client.post("/buy-pages", data={"token_count": "50"})
 
     assert response.status_code == 302
     assert "/billing-details" in response.headers["Location"]
@@ -89,7 +89,7 @@ def test_buy_tokens_post_non_numeric_returns_400(client, monkeypatch) -> None:
 
     monkeypatch.setattr(tenant_billing_repository.TenantBillingRepository, "get_tenant_token_balance", classmethod(lambda cls, tid: 0))
 
-    response = client.post("/buy-tokens", data={"token_count": "notanumber"})
+    response = client.post("/buy-pages", data={"token_count": "notanumber"})
 
     assert response.status_code == 400
     assert b"valid number" in response.data
@@ -102,7 +102,7 @@ def test_buy_tokens_post_below_minimum_returns_400(client, monkeypatch) -> None:
     monkeypatch.setattr(tenant_billing_repository.TenantBillingRepository, "get_tenant_token_balance", classmethod(lambda cls, tid: 0))
 
     # STRIPE_MIN_TOKENS defaults to 10; submit 1.
-    response = client.post("/buy-tokens", data={"token_count": "1"})
+    response = client.post("/buy-pages", data={"token_count": "1"})
 
     assert response.status_code == 400
     assert b"between" in response.data
@@ -115,7 +115,7 @@ def test_buy_tokens_post_above_maximum_returns_400(client, monkeypatch) -> None:
     monkeypatch.setattr(tenant_billing_repository.TenantBillingRepository, "get_tenant_token_balance", classmethod(lambda cls, tid: 0))
 
     # STRIPE_MAX_TOKENS defaults to 10000; submit 99999.
-    response = client.post("/buy-tokens", data={"token_count": "99999"})
+    response = client.post("/buy-pages", data={"token_count": "99999"})
 
     assert response.status_code == 400
     assert b"between" in response.data
@@ -127,7 +127,7 @@ def test_buy_tokens_post_above_maximum_returns_400(client, monkeypatch) -> None:
 
 
 def test_billing_details_get_redirects_when_no_pending_token_count(client, monkeypatch) -> None:
-    """GET /billing-details must redirect to /buy-tokens when session key is absent."""
+    """GET /billing-details must redirect to /buy-pages when session key is absent."""
     # Ensure session does NOT contain pending_token_count.
     with client.session_transaction() as sess:
         sess.pop("pending_token_count", None)
@@ -135,7 +135,7 @@ def test_billing_details_get_redirects_when_no_pending_token_count(client, monke
     response = client.get("/billing-details")
 
     assert response.status_code == 302
-    assert "/buy-tokens" in response.headers["Location"]
+    assert "/buy-pages" in response.headers["Location"]
 
 
 def test_billing_details_get_renders_form_with_pending_token_count(client, monkeypatch) -> None:
@@ -172,11 +172,11 @@ def test_checkout_create_missing_required_billing_fields_returns_400(client, mon
 
 
 def test_checkout_create_redirects_to_buy_tokens_when_no_pending_count(client) -> None:
-    """POST /api/checkout/create must redirect to /buy-tokens when session key is absent."""
+    """POST /api/checkout/create must redirect to /buy-pages when session key is absent."""
     with client.session_transaction() as sess:
         sess.pop("pending_token_count", None)
 
     response = client.post("/api/checkout/create", data={"billing_name": "Acme", "billing_email": "a@b.com", "billing_line1": "1 St", "billing_postal_code": "EC1A", "billing_country": "GB"})
 
     assert response.status_code == 302
-    assert "/buy-tokens" in response.headers["Location"]
+    assert "/buy-pages" in response.headers["Location"]

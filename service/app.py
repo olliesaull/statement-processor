@@ -451,10 +451,10 @@ def _reserve_statement_uploads(tenant_id: str | None, prepared_uploads: list[Pre
         return BillingService.reserve_statement_uploads(tenant_id, prepared_uploads)
     except InsufficientTokensError:
         logger.info("Upload blocked; token reservation failed due to insufficient balance", tenant_id=tenant_id, files=len(prepared_uploads))
-        error_messages.append("The tenant no longer has enough available tokens for this upload. Refresh the page, remove some PDFs, or buy more tokens before trying again.")
+        error_messages.append("The tenant no longer has enough available pages for this upload. Refresh the page, remove some PDFs, or buy more pages before trying again.")
     except BillingServiceError as exc:
         logger.exception("Upload blocked; token reservation failed", tenant_id=tenant_id, files=len(prepared_uploads), error=exc)
-        error_messages.append("Could not reserve tokens for this upload. Please try again.")
+        error_messages.append("Could not reserve pages for this upload. Please try again.")
     return []
 
 
@@ -1728,7 +1728,7 @@ def pricing():
     return render_template("pricing.html")
 
 
-@app.route("/buy-tokens")
+@app.route("/buy-pages")
 @xero_token_required
 @route_handler_logging
 def buy_tokens():
@@ -1738,7 +1738,7 @@ def buy_tokens():
     return render_template("buy_tokens.html", token_balance=token_balance, min_tokens=STRIPE_MIN_TOKENS, max_tokens=STRIPE_MAX_TOKENS, price_pence=STRIPE_PRICE_PER_TOKEN_PENCE, error=None)
 
 
-@app.route("/buy-tokens", methods=["POST"])
+@app.route("/buy-pages", methods=["POST"])
 @xero_token_required
 @route_handler_logging
 def buy_tokens_post():
@@ -1763,7 +1763,7 @@ def buy_tokens_post():
             render_template(
                 "buy_tokens.html",
                 token_balance=token_balance,
-                error="Please enter a valid number of tokens.",
+                error="Please enter a valid number of pages.",
                 min_tokens=STRIPE_MIN_TOKENS,
                 max_tokens=STRIPE_MAX_TOKENS,
                 price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,
@@ -1777,7 +1777,7 @@ def buy_tokens_post():
             render_template(
                 "buy_tokens.html",
                 token_balance=token_balance,
-                error=f"Token count must be between {STRIPE_MIN_TOKENS} and {STRIPE_MAX_TOKENS}.",
+                error=f"Please enter between {STRIPE_MIN_TOKENS} and {STRIPE_MAX_TOKENS} pages.",
                 min_tokens=STRIPE_MIN_TOKENS,
                 max_tokens=STRIPE_MAX_TOKENS,
                 price_pence=STRIPE_PRICE_PER_TOKEN_PENCE,

@@ -1,14 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Buy Tokens - Statement Processor{% endblock %}
+{% block title %}Buy Pages - Statement Processor{% endblock %}
 
 {% block content %}
 <div class="page-main">
   <header class="page-header">
-    <p class="page-kicker mb-1">Token Purchase</p>
-    <h1 class="mb-2">Buy Tokens</h1>
+    <p class="page-kicker mb-1">Page Purchase</p>
+    <h1 class="mb-2">Buy Pages</h1>
     <p class="page-subtitle mb-0">
-      Tokens are deducted as you upload statement PDFs. 1 token per page.
-      Your current balance is <strong>{{ token_balance }}</strong> token{% if token_balance != 1 %}s{% endif %}.
+      Pages are deducted as you upload statement PDFs.
+      Your current balance is <strong>{{ token_balance }}</strong> page{% if token_balance != 1 %}s{% endif %}.
     </p>
   </header>
 
@@ -21,7 +21,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <div class="mb-3">
-        <label for="token-count" class="form-label fw-semibold">Number of tokens to purchase</label>
+        <label for="token-count" class="form-label fw-semibold">Number of pages to purchase</label>
         <input
           type="number"
           id="token-count"
@@ -35,7 +35,7 @@
           placeholder="e.g. 50"
           required
         >
-        <div class="form-text">Minimum {{ min_tokens }} tokens, maximum {{ max_tokens }} tokens.</div>
+        <div class="form-text">Minimum {{ min_tokens }} pages, maximum {{ max_tokens }} pages.</div>
       </div>
 
       <!-- Live price display — updated by the inline script below as the user types -->
@@ -69,7 +69,7 @@
       const totalPence = count * pricePence;
       // Format as pounds with two decimal places (e.g. 500p → "£5.00")
       const pounds = (totalPence / 100).toFixed(2);
-      display.textContent = `${count} token${count === 1 ? "" : "s"} = £${pounds}`;
+      display.textContent = `${count} page${count === 1 ? "" : "s"} = £${pounds}`;
     }
 
     input.addEventListener("input", updateDisplay);

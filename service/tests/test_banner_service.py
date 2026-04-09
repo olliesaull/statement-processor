@@ -72,7 +72,7 @@ def test_welcome_grant_provider_always_returns_banner() -> None:
 
     assert banner is not None
     assert banner.alert_type == "success"
-    assert "5 free tokens" in banner.message
+    assert "5 free pages" in banner.message
     assert banner.link_url == "/upload-statements"
     assert banner.dismissible is True
     assert banner.dismiss_key == "welcome-grant"
