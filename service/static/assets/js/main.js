@@ -85,7 +85,15 @@ const updateNavbarScrollState = () => {
   navbar.classList.toggle(NAVBAR_SCROLLED_CLASS, window.scrollY > 8);
 };
 
+let stickyDockAbortController = null;
+
 const setupStickyActionDocks = () => {
+  if (stickyDockAbortController) {
+    stickyDockAbortController.abort();
+  }
+  stickyDockAbortController = new AbortController();
+  const signal = stickyDockAbortController.signal;
+
   const docks = document.querySelectorAll("[data-sticky-dock]");
   if (!docks.length) return;
 
@@ -102,7 +110,6 @@ const setupStickyActionDocks = () => {
     };
     let shouldEnableDock = isAnchorBelowInitialViewport();
 
-    // Show the fixed dock only on pages where the real action bar starts below the first viewport.
     const syncDockVisibility = () => {
       const anchorRect = anchor.getBoundingClientRect();
       const anchorBelowViewport = anchorRect.top >= window.innerHeight;
@@ -119,17 +126,17 @@ const setupStickyActionDocks = () => {
         { threshold: 0.01 },
       );
       observer.observe(anchor);
+      signal.addEventListener("abort", () => observer.disconnect());
     } else {
-      const handleScrollFallback = () => syncDockVisibility();
-      window.addEventListener("scroll", handleScrollFallback, { passive: true });
-      handleScrollFallback();
+      window.addEventListener("scroll", syncDockVisibility, { passive: true, signal });
+      syncDockVisibility();
     }
 
     const handleResize = () => {
       shouldEnableDock = isAnchorBelowInitialViewport();
       syncDockVisibility();
     };
-    window.addEventListener("resize", handleResize);
+    window.addEventListener("resize", handleResize, { signal });
 
     syncDockVisibility();
     setTimeout(handleResize, 120);
