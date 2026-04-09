@@ -1735,10 +1735,13 @@ def pricing():
 def buy_tokens():
     """Render the token purchase form with current balance and graduated pricing info."""
     tenant_id = session.get("xero_tenant_id")
-    token_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
     tenants = session.get("xero_tenants", [])
     # Pre-select tenant from query param if provided (does NOT switch session tenant).
     preselected_tenant_id = request.args.get("tenant_id", tenant_id)
+    # Show balance for the preselected tenant, not necessarily the active one.
+    valid_tenant_ids = {t.get("tenantId") for t in tenants}
+    balance_tenant_id = preselected_tenant_id if preselected_tenant_id in valid_tenant_ids else tenant_id
+    token_balance = TenantBillingRepository.get_tenant_token_balance(balance_tenant_id)
     return render_template(
         "buy_tokens.html",
         token_balance=token_balance,
