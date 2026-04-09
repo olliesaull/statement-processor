@@ -85,7 +85,15 @@ const updateNavbarScrollState = () => {
   navbar.classList.toggle(NAVBAR_SCROLLED_CLASS, window.scrollY > 8);
 };
 
+let stickyDockAbortController = null;
+
 const setupStickyActionDocks = () => {
+  if (stickyDockAbortController) {
+    stickyDockAbortController.abort();
+  }
+  stickyDockAbortController = new AbortController();
+  const signal = stickyDockAbortController.signal;
+
   const docks = document.querySelectorAll("[data-sticky-dock]");
   if (!docks.length) return;
 
@@ -102,7 +110,6 @@ const setupStickyActionDocks = () => {
     };
     let shouldEnableDock = isAnchorBelowInitialViewport();
 
-    // Show the fixed dock only on pages where the real action bar starts below the first viewport.
     const syncDockVisibility = () => {
       const anchorRect = anchor.getBoundingClientRect();
       const anchorBelowViewport = anchorRect.top >= window.innerHeight;
@@ -119,24 +126,32 @@ const setupStickyActionDocks = () => {
         { threshold: 0.01 },
       );
       observer.observe(anchor);
+      signal.addEventListener("abort", () => observer.disconnect());
     } else {
-      const handleScrollFallback = () => syncDockVisibility();
-      window.addEventListener("scroll", handleScrollFallback, { passive: true });
-      handleScrollFallback();
+      window.addEventListener("scroll", syncDockVisibility, { passive: true, signal });
+      syncDockVisibility();
     }
 
     const handleResize = () => {
       shouldEnableDock = isAnchorBelowInitialViewport();
       syncDockVisibility();
     };
-    window.addEventListener("resize", handleResize);
+    window.addEventListener("resize", handleResize, { signal });
 
     syncDockVisibility();
     setTimeout(handleResize, 120);
   });
 };
 
+let scrollProxyAbortController = null;
+
 const setupScrollProxy = () => {
+  if (scrollProxyAbortController) {
+    scrollProxyAbortController.abort();
+  }
+  scrollProxyAbortController = new AbortController();
+  const signal = scrollProxyAbortController.signal;
+
   const wrapper = document.querySelector(".statement-table-wrapper");
   const proxy = document.getElementById("scroll-proxy");
   if (!wrapper || !proxy) return;
@@ -182,20 +197,20 @@ const setupScrollProxy = () => {
     syncing = true;
     wrapper.scrollLeft = proxy.scrollLeft;
     syncing = false;
-  });
+  }, { signal });
 
   wrapper.addEventListener("scroll", () => {
     if (syncing) return;
     syncing = true;
     proxy.scrollLeft = wrapper.scrollLeft;
     syncing = false;
-  });
+  }, { signal });
 
-  window.addEventListener("scroll", syncVisibility, { passive: true });
+  window.addEventListener("scroll", syncVisibility, { passive: true, signal });
   window.addEventListener("resize", () => {
     syncWidths();
     syncVisibility();
-  });
+  }, { signal });
 
   syncWidths();
   syncVisibility();
@@ -250,7 +265,24 @@ const checkQueryParamToasts = () => {
   }
 };
 
+let paginationJumpAbortController = null;
+
+const closeAllPaginationPopovers = () => {
+  document.querySelectorAll("[data-pagination-jump-popover][data-open]").forEach((p) => {
+    p.removeAttribute("data-open");
+  });
+  document.querySelectorAll("[data-pagination-jump-toggle]").forEach((t) => {
+    t.setAttribute("aria-expanded", "false");
+  });
+};
+
 const setupPaginationJump = () => {
+  if (paginationJumpAbortController) {
+    paginationJumpAbortController.abort();
+  }
+  paginationJumpAbortController = new AbortController();
+  const signal = paginationJumpAbortController.signal;
+
   document.querySelectorAll("[data-pagination-jump]").forEach((container) => {
     const toggle = container.querySelector("[data-pagination-jump-toggle]");
     const popover = container.querySelector("[data-pagination-jump-popover]");
@@ -264,22 +296,13 @@ const setupPaginationJump = () => {
         popover.setAttribute("data-open", "");
         toggle.setAttribute("aria-expanded", "true");
       }
-    });
+    }, { signal });
   });
 
-  document.addEventListener("click", closeAllPaginationPopovers);
+  document.addEventListener("click", closeAllPaginationPopovers, { signal });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeAllPaginationPopovers();
-  });
-};
-
-const closeAllPaginationPopovers = () => {
-  document.querySelectorAll("[data-pagination-jump-popover][data-open]").forEach((p) => {
-    p.removeAttribute("data-open");
-  });
-  document.querySelectorAll("[data-pagination-jump-toggle]").forEach((t) => {
-    t.setAttribute("aria-expanded", "false");
-  });
+  }, { signal });
 };
 
 window.addEventListener("load", () => {
@@ -318,6 +341,25 @@ window.addEventListener("load", () => {
       btn.addEventListener("click", () => handleSyncClick(btn));
     });
   }
+});
+
+// --- HTMX event handlers (registered outside load handler) ---
+
+// Re-initialise UI components after HTMX swaps new content into the DOM.
+document.addEventListener("htmx:afterSwap", () => {
+  setupStickyActionDocks();
+  setupScrollProxy();
+  setupPaginationJump();
+});
+
+// Show a toast when an HTMX request fails.
+document.addEventListener("htmx:responseError", (event) => {
+  showToast("Something went wrong — please refresh the page.", "danger");
+});
+
+// After a statement is deleted, refresh the count chips from the server.
+document.addEventListener("listUpdated", () => {
+  htmx.ajax("GET", "/statements/count" + window.location.search, { swap: "none" });
 });
 
 // #region AFK Checker

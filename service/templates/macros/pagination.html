@@ -5,6 +5,7 @@
     {% from "macros/pagination.html" import pagination_nav %}
     {{ pagination_nav(page=2, total_pages=5, prev_url="/statements?page=1", next_url="/statements?page=3") }}
     {{ pagination_nav(page=2, total_pages=5, prev_url="...", next_url="...", compact=true, page_url_template="/statements?page=__PAGE__") }}
+    {{ pagination_nav(page=2, total_pages=5, prev_url="...", next_url="...", page_url_template="...", htmx_target="#statement-content") }}
 
   Parameters:
     page               — current page number (1-based)
@@ -13,18 +14,28 @@
     next_url           — URL for the next page
     compact            — if true, renders smaller controls for sticky docks (default: false)
     page_url_template  — URL template with __PAGE__ placeholder for jump-to-page dropdown (optional)
+    htmx_target        — CSS selector for the HTMX swap target (optional). When provided,
+                         prev/next and page jump links get hx-get, hx-target, hx-swap, and
+                         hx-push-url attributes for partial page updates. Regular href is always
+                         kept for graceful degradation (no-JS fallback).
 
   Controls are hidden entirely when total_pages <= 1.
   When page_url_template is provided, the "Page X of Y" indicator becomes
   a clickable dropdown allowing direct page jumps.
 #}
-{% macro pagination_nav(page, total_pages, prev_url, next_url, compact=false, page_url_template=none) %}
+{% macro pagination_nav(page, total_pages, prev_url, next_url, compact=false, page_url_template=none, htmx_target=none) %}
   {% if total_pages > 1 %}
     <nav class="pagination-nav{% if compact %} pagination-nav-compact{% endif %}" aria-label="Pagination">
       <a
         href="{{ prev_url }}"
         class="btn btn-sm btn-outline-primary{% if page <= 1 %} disabled{% endif %}"
         {% if page <= 1 %}aria-disabled="true" tabindex="-1"{% endif %}
+        {% if htmx_target and page > 1 %}
+          hx-get="{{ prev_url }}"
+          hx-target="{{ htmx_target }}"
+          hx-swap="outerHTML scroll:no-scroll"
+          hx-push-url="true"
+        {% endif %}
       >&lsaquo; Previous</a>
 
       {% if page_url_template and total_pages > 2 %}
@@ -39,7 +50,18 @@
                 {% if p == page %}
                   <span class="pagination-jump-item pagination-jump-item-current">{{ p }}</span>
                 {% else %}
-                  <a href="{{ page_url_template.replace('__PAGE__', p|string) }}" class="pagination-jump-item">{{ p }}</a>
+                  {# Build the page URL for this jump target #}
+                  {% set jump_url = page_url_template.replace('__PAGE__', p|string) %}
+                  <a
+                    href="{{ jump_url }}"
+                    class="pagination-jump-item"
+                    {% if htmx_target %}
+                      hx-get="{{ jump_url }}"
+                      hx-target="{{ htmx_target }}"
+                      hx-swap="outerHTML scroll:no-scroll"
+                      hx-push-url="true"
+                    {% endif %}
+                  >{{ p }}</a>
                 {% endif %}
               {% endfor %}
             </div>
@@ -53,6 +75,12 @@
         href="{{ next_url }}"
         class="btn btn-sm btn-outline-primary{% if page >= total_pages %} disabled{% endif %}"
         {% if page >= total_pages %}aria-disabled="true" tabindex="-1"{% endif %}
+        {% if htmx_target and page < total_pages %}
+          hx-get="{{ next_url }}"
+          hx-target="{{ htmx_target }}"
+          hx-swap="outerHTML scroll:no-scroll"
+          hx-push-url="true"
+        {% endif %}
       >Next &rsaquo;</a>
     </nav>
   {% endif %}

@@ -71,6 +71,7 @@ Do not change behaviour solely for style/cleanup.
 
 - Make the plan extremely concise. Sacrifice grammar for the sake of concision.
 - At the end of each plan, give mne a list of unanswered questions to answer, if any.
+- Plans are saved to `./plans/` which is **gitignored**. Do not attempt to `git add` or commit plan files.
 
 ## Deployment Configuration Checklist (important)
 

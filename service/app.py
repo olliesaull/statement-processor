@@ -13,7 +13,7 @@ import redis
 import stripe
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
-from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, jsonify, make_response, redirect, render_template, request, session, url_for
 from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
@@ -65,6 +65,17 @@ from utils.workflows import start_extraction_state_machine
 from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
 
 # python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app
+
+
+def _is_htmx_request() -> bool:
+    """Return True if the current request was made by HTMX.
+
+    HTMX sets the ``HX-Request: true`` header on every request it initiates.
+    This is used to decide whether to return a full page render or only the
+    relevant content partial (no base layout).
+    """
+    return request.headers.get("HX-Request") == "true"
+
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
@@ -793,8 +804,10 @@ def statements():
         statements=len(statement_rows),
     )
 
+    # HTMX requests receive only the content partial; normal requests get the full page.
+    template = "partials/statements_content.html" if _is_htmx_request() else "statements.html"
     return render_template(
-        "statements.html",
+        template,
         statements=statement_rows,
         show_completed=show_completed,
         message=message,
@@ -805,6 +818,29 @@ def statements():
         per_page=pagination.per_page,
         total_pages=pagination.total_pages,
         statement_count=statement_count,
+    )
+
+
+@app.route("/statements/count")
+@active_tenant_required("Please select a tenant.")
+@xero_token_required
+@route_handler_logging
+def statements_count():
+    """Return the current statement count as an HTML fragment for HTMX count refresh.
+
+    Reads the same view param as the statements list so the count reflects the
+    currently visible tab (incomplete vs. completed).  Returns two out-of-band
+    span elements that HTMX can swap into the page without a full reload.
+    """
+    view = request.args.get("view", "incomplete").lower()
+    show_completed = view == "completed"
+    rows = get_completed_statements() if show_completed else get_incomplete_statements()
+    count = len(rows)
+    label = f"{count} statement{'s' if count != 1 else ''}"
+    # Two OOB spans: one for the main action bar, one for the sticky dock.
+    return (
+        f'<span class="action-count-chip" id="statements-count-chip" hx-swap-oob="true">{label}</span>\n'
+        f'<span class="action-count-chip" id="statements-count-chip-sticky" hx-swap-oob="true">{label}</span>'
     )
 
 
@@ -842,6 +878,12 @@ def delete_statement(statement_id: str):
         logger.exception("Failed to delete statement", tenant_id=tenant_id, statement_id=statement_id, error=exc)
         session["tenant_error"] = "Unable to delete the statement. Please try again."
 
+    # HTMX deletions: return an empty 200 with a trigger so the client can
+    # refresh the list without a full page reload.
+    if _is_htmx_request():
+        response = make_response("", 200)
+        response.headers["HX-Trigger"] = "listUpdated"
+        return response
     return redirect(url_for("statements", **redirect_args))
 
 
@@ -889,6 +931,10 @@ def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: A
                 logger.exception(
                     "Failed to toggle statement item completion", statement_id=statement_id, statement_item_id=statement_item_id, tenant_id=tenant_id, desired_state=desired_state, error=exc
                 )
+        # For HTMX requests, fall through to re-render the partial with updated data
+        # so the browser can swap the content without a full redirect/reload.
+        if _is_htmx_request():
+            return None
         return redirect(url_for("statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false", page=page))
 
     return None
@@ -1394,7 +1440,10 @@ def statement(statement_id: str):
         "total_pages": pagination.total_pages,
         "total_visible_count": total_visible_count,
     }
-    return render_template("statement.html", **context)
+    # Return the content partial for HTMX requests so the browser swaps only
+    # the #statement-content region without a full page reload.
+    template = "partials/statement_content.html" if _is_htmx_request() else "statement.html"
+    return render_template(template, **context)
 
 
 @app.route("/tenants/select", methods=["POST"])

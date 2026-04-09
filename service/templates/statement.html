@@ -1,53 +1,19 @@
 {% extends "base.html" %}
-{% from "macros/pagination.html" import pagination_nav %}
 {% block title %}{{ page_heading }}{% endblock %}
 
 {% block container_class %}container-fluid px-2 px-lg-4 py-4{% endblock %}
 
 {% block content %}
 <div class="page-main">
-  <div class="page-header statement-page-header d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
-    <div class="page-header-content">
-      <p class="page-kicker mb-1">Statement Detail</p>
-      <h1 class="mb-2 mb-md-0">{{ page_heading }}</h1>
-      {% if not is_processing and not processing_failed %}
-        <div class="btn-group statement-filter-group" role="group" aria-label="Filter statement items">
-          <a
-            class="btn btn-sm {% if items_view == 'incomplete' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-            href="{{ url_for('statement', statement_id=statement_id, items_view='incomplete', show_payments='true' if show_payments else 'false') }}"
-          >Incomplete ({{ incomplete_count }})</a>
-          <a
-            class="btn btn-sm {% if items_view == 'completed' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-            href="{{ url_for('statement', statement_id=statement_id, items_view='completed', show_payments='true' if show_payments else 'false') }}"
-          >Completed ({{ completed_count }})</a>
-          <a
-            class="btn btn-sm {% if items_view == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-            href="{{ url_for('statement', statement_id=statement_id, items_view='all', show_payments='true' if show_payments else 'false') }}"
-          >All ({{ all_statement_rows|length }})</a>
-        </div>
-        {% if has_payment_rows %}
-          <div class="mt-2">
-            <a
-              class="btn btn-sm {% if show_payments %}btn-primary{% else %}btn-outline-primary{% endif %}"
-              href="{{ url_for('statement', statement_id=statement_id, items_view=items_view, show_payments='false' if show_payments else 'true') }}"
-              data-automation="statement-payments-toggle"
-            >
-              {% if show_payments %}Hide payments{% else %}Show payments{% endif %}
-            </a>
-          </div>
-        {% endif %}
-      {% endif %}
-    </div>
-    {% if not is_processing and not processing_failed %}
-      <a
-        class="btn btn-outline-primary"
-        href="{{ url_for('statement', statement_id=statement_id, download='xlsx', items_view=items_view, show_payments='true' if show_payments else 'false') }}"
-        data-automation="statement-download-excel"
-      >Download Excel</a>
-    {% endif %}
-  </div>
-
   {% if is_processing %}
+    {# Page header shown inline for the processing state (no filters or download needed) #}
+    <div class="page-header statement-page-header d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+      <div class="page-header-content">
+        <p class="page-kicker mb-1">Statement Detail</p>
+        <h1 class="mb-2 mb-md-0">{{ page_heading }}</h1>
+      </div>
+    </div>
+
     <div class="page-panel page-panel-flat text-center py-5">
       <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
 
@@ -94,6 +60,14 @@
       setTimeout(function () { window.location.reload(); }, 5000);
     </script>
   {% elif processing_failed %}
+    {# Page header shown inline for the failed state #}
+    <div class="page-header statement-page-header d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+      <div class="page-header-content">
+        <p class="page-kicker mb-1">Statement Detail</p>
+        <h1 class="mb-2 mb-md-0">{{ page_heading }}</h1>
+      </div>
+    </div>
+
     <div class="page-panel page-panel-flat text-center py-5">
       <div class="alert alert-warning d-inline-block mb-3" role="alert">Statement processing failed</div>
       <p class="mb-1">This statement could not be processed successfully.</p>
@@ -107,223 +81,11 @@
       </div>
     </div>
   {% else %}
-    {% set statement_col_count = raw_statement_headers|length %}
-    {% set visible_item_count = total_visible_count %}
-    {% set prev_url = url_for('statement', statement_id=statement_id, page=page - 1, items_view=items_view, show_payments='true' if show_payments else 'false') %}
-    {% set next_url = url_for('statement', statement_id=statement_id, page=page + 1, items_view=items_view, show_payments='true' if show_payments else 'false') %}
-    {% set page_url_tpl = url_for('statement', statement_id=statement_id, page='__PAGE__', items_view=items_view, show_payments='true' if show_payments else 'false') %}
-
-    <div class="landscape-tip">
-      <svg class="landscape-tip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
-        <line x1="12" y1="18" x2="12" y2="18.01"/>
-      </svg>
-      <span>Tip: rotate your device to landscape for a better view of the comparison table.</span>
-    </div>
-
-    <div class="statement-table-panel page-table-shell">
-      <div class="statement-legend d-flex flex-wrap align-items-center gap-3 small text-muted">
-        <span class="legend-item d-flex align-items-center gap-2">
-          <span class="legend-swatch bg-success"></span>Match
-        </span>
-        <span class="legend-item d-flex align-items-center gap-2">
-          <span class="legend-swatch bg-danger"></span>Mismatch
-        </span>
-        <span class="legend-item d-flex align-items-center gap-2 text-dark">
-          <span class="legend-swatch bg-warning"></span>Flagged anomaly
-        </span>
-        <span class="legend-item d-flex align-items-center gap-2">
-          <span class="legend-indicator">!</span>Cell mismatch
-        </span>
-        <span class="legend-item d-flex align-items-center gap-2">
-          <span class="legend-swatch legend-swatch-completed"></span>Completed rows use lighter status colors
-        </span>
-      </div>
-      <div class="table-responsive statement-table-wrapper">
-        <table class="table table-bordered align-middle table-compare w-100 statement-table" id="statement-table" data-automation="statement-table">
-          <thead class="table-light">
-            <tr>
-              <th class="text-center col-type" rowspan="2">Type</th>
-              <th class="split-right text-center" colspan="{{ statement_col_count }}">Statement</th>
-              <th class="text-center" colspan="{{ statement_col_count }}">Xero</th>
-              <th class="text-center" rowspan="2">Xero Link</th>
-              <th class="text-center" rowspan="2">Status</th>
-            </tr>
-            <tr>
-              {% for h in raw_statement_headers %}
-                {% set header_class = "col-credit" if h|lower == "credit" else "" %}
-                <th class="{% if loop.last %}split-right{% endif %}{% if header_class %} {{ header_class }}{% endif %}">{{ h|capitalize }}</th>
-              {% endfor %}
-              {% for h in raw_statement_headers %}
-                {% set header_class = "col-credit" if h|lower == "credit" else "" %}
-                <th class="{% if header_class %}{{ header_class }}{% endif %}">{{ h|capitalize }}</th>
-              {% endfor %}
-            </tr>
-          </thead>
-          <tbody id="statement-table-body">
-            {% if statement_rows %}
-              {% for row in statement_rows %}
-                {% set flag_list = row.flags or [] %}
-                {% set has_ml_outlier = 'ml-outlier' in flag_list %}
-                {% set has_invalid_date = 'invalid-date' in flag_list %}
-                {% set anomalous = has_ml_outlier or has_invalid_date %}
-                {% if anomalous %}
-                  {% set row_class = 'table-warning anomaly-row' %}
-                {% else %}
-                  {% set row_class = 'table-success' if row.matches else 'table-danger' %}
-                {% endif %}
-                {% if row.is_completed %}
-                  {% set row_class = row_class + ' completed-row-fade' %}
-                {% endif %}
-                <tr class="{{ row_class }}">
-                  <td class="text-center col-type">{{ row.item_type_label }}</td>
-                  {% set cells = row.cell_comparisons or [] %}
-                  {% for cell in cells %}
-                    <td class="{% if loop.last %}split-right{% endif %}">
-                      {% set stmt_text = cell.statement_value %}
-                      {% set show_indicator = row.matches and not cell.matches %}
-                      <span class="cell-value-wrapper">
-                        <span class="cell-value-truncate" title="{{ stmt_text|default('', true)|e }}">{{ stmt_text }}</span>
-                        {% if show_indicator %}
-                          <span class="cell-indicator" title="Does not match Xero value">!</span>
-                        {% endif %}
-                      </span>
-                    </td>
-                  {% endfor %}
-                  {% for cell in cells %}
-                    <td>
-                      {% set xero_text = cell.xero_value %}
-                      {% set show_indicator = row.matches and not cell.matches %}
-                      <span class="cell-value-wrapper">
-                        <span class="cell-value-truncate" title="{{ xero_text|default('', true)|e }}">{{ xero_text }}</span>
-                        {% if show_indicator %}
-                          <span class="cell-indicator" title="Does not match statement value">!</span>
-                        {% endif %}
-                      </span>
-                    </td>
-                  {% endfor %}
-                  <td class="text-center">
-                    {% if row.xero_credit_note_id %}
-                      <a href="https://go.xero.com/AccountsPayable/ViewCreditNote.aspx?creditNoteID={{ row.xero_credit_note_id }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary text-nowrap px-2 py-0">Open</a>
-                    {% elif row.xero_invoice_id %}
-                      <a href="https://go.xero.com/AccountsPayable/View.aspx?InvoiceID={{ row.xero_invoice_id }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary text-nowrap px-2 py-0">Open</a>
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                  <td class="text-center">
-                    {% if row.statement_item_id %}
-                      {% if row.is_completed %}
-                        <form method="post" class="d-inline">
-                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                          <input type="hidden" name="action" value="incomplete_item">
-                          <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
-                          <input type="hidden" name="items_view" value="{{ items_view }}">
-                          <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
-                          <input type="hidden" name="page" value="{{ page }}">
-                          <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap px-2 py-0" data-automation="statement-row-incomplete">Mark incomplete</button>
-                        </form>
-                      {% else %}
-                        <form method="post" class="d-inline">
-                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                          <input type="hidden" name="action" value="complete_item">
-                          <input type="hidden" name="statement_item_id" value="{{ row.statement_item_id }}">
-                          <input type="hidden" name="items_view" value="{{ items_view }}">
-                          <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
-                          <input type="hidden" name="page" value="{{ page }}">
-                          <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap px-2 py-0" data-automation="statement-row-complete">Mark complete</button>
-                        </form>
-                      {% endif %}
-                    {% else %}
-                      <span class="badge bg-secondary">Unavailable</span>
-                    {% endif %}
-                  </td>
-                </tr>
-              {% endfor %}
-            {% else %}
-              <tr>
-                <td colspan="{{ statement_col_count * 2 + 3 }}" class="text-center text-muted">
-                  {% if items_view == 'completed' %}
-                    No completed statement items found.
-                  {% elif items_view == 'incomplete' %}
-                    No incomplete statement items found.
-                  {% else %}
-                    No statement items found.
-                  {% endif %}
-                </td>
-              </tr>
-            {% endif %}
-          </tbody>
-        </table>
-      </div>
-      <div class="scroll-proxy" id="scroll-proxy" aria-hidden="true">
-        <div class="scroll-proxy-inner"></div>
-      </div>
-    </div>
-
-    <div class="page-panel page-panel-flat statement-actions-bar d-flex justify-content-between align-items-center flex-wrap gap-3" id="statement-footer-actions">
-      <div class="d-flex align-items-center flex-wrap gap-2">
-        <a href="{{ url_for('statements') }}" class="btn btn-outline-secondary">Back to statements</a>
-        <span class="action-count-chip" data-automation="statement-item-count">
-          {{ visible_item_count }} statement item{% if visible_item_count != 1 %}s{% endif %}
-        </span>
-      </div>
-      {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url, page_url_template=page_url_tpl) }}
-      <div class="d-flex align-items-center flex-wrap gap-3">
-        {% if is_completed %}
-          <span class="badge bg-success fs-6">Completed</span>
-          <form method="post" class="mb-0">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="mark_incomplete">
-            <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
-            <button type="submit" class="btn btn-outline-warning text-nowrap px-3 py-1">Mark incomplete</button>
-          </form>
-        {% else %}
-          <form method="post" class="mb-0">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="mark_complete">
-            <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
-            <button type="submit" class="btn btn-success text-nowrap px-3 py-1">Complete statement</button>
-          </form>
-        {% endif %}
-        <form method="post" action="{{ url_for('delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="btn btn-outline-danger text-nowrap px-3 py-1" data-automation="statement-delete-button">Delete statement</button>
-        </form>
-      </div>
-    </div>
-
-    <div class="sticky-action-dock" data-sticky-dock data-sticky-target="#statement-footer-actions" aria-hidden="true">
-      <div class="d-flex align-items-center flex-wrap gap-2">
-        <a href="{{ url_for('statements') }}" class="btn btn-outline-secondary">Back to statements</a>
-        <span class="action-count-chip">
-          {{ visible_item_count }} statement item{% if visible_item_count != 1 %}s{% endif %}
-        </span>
-      </div>
-      {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url, compact=true, page_url_template=page_url_tpl) }}
-      <div class="d-flex align-items-center flex-wrap gap-2">
-        {% if is_completed %}
-          <span class="badge bg-success">Completed</span>
-          <form method="post" class="mb-0">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="mark_incomplete">
-            <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
-            <button type="submit" class="btn btn-outline-warning text-nowrap px-3 py-1">Mark incomplete</button>
-          </form>
-        {% else %}
-          <form method="post" class="mb-0">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="mark_complete">
-            <input type="hidden" name="show_payments" value="{{ 'true' if show_payments else 'false' }}">
-            <button type="submit" class="btn btn-success text-nowrap px-3 py-1">Complete statement</button>
-          </form>
-        {% endif %}
-        <form method="post" action="{{ url_for('delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="btn btn-outline-danger text-nowrap px-3 py-1">Delete statement</button>
-        </form>
-      </div>
-    </div>
+    {#
+      Ready state: rendered as a standalone partial so it can also be swapped in via HTMX.
+      The partial owns the page-header for this state (it includes filters and download button).
+    #}
+    {% include "partials/statement_content.html" %}
   {% endif %}
 </div>
 {% endblock %}

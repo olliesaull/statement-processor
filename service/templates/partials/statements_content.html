@@ -1,0 +1,233 @@
+{#
+  Partial: statements_content.html
+
+  Renders the dynamic content region of the statements list page — the alert,
+  sort bar, table, pagination, footer toggle, and sticky dock. Extracted so
+  that HTMX can swap only this region on sort, pagination, and view-toggle
+  interactions without a full page reload.
+
+  Expected template variables (same as the parent statements.html view):
+    statements         — list of statement dicts
+    statement_count    — total count for the current view
+    page               — current page number (1-based)
+    total_pages        — total number of pages
+    per_page           — rows per page (25 / 50 / 100)
+    current_sort       — active sort column key
+    current_dir        — sort direction ('asc' or 'desc')
+    show_completed     — bool: showing completed statements?
+    sort_links         — dict of pre-built sort URLs (contact, date_range, uploaded)
+    message            — optional flash message string (may be empty/None)
+#}
+{% from "macros/pagination.html" import pagination_nav %}
+
+{# Outer wrapper carries the HTMX indicator so the whole region dims during loads. #}
+<div id="statements-content" hx-indicator="closest .page-main">
+
+  {% if message %}
+    <div class="alert alert-success" role="alert">
+      {{ message }}
+    </div>
+  {% endif %}
+
+  {# Pre-build pagination URLs once so they can be reused by both pagination_nav calls. #}
+  {% set prev_url = url_for('statements', page=page - 1, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
+  {% set next_url = url_for('statements', page=page + 1, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
+  {% set page_url_tpl = url_for('statements', page='__PAGE__', per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
+
+  {# Base URL used by the per-page select: page resets to 1 when changing page size. #}
+  {% set per_page_base_url = url_for('statements', page=1, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
+
+  {% if statements %}
+    <div class="page-panel page-panel-muted mb-3">
+      <div class="statements-sort-bar">
+        <span class="text-muted">Sort by:</span>
+        <div class="btn-group" role="group" aria-label="Sort statements">
+          {# Each sort button keeps its href for no-JS fallback and adds hx-* for partial swap. #}
+          <a
+            href="{{ sort_links.contact }}"
+            class="btn btn-sm {% if current_sort == 'contact' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+            hx-get="{{ sort_links.contact }}"
+            hx-target="#statements-content"
+            hx-swap="outerHTML scroll:no-scroll"
+            hx-push-url="true"
+          >Contact{% if current_sort == 'contact' %} {% if current_dir == 'asc' %}▲{% else %}▼{% endif %}{% endif %}</a>
+          <a
+            href="{{ sort_links.date_range }}"
+            class="btn btn-sm {% if current_sort == 'date_range' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+            hx-get="{{ sort_links.date_range }}"
+            hx-target="#statements-content"
+            hx-swap="outerHTML scroll:no-scroll"
+            hx-push-url="true"
+          >Item Date Range{% if current_sort == 'date_range' %} {% if current_dir == 'asc' %}▲{% else %}▼{% endif %}{% endif %}</a>
+          <a
+            href="{{ sort_links.uploaded }}"
+            class="btn btn-sm {% if current_sort == 'uploaded' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+            hx-get="{{ sort_links.uploaded }}"
+            hx-target="#statements-content"
+            hx-swap="outerHTML scroll:no-scroll"
+            hx-push-url="true"
+          >Time Uploaded{% if current_sort == 'uploaded' %} {% if current_dir == 'asc' %}▲{% else %}▼{% endif %}{% endif %}</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="page-table-shell">
+      <div class="table-responsive">
+        <table class="table table-striped table-bordered align-middle statements-table" id="statements-table" data-automation="statements-table">
+          <thead class="table-light">
+            <tr>
+              <th scope="col" class="statements-col-contact">Contact Name</th>
+              <th scope="col" class="statements-col-date-range">Item Date Range</th>
+              <th scope="col" class="statements-col-filename">Statement Filename</th>
+              <th scope="col" class="text-center statements-col-action">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for stmt in statements %}
+              {% set contact_name = stmt.get("ContactName") or "—" %}
+              {% set item_date_range = stmt.get("ItemDateRangeDisplay") or "—" %}
+              {% set statement_filename = stmt.get("OriginalStatementFilename") or "—" %}
+              {% set is_reserved = (stmt.get("TokenReservationStatus") or "")|lower == "reserved" %}
+              {# Row ID enables targeted HTMX deletion without a full list reload. #}
+              <tr id="statement-row-{{ stmt['StatementID'] }}" data-statement-id="{{ stmt['StatementID'] }}" data-contact-name="{{ stmt.get('ContactName') or '' }}" data-automation="statement-row">
+                <td class="statements-col-contact">
+                  <span class="cell-value-wrapper">
+                    <span class="cell-value-truncate" title="{{ contact_name|default('', true)|e }}">{{ contact_name }}</span>
+                  </span>
+                </td>
+                <td class="statements-col-date-range">
+                  <span class="cell-value-wrapper">
+                    <span class="cell-value-truncate" title="{{ item_date_range|default('', true)|e }}">{{ item_date_range }}</span>
+                  </span>
+                </td>
+                <td class="statements-col-filename">
+                  <span class="cell-value-wrapper">
+                    <span class="cell-value-truncate" title="{{ statement_filename|default('', true)|e }}">{{ statement_filename }}</span>
+                  </span>
+                </td>
+                <td class="text-center statements-col-action">
+                  <div class="d-flex flex-nowrap justify-content-center gap-2">
+                    <a href="{{ url_for('statement', statement_id=stmt['StatementID']) }}" class="btn btn-sm btn-primary" data-automation="statement-reconcile-link">
+                      Reconcile
+                    </a>
+                    {% if is_reserved %}
+                      <button type="button" class="btn btn-sm btn-outline-secondary" disabled>Processing</button>
+                    {% else %}
+                      {#
+                        Delete form: the action URL includes pagination params for the server-side
+                        redirect fallback (no-JS). The hx-post URL omits them because HTMX swaps
+                        the row out immediately — no redirect is needed.
+                      #}
+                      <form
+                        method="post"
+                        action="{{ url_for('delete_statement', statement_id=stmt['StatementID'], page=page, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') }}"
+                        class="d-inline"
+                        onsubmit="return confirm('Delete this statement? This cannot be undone.');"
+                        hx-post="{{ url_for('delete_statement', statement_id=stmt['StatementID']) }}"
+                        hx-target="#statement-row-{{ stmt['StatementID'] }}"
+                        hx-swap="delete"
+                        hx-confirm="Delete this statement? This cannot be undone."
+                      >
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                      </form>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-3">
+      {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url, page_url_template=page_url_tpl, htmx_target="#statements-content") }}
+      {% if total_pages > 1 %}
+        <div class="pagination-per-page">
+          <label for="per-page-select">Per page:</label>
+          {#
+            Per-page select: hx-include="this" makes HTMX append the selected value as ?per_page=N.
+            The base URL already sets page=1 so changing page size always resets to the first page.
+            Option values are plain integers — the full URL lives in hx-get for the HTMX path.
+            The no-JS fallback relies on onchange navigating to the full URL instead.
+          #}
+          <select
+            id="per-page-select"
+            class="form-select form-select-sm"
+            name="per_page"
+            hx-get="{{ per_page_base_url }}"
+            hx-target="#statements-content"
+            hx-swap="outerHTML scroll:no-scroll"
+            hx-push-url="true"
+            hx-include="this"
+            onchange="if(!window.htmx){window.location.href=this.options[this.selectedIndex].dataset.url}"
+          >
+            {% for opt in [25, 50, 100] %}
+              <option
+                value="{{ opt }}"
+                data-url="{{ url_for('statements', page=1, per_page=opt, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') }}"
+                {% if per_page == opt %}selected{% endif %}
+              >{{ opt }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      {% endif %}
+    </div>
+
+  {% else %}
+    <div class="alert alert-info" role="alert">
+      No {{ 'completed' if show_completed else 'incomplete' }} statements found.
+    </div>
+  {% endif %}
+
+  {# Footer action bar: count chip and view toggle. #}
+  <div class="page-panel page-panel-flat d-flex justify-content-between align-items-center flex-wrap gap-3 mt-4 statements-page-toggle" id="statements-footer-actions">
+    <span class="action-count-chip" id="statements-count-chip">{{ statement_count }} statement{% if statement_count != 1 %}s{% endif %}</span>
+    {% if show_completed %}
+      <a
+        href="{{ url_for('statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        class="btn btn-secondary"
+        hx-get="{{ url_for('statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        hx-target="#statements-content"
+        hx-swap="outerHTML scroll:no-scroll"
+        hx-push-url="true"
+      >View incomplete</a>
+    {% else %}
+      <a
+        href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        class="btn btn-outline-secondary"
+        hx-get="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        hx-target="#statements-content"
+        hx-swap="outerHTML scroll:no-scroll"
+        hx-push-url="true"
+      >View completed</a>
+    {% endif %}
+  </div>
+
+  {# Sticky dock: mirrors the footer with compact pagination. #}
+  <div class="sticky-action-dock sticky-action-dock-compact" data-sticky-dock data-sticky-target="#statements-footer-actions" aria-hidden="true">
+    <span class="action-count-chip" id="statements-count-chip-sticky">{{ statement_count }} statement{% if statement_count != 1 %}s{% endif %}</span>
+    {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url, compact=true, page_url_template=page_url_tpl, htmx_target="#statements-content") }}
+    {% if show_completed %}
+      <a
+        href="{{ url_for('statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        class="btn btn-secondary"
+        hx-get="{{ url_for('statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        hx-target="#statements-content"
+        hx-swap="outerHTML scroll:no-scroll"
+        hx-push-url="true"
+      >View incomplete</a>
+    {% else %}
+      <a
+        href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        class="btn btn-outline-secondary"
+        hx-get="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        hx-target="#statements-content"
+        hx-swap="outerHTML scroll:no-scroll"
+        hx-push-url="true"
+      >View completed</a>
+    {% endif %}
+  </div>
+
+</div>{# end #statements-content #}
