@@ -1804,6 +1804,16 @@ def buy_tokens_post():
 
     session["pending_token_count"] = token_count
     session["pending_purchase_tenant_id"] = selected_tenant_id
+
+    # Switch active tenant to the one being purchased for, so billing details
+    # pre-fill correctly and checkout_success can verify the session tenant.
+    if selected_tenant_id != session.get("xero_tenant_id"):
+        selected_tenant = next((t for t in tenants if t.get("tenantId") == selected_tenant_id), None)
+        if selected_tenant:
+            session["xero_tenant_id"] = selected_tenant_id
+            session["xero_tenant_name"] = selected_tenant.get("tenantName", "")
+            logger.info("Switched active tenant for purchase", tenant_id=selected_tenant_id)
+
     return redirect(url_for("billing_details"))
 
 

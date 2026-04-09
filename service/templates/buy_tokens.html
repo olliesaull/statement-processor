@@ -94,11 +94,24 @@
       return total;
     }
 
+    const minTokens = parseInt(input.dataset.minTokens, 10) || 10;
+    const maxTokens = parseInt(input.dataset.maxTokens, 10) || 10000;
+
     function updateDisplay() {
       const count = parseInt(input.value, 10);
 
       if (!Number.isFinite(count) || count <= 0) {
         display.textContent = "";
+        return;
+      }
+
+      if (count < minTokens) {
+        display.textContent = "Minimum purchase is " + minTokens + " pages.";
+        return;
+      }
+
+      if (count > maxTokens) {
+        display.textContent = "Maximum purchase is " + maxTokens + " pages.";
         return;
       }
 
