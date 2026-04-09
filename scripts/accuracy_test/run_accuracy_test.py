@@ -46,7 +46,7 @@ def _configure_logging() -> None:
     root.addHandler(file_handler)
 
 # Add Lambda source to path so we can import extract_statement post-migration.
-LAMBDA_DIR = Path(__file__).parent.parent.parent / "lambda_functions" / "textraction_lambda"
+LAMBDA_DIR = Path(__file__).parent.parent.parent / "lambda_functions" / "extraction_lambda"
 sys.path.insert(0, str(LAMBDA_DIR))
 
 from generate_pdfs import generate_all_scenarios  # noqa: E402

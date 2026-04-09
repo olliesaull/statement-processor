@@ -103,7 +103,7 @@ def _build_runtime_config() -> RuntimeConfig:
     bucket_name = (os.getenv("S3_BUCKET_NAME") or "").strip()
     contacts_table_name = (os.getenv("TENANT_CONTACTS_CONFIG_TABLE_NAME") or "").strip()
     statements_table_name = (os.getenv("TENANT_STATEMENTS_TABLE_NAME") or "").strip()
-    state_machine_arn = (os.getenv("TEXTRACTION_STATE_MACHINE_ARN") or "").strip() or None
+    state_machine_arn = (os.getenv("EXTRACTION_STATE_MACHINE_ARN") or "").strip() or None
     aws_profile = (os.getenv("AWS_PROFILE") or "").strip() or None
     aws_region = (os.getenv("AWS_REGION") or "").strip() or None
 
@@ -421,7 +421,7 @@ def _restore_contact_configs(contacts_table: Any, tenant_dir: Path) -> int:
 
 
 def _start_workflow(stepfunctions_client: Any, state_machine_arn: str, statement_id: str, contact_id: str) -> bool:
-    """Start Textraction for a newly restored statement.
+    """Start extraction for a newly restored statement.
 
     Args:
         stepfunctions_client: Boto3 StepFunctions client.
@@ -549,7 +549,7 @@ def restore_tenant_snapshot(session: boto3.session.Session, config: RuntimeConfi
     if not tenant_dir.exists():
         raise FileNotFoundError(f"Snapshot directory not found: {tenant_dir}")
 
-    _confirm("Proceed with restore? This writes contact configs, uploads PDFs, creates statement header rows, and can trigger textraction workflows.")
+    _confirm("Proceed with restore? This writes contact configs, uploads PDFs, creates statement header rows, and can trigger extraction workflows.")
 
     ddb = session.resource("dynamodb")
     contacts_table = ddb.Table(config.contacts_table_name)
