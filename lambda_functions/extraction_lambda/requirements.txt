@@ -1,5 +1,4 @@
 aws_lambda_powertools
-pdfplumber
 pypdf
 pydantic
 boto3

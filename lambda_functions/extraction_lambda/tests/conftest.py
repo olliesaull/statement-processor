@@ -21,7 +21,3 @@ fake_config.tenant_billing_table = None
 fake_config.tenant_token_ledger_table = None
 fake_config.s3_client = None
 sys.modules["config"] = fake_config
-
-fake_pdfplumber = types.ModuleType("pdfplumber")
-fake_pdfplumber.open = lambda *args, **kwargs: None
-sys.modules["pdfplumber"] = fake_pdfplumber

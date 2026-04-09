@@ -115,7 +115,6 @@ Users upload supplier statement PDFs, the system extracts line items with Bedroc
 
 ## Non-Obvious Constraints and Invariants
 
-- Extraction validation (`validate_references_roundtrip`) is best-effort and does not fail the main pipeline.
 - Anomaly detection flag name is `ml-outlier`, but implementation is keyword/rule-based, not ML inference.
 - Reprocessing a statement preserves per-item completion status by reading existing item rows before rewrite.
 - Matching logic intentionally allows exact and substring invoice-number matches to handle supplier formatting differences.

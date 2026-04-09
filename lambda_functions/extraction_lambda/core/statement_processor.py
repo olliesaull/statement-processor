@@ -25,7 +25,6 @@ from core.extraction import extract_statement
 from core.models import ExtractionResult, StatementItem, SupplierStatement
 from core.processing_progress import update_processing_stage
 from core.validation.anomaly_detection import apply_outlier_flags
-from core.validation.validate_item_count import validate_references_roundtrip
 from logger import logger
 
 
@@ -284,13 +283,6 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Failed to persist statement items", statement_id=statement_id, tenant_id=tenant_id, error=str(exc))
-
-    # Best-effort validation: compare extracted references against PDF text.
-    try:
-        statement_items = statement_dict.get("statement_items", []) or []
-        validate_references_roundtrip(pdf_bytes, statement_items)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Reference validation skipped", tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
 
     # Upload JSON to S3.
     buf = io.BytesIO(json.dumps(statement_dict, ensure_ascii=False, indent=2).encode("utf-8"))

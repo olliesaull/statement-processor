@@ -56,8 +56,7 @@
 │       │   ├── statement_processor.py
 │       │   └── validation/
 │       │       ├── __init__.py
-│       │       ├── anomaly_detection.py
-│       │       └── validate_item_count.py
+│       │       └── anomaly_detection.py
 │       └── tests/
 ├── scripts/
 │   ├── accuracy_test/
@@ -757,11 +756,6 @@ Removed components: `service/core/config_suggestion.py`, `service/core/bedrock_c
   - Logic: Flagged items get `_flags` (list of strings) plus `FlagDetails[FLAG_LABEL]` with structured issues/details; `remove=False` keeps rows and only annotates them. `run_extraction` calls `apply_outlier_flags(..., remove=False)` so items are preserved (`lambda_functions/extraction_lambda/core/validation/anomaly_detection.py`, `lambda_functions/extraction_lambda/core/statement_processor.py`).
   - Why it exists: enables UI warnings without dropping data. `_flags` is kept as legacy to not break UI logic currently. Once UI is updated it will be completely replaced by `FlagDetails`
   - Example: A row with `ml-outlier` is still shown in the UI but highlighted as anomalous.
-
-- **Rule: Best‑effort reference validation (non‑blocking)**
-  - Logic: `validate_references_roundtrip(...)` compares extracted references against PDF text (pdfplumber) and raises `ItemCountDisagreementError` on mismatch, but the call is wrapped in `try/except` in `run_extraction`, so failures only log warnings and do not block output (`lambda_functions/extraction_lambda/core/validation/validate_item_count.py`, `lambda_functions/extraction_lambda/core/statement_processor.py`).
-  - Why it exists: provides a safety check while preserving pipeline availability when PDFs are noisy or scanned.
-  - Example: If the PDF is image‑only (no extractable text), validation is skipped to avoid false mismatches.
 
 ## Xero Matching Logic
 
