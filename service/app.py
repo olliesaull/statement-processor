@@ -40,7 +40,7 @@ from utils.auth import (
     set_session_is_set_cookie,
     xero_token_required,
 )
-from utils.content import load_faqs, load_legal_page
+from utils.content import load_faqs, load_legal_page, load_llms_txt
 from utils.dynamo import (
     delete_statement_data,
     get_completed_statements,
@@ -586,7 +586,7 @@ def terms():
 
 
 def _get_authenticated_routes() -> list[str]:
-    """Return sorted list of authenticated route paths for robots/llm disallow rules.
+    """Return sorted list of authenticated route paths for the robots.txt disallow block.
 
     Inspects each route's view function for the ``_requires_auth`` attribute
     set by ``xero_token_required`` and ``active_tenant_required``.
@@ -602,7 +602,7 @@ def _get_authenticated_routes() -> list[str]:
 
 
 # Routes excluded from the sitemap even though they are public (system/utility routes).
-_SITEMAP_EXCLUDE = {"/healthz", "/login", "/logout", "/callback", "/robots.txt", "/sitemap.xml", "/llm.txt", "/favicon.ico", "/test-login"}
+_SITEMAP_EXCLUDE = {"/healthz", "/login", "/logout", "/callback", "/robots.txt", "/sitemap.xml", "/llms.txt", "/favicon.ico", "/test-login"}
 
 
 def _get_sitemap_routes() -> list[str]:
@@ -627,7 +627,7 @@ def _get_sitemap_routes() -> list[str]:
 
 
 def _build_crawl_policy(header_comment: str) -> str:
-    """Build a robots.txt / llm.txt body from the detected authenticated routes."""
+    """Build a robots.txt body from the detected authenticated routes."""
     disallow_lines = "\n".join(f"Disallow: {path}" for path in _get_authenticated_routes())
     return f"""# {header_comment} for {DOMAIN_NAME}
 # Public pages are allowed. Private/system routes are disallowed.
@@ -657,10 +657,10 @@ def sitemap_xml():
     return Response("\n".join(lines), mimetype="text/xml")
 
 
-@app.route("/llm.txt")
-def llm_txt():
-    """Serve llm.txt with crawling policy for LLM agents."""
-    return Response(_build_crawl_policy("LLM crawling policy"), mimetype="text/plain")
+@app.route("/llms.txt")
+def llms_txt():
+    """Serve llms.txt — product overview for LLM consumption (llmstxt.org spec)."""
+    return Response(load_llms_txt(), mimetype="text/plain")
 
 
 @app.route("/statements")
