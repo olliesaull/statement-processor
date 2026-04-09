@@ -2142,7 +2142,7 @@ a:focus-visible {
 .htmx-request #statement-content,
 .htmx-request #statements-content {
   pointer-events: none;
-  animation: htmx-fade-in 0s ease-in-out 300ms forwards;
+  animation: htmx-fade-in 0s ease-in-out 500ms forwards;
 }
 
 @keyframes htmx-fade-in {
