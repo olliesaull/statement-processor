@@ -66,6 +66,17 @@ from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoi
 
 # python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app
 
+
+def _is_htmx_request() -> bool:
+    """Return True if the current request was made by HTMX.
+
+    HTMX sets the ``HX-Request: true`` header on every request it initiates.
+    This is used to decide whether to return a full page render or only the
+    relevant content partial (no base layout).
+    """
+    return request.headers.get("HX-Request") == "true"
+
+
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 
@@ -889,6 +900,10 @@ def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: A
                 logger.exception(
                     "Failed to toggle statement item completion", statement_id=statement_id, statement_item_id=statement_item_id, tenant_id=tenant_id, desired_state=desired_state, error=exc
                 )
+        # For HTMX requests, fall through to re-render the partial with updated data
+        # so the browser can swap the content without a full redirect/reload.
+        if _is_htmx_request():
+            return None
         return redirect(url_for("statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false", page=page))
 
     return None
@@ -1394,7 +1409,10 @@ def statement(statement_id: str):
         "total_pages": pagination.total_pages,
         "total_visible_count": total_visible_count,
     }
-    return render_template("statement.html", **context)
+    # Return the content partial for HTMX requests so the browser swaps only
+    # the #statement-content region without a full page reload.
+    template = "partials/statement_content.html" if _is_htmx_request() else "statement.html"
+    return render_template(template, **context)
 
 
 @app.route("/tenants/select", methods=["POST"])
