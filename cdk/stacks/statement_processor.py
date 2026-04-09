@@ -139,23 +139,23 @@ class StatementProcessorStack(Stack):
 
         # region ---------- Lambda ----------
 
-        textraction_log_group = logs.LogGroup(
+        extraction_log_group = logs.LogGroup(
             self,
-            "TextractionLambdaLogGroup",
+            "ExtractionLambdaLogGroup",
             retention=log_retention,
             removal_policy=RemovalPolicy.DESTROY if not is_production else RemovalPolicy.RETAIN,
         )
 
-        textraction_lambda_image = _lambda.EcrImageCode.from_asset_image(
-            directory="../lambda_functions/textraction_lambda",
+        extraction_lambda_image = _lambda.EcrImageCode.from_asset_image(
+            directory="../lambda_functions/extraction_lambda",
             platform=ecr_assets.Platform.LINUX_ARM64,
         )
 
-        textraction_lambda = _lambda.Function(
+        extraction_lambda = _lambda.Function(
             self,
-            "TextractionLambda",
+            "ExtractionLambda",
             description="Perform statement extraction using Bedrock Haiku",
-            code=textraction_lambda_image,
+            code=extraction_lambda_image,
             memory_size=2048,
             handler=Handler.FROM_IMAGE,
             runtime=Runtime.FROM_IMAGE,
@@ -172,7 +172,7 @@ class StatementProcessorStack(Stack):
             },
         )
 
-        textraction_lambda.add_to_role_policy(
+        extraction_lambda.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["bedrock:InvokeModel"],
                 resources=[
@@ -182,11 +182,11 @@ class StatementProcessorStack(Stack):
             )
         )
 
-        tenant_statements_table.grant_read_write_data(textraction_lambda)
-        tenant_data_table.grant_read_write_data(textraction_lambda)
-        tenant_billing_table.grant_read_write_data(textraction_lambda)
-        tenant_token_ledger_table.grant_read_write_data(textraction_lambda)
-        s3_bucket.grant_read_write(textraction_lambda)
+        tenant_statements_table.grant_read_write_data(extraction_lambda)
+        tenant_data_table.grant_read_write_data(extraction_lambda)
+        tenant_billing_table.grant_read_write_data(extraction_lambda)
+        tenant_token_ledger_table.grant_read_write_data(extraction_lambda)
+        s3_bucket.grant_read_write(extraction_lambda)
 
         # endregion ---------- Lambda ----------
 
@@ -242,7 +242,7 @@ class StatementProcessorStack(Stack):
         process_statement = tasks.LambdaInvoke(
             self,
             "ProcessStatement",
-            lambda_function=textraction_lambda,
+            lambda_function=extraction_lambda,
             payload=sfn.TaskInput.from_object(
                 {
                     "tenantId": sfn.JsonPath.string_at("$.tenant_id"),
@@ -267,13 +267,13 @@ class StatementProcessorStack(Stack):
 
         state_machine = sfn.StateMachine(
             self,
-            "TextractionStateMachine",
-            state_machine_name=f"TextractionStateMachine-{stage}",
+            "ExtractionStateMachine",
+            state_machine_name=f"ExtractionStateMachine-{stage}",
             definition_body=sfn.DefinitionBody.from_chainable(process_statement),
             timeout=Duration.seconds(720),
         )
 
-        textraction_lambda.grant_invoke(state_machine.role)
+        extraction_lambda.grant_invoke(state_machine.role)
 
         # endregion ---------- StepFunctions ----------
 
@@ -356,7 +356,7 @@ class StatementProcessorStack(Stack):
                         "TENANT_BILLING_TABLE_NAME": TENANT_BILLING_TABLE_NAME,
                         "TENANT_TOKEN_LEDGER_TABLE_NAME": TENANT_TOKEN_LEDGER_TABLE_NAME,
                         "STRIPE_EVENT_STORE_TABLE_NAME": STRIPE_EVENT_STORE_TABLE_NAME,
-                        "TEXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
+                        "EXTRACTION_STATE_MACHINE_ARN": state_machine.state_machine_arn,
                         # SSM paths for secrets — read at container startup. Storing paths
                         # (not values) here means changing a secret only requires an SSM
                         # update, not a CDK redeploy.
@@ -476,7 +476,7 @@ class StatementProcessorStack(Stack):
         app_error_alarm.add_alarm_action(cw_actions.SnsAction(runtime_error_topic))
 
         lambda_alarm_targets: list[tuple[str, logs.ILogGroup]] = [
-            ("TextractionLambda", textraction_log_group),
+            ("ExtractionLambda", extraction_log_group),
             ("TenantErasureLambda", tenant_erasure_log_group),
         ]
 
