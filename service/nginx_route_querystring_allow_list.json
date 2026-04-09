@@ -12,5 +12,7 @@
   "/checkout/success": ["session_id"],
   "/checkout/failed": ["ref"],
   "comment_configs": "Contact config pre-selection",
-  "/configs": ["contact_name"]
+  "/configs": ["contact_name"],
+  "comment_buy_pages": "Pre-select tenant for page purchase",
+  "/buy-pages": ["tenant_id"]
 }
