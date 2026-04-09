@@ -51,6 +51,29 @@ class TenantBillingRepository:
         return fetch_items_by_tenant_id(cls.get_item, tenant_ids, max_workers=max_workers)
 
     @classmethod
+    def get_stripe_customer_id(cls, tenant_id: str) -> str | None:
+        """Fetch the persistent Stripe Customer ID for a tenant.
+
+        Returns None if the tenant has no billing record or no
+        StripeCustomerID attribute (first-time purchaser).
+        """
+        item = cls.get_item((tenant_id or "").strip())
+        if not item:
+            return None
+        cid = item.get("StripeCustomerID")
+        return str(cid) if cid else None
+
+    @classmethod
+    def set_stripe_customer_id(cls, tenant_id: str, stripe_customer_id: str) -> None:
+        """Persist a Stripe Customer ID on the tenant billing record.
+
+        Called after the first Stripe Customer is created for a tenant.
+        Subsequent purchases reuse this customer (last-write-wins on
+        billing details — invoices snapshot details at creation time).
+        """
+        cls._table.update_item(Key={"TenantID": tenant_id}, UpdateExpression="SET StripeCustomerID = :cid", ExpressionAttributeValues={":cid": stripe_customer_id})
+
+    @classmethod
     def get_tenant_token_balances(cls, tenant_ids: Iterable[str], max_workers: int = 4) -> dict[str, int]:
         """Fetch multiple tenant billing records concurrently and return their token balances."""
         unique_ids = {tid.strip() for tid in tenant_ids if tid and isinstance(tid, str)}

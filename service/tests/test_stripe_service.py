@@ -62,6 +62,21 @@ def test_create_customer_includes_tenant_id_in_metadata() -> None:
 
 
 # ---------------------------------------------------------------------------
+# update_customer
+# ---------------------------------------------------------------------------
+
+
+def test_update_customer_updates_billing_details() -> None:
+    """update_customer should call stripe.Customer.modify with the new details."""
+    with patch.object(stripe_service_module.stripe.Customer, "modify") as mock_modify:
+        service = StripeService()
+        address = {"line1": "3 New St", "line2": "", "city": "London", "state": "", "postal_code": "SW1A 2AA", "country": "GB"}
+        service.update_customer(customer_id="cus_existing", name="New Name", email="new@email.com", address=address)
+
+    mock_modify.assert_called_once_with("cus_existing", name="New Name", email="new@email.com", address=address)
+
+
+# ---------------------------------------------------------------------------
 # create_checkout_session — price calculation
 # ---------------------------------------------------------------------------
 

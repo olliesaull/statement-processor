@@ -46,6 +46,22 @@ class StripeService:
         logger.info("Created per-checkout Stripe customer", tenant_id=tenant_id, stripe_customer_id=customer.id)
         return customer.id
 
+    def update_customer(self, *, customer_id: str, name: str, email: str, address: dict[str, str]) -> None:
+        """Update an existing Stripe Customer's billing details.
+
+        Called on repeat purchases to keep the customer record current.
+        Invoices snapshot billing details at creation time, so updating
+        here does not affect historical invoices (last-write-wins by design).
+
+        Args:
+            customer_id: Existing Stripe Customer ID (``cus_xxx``).
+            name: Updated company or person name.
+            email: Updated billing email.
+            address: Updated billing address dict.
+        """
+        stripe.Customer.modify(customer_id, name=name, email=email, address=address)
+        logger.info("Updated Stripe customer billing details", stripe_customer_id=customer_id)
+
     def create_checkout_session(self, *, customer_id: str, token_count: int, tenant_id: str, success_url: str, cancel_url: str) -> stripe.checkout.Session:
         """Create a Stripe Checkout Session for a one-time token purchase.
 
