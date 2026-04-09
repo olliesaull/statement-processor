@@ -1,9 +1,9 @@
 {
   "comment": "Allowed query parameters per route. Routes not listed here have query strings stripped.",
-  "comment_statements": "Statement list sorting and filtering",
-  "/statements": ["view", "sort", "dir"],
-  "comment_statement_detail": "Statement detail view controls and export",
-  "/statement/<statement_id>": ["items_view", "show_payments", "download"],
+  "comment_statements": "Statement list sorting, filtering, and pagination",
+  "/statements": ["view", "sort", "dir", "page", "per_page"],
+  "comment_statement_detail": "Statement detail view controls, export, and pagination",
+  "/statement/<statement_id>": ["items_view", "show_payments", "download", "page"],
   "comment_oauth": "Xero OAuth callback — success (code, scope, state, session_state) and error paths",
   "/callback": ["code", "scope", "state", "session_state", "error", "error_description"],
   "comment_stripe": "Stripe checkout flow",
