@@ -2133,14 +2133,19 @@ a:focus-visible {
 .legal-content a { color: var(--blue-600); }
 
 /* ---------- HTMX loading indicator ---------- */
-/* Fade content area and block pointer events during in-flight HTMX requests.
+/* Block pointer events immediately during in-flight HTMX requests to prevent
+   double-clicks. The opacity fade only kicks in after 300ms so fast requests
+   (most interactions with disk-cached data) don't produce a visible flash.
    .htmx-request is added by HTMX to the element matched by hx-indicator.
    The indicator is set to "closest .page-main", so this targets the content
    divs within it during any partial swap on the statement or statements pages. */
 .htmx-request #statement-content,
 .htmx-request #statements-content {
-  opacity: 0.5;
   pointer-events: none;
-  transition: opacity 200ms ease-in-out;
+  animation: htmx-fade-in 0s ease-in-out 300ms forwards;
+}
+
+@keyframes htmx-fade-in {
+  to { opacity: 0.5; }
 }
 .legal-content strong { color: var(--slate-800); }
