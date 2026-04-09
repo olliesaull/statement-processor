@@ -252,6 +252,10 @@ deploy() {
     fi
 }
 
+# Prompt to confirm the change has been tested locally via container.
+read -rp "Have you tested this change by running as a container? (Y/n): " response
+[ "$response" = "Y" ] || { echo "Deployment aborted."; exit 1; }
+
 # Keep an explicit manual confirmation step for production deploys.
 if [ "$PROFILE" = "dotelastic-production" ]; then
     read -rp "Are you sure you want to deploy to ${PROFILE}? (Y/n): " response
