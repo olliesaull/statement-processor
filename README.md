@@ -488,6 +488,30 @@ The site uses Bootstrap 5.3.3 with a custom design token layer in `service/stati
 - **Sticky footer**: `body` uses `display: flex; flex-direction: column; min-height: 100dvh` with `.site-shell-main { flex: 1 }` to push the footer to the bottom on short-content pages (checkout success/cancel/failed).
 - **Self-hosted fonts and Bootstrap**: Bootstrap CSS/JS and Google Fonts (Source Serif 4 + Outfit, woff2) are served from `service/static/assets/vendor/` instead of external CDNs. This eliminates runtime dependencies on jsdelivr and Google Fonts, removes the need for CDN entries in the nginx CSP, and avoids privacy implications of third-party font requests. The download script (`service/scripts/update-vendor-assets.sh`) fetches all vendor files and generates `fonts.css` with `@font-face` declarations.
 
+## HTMX Partial Page Updates
+
+The statement detail (`/statement/<id>`) and statements list (`/statements`) pages use [HTMX](https://htmx.org/) for partial page updates. Instead of full page reloads on every interaction, only the dynamic content area swaps via HTMX — filters, pagination, sort, toggle payments, and mark complete all happen without a page flash.
+
+### How it works
+
+- **Content partials**: Each page's dynamic content is extracted into a Jinja partial (`templates/partials/statement_content.html` and `templates/partials/statements_content.html`). The main template `{% include %}`s the partial for the initial full-page load.
+- **HX-Request detection**: The Flask route checks for the `HX-Request` header (set automatically by HTMX). If present, it renders just the partial; otherwise it renders the full page with `base.html`. No separate endpoints needed — same URL serves both.
+- **Graceful degradation**: All links keep their `href` and forms keep their `action`/`method`, so the pages work without JavaScript.
+- **URL bar sync**: GET interactions use `hx-push-url="true"` so the browser URL, back/forward, and bookmarks all work correctly.
+- **Scroll preservation**: All swaps use `hx-swap="outerHTML scroll:no-scroll"` to prevent scroll position resetting.
+
+### S3 JSON disk cache
+
+The statement detail page fetches the statement JSON from S3 on every load. To avoid this network round-trip on repeat interactions, `fetch_json_statement` caches the S3 JSON to local disk (`/tmp/data/{tenant_id}/statements/{statement_id}.json`) with a 15-minute TTL. This follows the same pattern used by the Xero dataset cache in `xero_repository.py`. The S3 JSON is effectively immutable for a given statement ID during normal use — re-uploads create new statement IDs.
+
+### JS re-initialisation
+
+When HTMX swaps content, DOM elements that had event listeners or IntersectionObservers attached are replaced. The `setupStickyActionDocks`, `setupScrollProxy`, and `setupPaginationJump` functions in `main.js` use `AbortController` for listener cleanup and are re-run via `htmx:afterSwap` to safely re-initialise after each swap.
+
+### Delete with count refresh (statements list page)
+
+Statement deletion on the list page uses `hx-swap="delete"` to remove the row, then the server returns an `HX-Trigger: listUpdated` header. A client-side listener fetches the current count from `/statements/count` (an endpoint that returns OOB `<span>` elements) to update both the footer and sticky dock count chips with the authoritative server count.
+
 ## Vendor Assets (Self-Hosted)
 
 All third-party CSS, JS, and fonts are self-hosted under `service/static/assets/vendor/`
@@ -496,6 +520,7 @@ and Google Fonts.
 
 ### What's vendored
 - **Bootstrap 5.3.3** — CSS and JS bundle
+- **HTMX 2.0.4** — partial page updates (see below)
 - **Google Fonts** — Source Serif 4 (display) and Outfit (body), woff2 format
 
 ### Updating vendor assets
