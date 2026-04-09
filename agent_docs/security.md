@@ -36,7 +36,7 @@ Do not change these semantics without updating frontend logic and docs.
 
 - Uploads accept only PDFs (`application/pdf` + `.pdf`) and are size-limited via `MAX_CONTENT_LENGTH`.
 - S3 keys are sanitized to avoid path traversal or separator injection.
-- Textract and Xero responses are untrusted external data; validate/normalize before persistence.
+- Bedrock and Xero responses are untrusted external data; validate/normalize before persistence.
 - `table_to_json` requires configured `date_format`; this is a deliberate data-quality gate.
 
 ## Secrets and Logging
@@ -59,7 +59,7 @@ Do not change these semantics without updating frontend logic and docs.
 - Run `make dev` and inspect output (targets are currently non-blocking).
 - Run targeted tests for auth/session/upload changes:
   - `cd service && python3.13 -m pytest tests`
-  - `cd lambda_functions/textraction_lambda && python3.13 -m pytest tests`
+  - `cd lambda_functions/extraction_lambda && python3.13 -m pytest tests`
 - Bandit findings must be fixed or explicitly justified.
 
 ## Change Review Checklist

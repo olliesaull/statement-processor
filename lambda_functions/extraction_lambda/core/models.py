@@ -2,7 +2,7 @@
 Pydantic models used across the Lambda.
 
 These are small, focused schemas that:
-- Validate/normalize the StepFunctions -> Lambda event payload (`TextractionEvent`)
+- Validate/normalize the StepFunctions -> Lambda event payload (`ExtractionEvent`)
 - Define the extraction output contract (`ExtractionResult`)
 - Provide a typed representation of extracted statement data (`StatementItem`, `SupplierStatement`)
 """
@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 Number = int | float | str
 
 
-class TextractionEvent(BaseModel):
+class ExtractionEvent(BaseModel):
     """Typed event payload for this Lambda.
 
     StepFunctions passes keys in camelCase; we expose snake_case

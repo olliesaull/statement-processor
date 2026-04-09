@@ -1,7 +1,7 @@
 # Project Overview
 
 This repository implements a supplier statement reconciliation system for Xero.
-Users upload supplier statement PDFs, the system extracts line items with Textract, maps them to Xero bills/credit notes/payments, and presents a reconciliation UI plus Excel export.
+Users upload supplier statement PDFs, the system extracts line items with Bedrock, maps them to Xero bills/credit notes/payments, and presents a reconciliation UI plus Excel export.
 
 ## Purpose
 
@@ -10,7 +10,7 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
 - Core constraints:
   - Multi-tenant data isolation by `TenantID`.
   - Financial-document correctness is more important than speed for final output.
-  - Extraction is asynchronous (Textract + Step Functions), so UI must handle processing states.
+  - Extraction is asynchronous (Bedrock + Step Functions), so UI must handle processing states.
   - Step Functions payload size is limited, so full extracted JSON is stored in S3, not passed between states.
 
 ## Runtime Architecture
@@ -21,17 +21,14 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
 - Nginx reverse proxy sits in front of Gunicorn inside the container, providing security headers, CSP, rate limiting, and per-route query string / body size validation. Config lives in `service/nginx.conf` and auto-generated `service/nginx-routes.conf`. See the README "Nginx Reverse Proxy" section for maintenance details.
 - **Nginx regeneration required** when adding/removing Flask routes, changing auth decorators (which affects public-page detection), or adding query parameters to routes. Public routes have query strings stripped unless they have an entry in `service/nginx_route_querystring_allow_list.json`. Run the generator from `service/` and review the `nginx-routes.conf` diff.
 
-### Extraction pipeline (`lambda_functions/textraction_lambda/`)
-- Container Lambda entry point: [`lambda_functions/textraction_lambda/main.py`](lambda_functions/textraction_lambda/main.py).
-- Converts Textract table blocks into structured statement JSON, applies anomaly flags, persists item rows to DynamoDB, uploads JSON to S3, and updates statement metadata.
-- Main orchestrator: [`lambda_functions/textraction_lambda/core/textract_statement.py`](lambda_functions/textraction_lambda/core/textract_statement.py).
+### Extraction pipeline (`lambda_functions/extraction_lambda/`)
+- Container Lambda entry point: [`lambda_functions/extraction_lambda/main.py`](lambda_functions/extraction_lambda/main.py).
+- Converts PDF pages into structured statement JSON via Bedrock, applies anomaly flags, persists item rows to DynamoDB, uploads JSON to S3, and updates statement metadata.
+- Main orchestrator: [`lambda_functions/extraction_lambda/core/statement_processor.py`](lambda_functions/extraction_lambda/core/statement_processor.py).
 
 ### Workflow orchestration (Step Functions)
 - State machine defined in [`cdk/stacks/statement_processor.py`](cdk/stacks/statement_processor.py):
-  - `StartTextractDocumentAnalysis`
-  - `WaitForTextract` (10s poll interval)
-  - `GetTextractStatus`
-  - `ProcessStatement` (invoke Textraction Lambda on `SUCCEEDED`, `PARTIAL_SUCCESS`, or `FAILED`)
+  - `ProcessStatement` (invoke Extraction Lambda)
   - `DidStatementProcessingSucceed?` to branch on the Lambda payload status before the execution ends
 - Started by web app upload flow via [`service/utils/workflows.py`](service/utils/workflows.py).
 
@@ -48,8 +45,8 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
 - Xero OAuth + Accounting API:
   - OAuth login/callback in Flask.
   - Background sync caches contacts/invoices/payments/credit notes.
-- AWS Textract:
-  - Async table extraction (`StartDocumentAnalysis` + `GetDocumentAnalysis`).
+- Amazon Bedrock (Claude Haiku 4.5):
+  - Statement extraction via Converse API.
 
 ## Core Flows
 
@@ -59,7 +56,7 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
 3. Service reserves tokens atomically in `TenantBillingTable` + `TenantTokenLedgerTable` and creates the statement header row with `PdfPageCount`, `ReservationLedgerEntryID`, and `TokenReservationStatus=reserved`.
 4. PDF uploaded to S3 at `<tenant_id>/statements/<statement_id>.pdf`.
 5. Step Functions execution starts with tenant/contact/statement/S3 keys.
-6. Lambda processes Textract output and writes JSON to `<tenant_id>/statements/<statement_id>.json`.
+6. Lambda processes Bedrock output and writes JSON to `<tenant_id>/statements/<statement_id>.json`.
 7. Lambda consumes the earlier reservation on success, or releases it on workflow failure, and statement item rows are written to `TenantStatementsTable` using item IDs like `<statement_id>#item-0001`.
 
 ### Statement detail reconciliation
@@ -126,8 +123,8 @@ Users upload supplier statement PDFs, the system extracts line items with Textra
 
 ## Directory Responsibilities
 
-- `cdk/`: AWS infrastructure definitions for web Lambda, textraction Lambda, Step Functions, DynamoDB, S3, CloudWatch/SNS.
+- `cdk/`: AWS infrastructure definitions for web Lambda, extraction Lambda, Step Functions, DynamoDB, S3, CloudWatch/SNS.
 - `service/`: Flask web app, reconciliation logic, Xero sync/cache access, templates/static assets, unit + Playwright tests.
-- `lambda_functions/textraction_lambda/`: Textract result reconstruction, mapping/normalization, anomaly flagging, persistence.
+- `lambda_functions/extraction_lambda/`: Bedrock extraction, mapping/normalization, anomaly flagging, persistence.
 - `scripts/clear_ddb_and_s3/`: operator reset tool for the configured S3 bucket and tenant data tables; it supports full-environment clears or one-tenant deletes by `TenantID`/S3 prefix so the existing workflow can be narrowed without changing which resources are touched.
 - `scripts/manual_token_adjustment/`: operator-only tool for manual token grants/removals; intentionally reuses the service billing transaction logic so snapshot and ledger writes stay atomic.

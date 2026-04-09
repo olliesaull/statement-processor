@@ -106,7 +106,7 @@ def test_item_count_validation_raises_when_references_missing(monkeypatch: pytes
         assert exc.summary["json_refs_missing"] == 1
         assert exc.summary["pdf_candidates"] == 1
         assert exc.pdfplumber_count == 1
-        assert exc.textract_count == 2
+        assert exc.extraction_count == 2
     else:
         raise AssertionError("Expected ItemCountDisagreementError")
 

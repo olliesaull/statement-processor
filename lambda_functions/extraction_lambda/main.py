@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from config import S3_BUCKET_NAME
 from core.billing import SOURCE_EXTRACTION_FAILURE, SOURCE_EXTRACTION_SUCCESS, BillingSettlementError, BillingSettlementService
-from core.models import TextractionEvent
+from core.models import ExtractionEvent
 from core.processing_progress import update_processing_stage
 from core.statement_processor import run_extraction
 from logger import logger
@@ -46,7 +46,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # py
     logger.info("Extraction lambda invoked", event_keys=list(event.keys()) if isinstance(event, dict) else [])
 
     try:
-        payload = TextractionEvent.model_validate(event)
+        payload = ExtractionEvent.model_validate(event)
     except ValidationError as exc:
         logger.error("Event failed validation", errors=exc.errors())
         return {"status": "error", "message": "Invalid event payload", "errors": exc.errors()}

@@ -25,7 +25,7 @@ Prefer one of:
 - Dataclasses (internal data containers)
 - TypedDict (when dict shape is required, but you want typing)
 
-In this repo, plain dict payloads are still common at boundaries (Flask request/session, Textract/Xero responses, DynamoDB items). Keep boundary handling explicit and typed where practical.
+In this repo, plain dict payloads are still common at boundaries (Flask request/session, Bedrock/Xero responses, DynamoDB items). Keep boundary handling explicit and typed where practical.
 
 ### Enums for fixed values
 - For small fixed vocabularies, prefer `Enum` over string literals.

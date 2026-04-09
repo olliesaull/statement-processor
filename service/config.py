@@ -70,7 +70,7 @@ _secrets = _fetch_ssm_secrets()
 DOMAIN_NAME: str = get_envar("DOMAIN_NAME", "localhost")
 S3_BUCKET_NAME: str = get_envar("S3_BUCKET_NAME")
 STAGE: str = get_envar("STAGE", "prod")
-TEXTRACTION_STATE_MACHINE_ARN: str = get_envar("TEXTRACTION_STATE_MACHINE_ARN")
+EXTRACTION_STATE_MACHINE_ARN: str = get_envar("EXTRACTION_STATE_MACHINE_ARN")
 VALKEY_URL: str = get_envar("VALKEY_URL", "redis://127.0.0.1:6379/0")
 # Ignoring Bandit suggestion as tempfile.gettempdir returns /tmp anyways (B108:hardcoded_tmp_directory)
 LOCAL_DATA_DIR: str = "./tmp/data" if STAGE in {"dev", "local"} else "/tmp/data"  # nosec B108

@@ -2,7 +2,7 @@
 
 This repository has three test layers:
 - Service unit tests in `service/tests/`
-- Textraction Lambda unit tests in `lambda_functions/textraction_lambda/tests/`
+- Extraction Lambda unit tests in `lambda_functions/extraction_lambda/tests/`
 - End-to-end Playwright tests in `service/playwright_tests/`
 
 Use this document when changing behavior, fixing bugs, or adding features.
@@ -12,8 +12,8 @@ Use this document when changing behavior, fixing bugs, or adding features.
 ### Service unit tests
 - `cd service && python3.13 -m pytest tests`
 
-### Textraction Lambda unit tests
-- `cd lambda_functions/textraction_lambda && python3.13 -m pytest tests`
+### Extraction Lambda unit tests
+- `cd lambda_functions/extraction_lambda && python3.13 -m pytest tests`
 
 ### Playwright end-to-end tests
 - `cd service && python3.13 -m pytest -vv -s --tb=long playwright_tests/tests/e2e/test_statement_flow.py --headed`
@@ -46,7 +46,7 @@ Avoid coupling tests to incidental implementation details.
 
 Mock external boundaries, not internal helpers:
 - Xero API calls
-- AWS SDK calls (S3, DynamoDB, Textract, Step Functions)
+- AWS SDK calls (S3, DynamoDB, Bedrock, Step Functions)
 - Filesystem/network/time when needed for determinism
 
 Keep returned payloads realistic so tests validate production-shaped data.
