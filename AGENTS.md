@@ -18,7 +18,7 @@ Project-specific context lives in `agent_docs/`.
 ## Required Workflow After Code Changes (important)
 
 After modifying Python code, always run `make dev`.
-- Run `make` commands from within `service/` or `lambda_functions/textraction_lambda/`, not from the repo root. The Makefile uses `find .` relative to the working directory, so running from root breaks pylint module resolution and produces spurious duplicate-code and import errors. The exception is `make run-app`, which is run from the repo root.
+- Run `make` commands from within `service/` or `lambda_functions/extraction_lambda/`, not from the repo root. The Makefile uses `find .` relative to the working directory, so running from root breaks pylint module resolution and produces spurious duplicate-code and import errors. The exception is `make run-app`, which is run from the repo root.
 - This runs formatting and linting. Work is not complete unless it passes.
 - Do not suppress lint errors without justification.
 - If you cannot run commands, state what you would have run and why.
