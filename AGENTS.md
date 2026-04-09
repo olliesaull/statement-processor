@@ -72,6 +72,27 @@ Do not change behaviour solely for style/cleanup.
 - Make the plan extremely concise. Sacrifice grammar for the sake of concision.
 - At the end of each plan, give mne a list of unanswered questions to answer, if any.
 
+## Deployment Configuration Checklist (important)
+
+There is no nginx in the local dev environment, so changes that affect nginx or the Docker image will work locally but **break in production** if the config files are not updated. Always check these when making changes:
+
+### Dockerfile (`service/Dockerfile`)
+- **New directories under `service/`**: Add a `COPY <dir>/ ./<dir>/` line. The Dockerfile copies directories explicitly — new ones are silently excluded from the container image.
+- **New config/data files**: If the app reads a new file at runtime, ensure it is copied into the image.
+
+### Nginx query string allowlist (`service/nginx_route_querystring_allow_list.json`)
+- **Adding or renaming query parameters on a route**: Add/update the entry in this JSON file. Public routes have query strings **stripped** by nginx unless explicitly allowed here. This is the most common production-only failure — the app works locally because there is no nginx, but 404s in production because the parameter is blocked.
+
+### Nginx route regeneration (`service/nginx-routes.conf`)
+- **Adding/removing Flask routes, changing auth decorators, or changing allowed query params**: Regenerate `nginx-routes.conf` by running the generator from `service/`:
+  ```
+  cd service && python3.13 nginx_route_config_generator.py
+  ```
+  Review the diff before committing.
+
+### Nginx route overrides (`service/nginx_route_overrides.json`)
+- **Routes needing non-default body size or timeout**: Add an entry here (e.g. `client_max_body_size`, `proxy_read_timeout`).
+
 ## Browser Testing with Playwright (important)
 
 When using the Playwright MCP to test pages in the browser, you **must** authenticate first by navigating to `http://localhost:8080/test-login`. This seeds a fake session so all authenticated pages are accessible. Without this step, navigating to any protected page (e.g. `/statements`) will redirect to the Xero OAuth login, which cannot be completed in Playwright.
