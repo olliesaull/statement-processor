@@ -62,38 +62,30 @@ class StripeService:
         stripe.Customer.modify(customer_id, name=name, email=email, address=address)
         logger.info("Updated Stripe customer billing details", stripe_customer_id=customer_id)
 
-    def create_checkout_session(self, *, customer_id: str, token_count: int, tenant_id: str, success_url: str, cancel_url: str) -> stripe.checkout.Session:
+    def create_checkout_session(self, *, customer_id: str, token_count: int, total_amount_pence: int, tenant_id: str, success_url: str, cancel_url: str) -> stripe.checkout.Session:
         """Create a Stripe Checkout Session for a one-time token purchase.
 
-        Uses ``price_data`` (dynamic pricing) rather than fixed Price objects
-        because token count is a free-form integer. The total ``unit_amount``
-        is the full purchase price (``token_count x price_per_token``), with
-        quantity set to 1 so the line item shows one purchase at the total
-        price rather than N items at unit cost.
-
-        Metadata carries ``tenant_id`` and ``token_count`` for the success
-        route to verify ownership and determine how many tokens to credit.
+        Uses ``price_data`` (dynamic pricing) with the caller-provided total
+        amount. The total is computed by PricingConfig using graduated tiers.
+        Quantity is 1 so the line item shows one purchase at the total price.
 
         Args:
             customer_id: Stripe Customer ID to attach to the session.
-            token_count: Number of tokens the user wants to purchase.
-            tenant_id: Tenant making the purchase — stored in metadata for
-                server-side verification on the success redirect.
-            success_url: Stripe will redirect here after successful payment.
-                Must include the ``{CHECKOUT_SESSION_ID}`` template literal.
-            cancel_url: Stripe will redirect here if the user cancels.
+            token_count: Number of tokens (stored in metadata for crediting).
+            total_amount_pence: Total price in pence (computed by PricingConfig).
+            tenant_id: Tenant making the purchase — stored in metadata.
+            success_url: Redirect URL after payment (must include {CHECKOUT_SESSION_ID}).
+            cancel_url: Redirect URL if user cancels.
 
         Returns:
-            The created Stripe Checkout Session object (contains ``.url`` for
-            the hosted payment page redirect).
+            The created Stripe Checkout Session object.
         """
-        unit_amount = token_count * STRIPE_PRICE_PER_TOKEN_PENCE
         return stripe.checkout.Session.create(
             customer=customer_id,
             mode="payment",
             invoice_creation={"enabled": True},
             billing_address_collection="auto",
-            line_items=[{"price_data": {"currency": STRIPE_CURRENCY, "product": STRIPE_PRODUCT_ID, "unit_amount": unit_amount}, "quantity": 1}],
+            line_items=[{"price_data": {"currency": STRIPE_CURRENCY, "product": STRIPE_PRODUCT_ID, "unit_amount": total_amount_pence}, "quantity": 1}],
             metadata={"tenant_id": tenant_id, "token_count": str(token_count)},
             success_url=success_url,
             cancel_url=cancel_url,

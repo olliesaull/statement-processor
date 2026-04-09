@@ -9,7 +9,7 @@
     <p class="page-subtitle mb-0">
       Enter the details you want to appear on your invoice.
       You are purchasing <strong>{{ token_count }}</strong> page{% if token_count != 1 %}s{% endif %}
-      &mdash; <strong>&pound;{{ "%.2f"|format(token_count * price_pence / 100) }}</strong>.
+      &mdash; <strong>&pound;{{ "%.2f"|format(total_pence / 100) }}</strong>.
     </p>
   </header>
 
