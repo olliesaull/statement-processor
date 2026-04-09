@@ -1965,7 +1965,8 @@ def checkout_success():
     # Security: verify the session belongs to the authenticated tenant.
     # Prevents a user who obtains another tenant's session_id from crediting
     # the wrong account.
-    session_tenant_id = stripe_session.metadata.get("tenant_id")
+    # Stripe metadata is a StripeObject, not a plain dict — use bracket access.
+    session_tenant_id = stripe_session.metadata["tenant_id"] if "tenant_id" in stripe_session.metadata else None
     if session_tenant_id != tenant_id:
         logger.warning("Session tenant_id mismatch", session_id=session_id, session_tenant_id=session_tenant_id, auth_tenant_id=tenant_id)
         return redirect(url_for("checkout_failed"))
