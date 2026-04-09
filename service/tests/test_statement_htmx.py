@@ -118,3 +118,61 @@ class TestStatementPostHtmxResponse:
         html = response.data.decode()
         assert "<!doctype html>" not in html.lower()
         assert 'id="statement-content"' in html
+
+
+class TestStatementsListHtmxPartialResponse:
+    """When HX-Request header is present on /statements, return partial only."""
+
+    def test_normal_get_returns_full_page(self, client, monkeypatch):
+        """A standard GET (no HX-Request) must render the full HTML page with DOCTYPE."""
+        monkeypatch.setattr(app_module, "get_incomplete_statements", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "get_completed_statements", lambda *a, **kw: [])
+        response = client.get("/statements")
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert "<!doctype html>" in html.lower() or "<!DOCTYPE html>" in html
+        assert 'id="statements-content"' in html
+
+    def test_htmx_get_returns_partial_only(self, client, monkeypatch):
+        """A GET with HX-Request: true must render only the partial, without DOCTYPE."""
+        monkeypatch.setattr(app_module, "get_incomplete_statements", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "get_completed_statements", lambda *a, **kw: [])
+        response = client.get("/statements", headers={"HX-Request": "true"})
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert "<!doctype html>" not in html.lower()
+        assert 'id="statements-content"' in html
+
+
+class TestDeleteStatementHtmxResponse:
+    """When HX-Request header is present on delete, return empty 200 with HX-Trigger."""
+
+    def test_normal_delete_redirects(self, client, monkeypatch):
+        """A standard POST delete (no HX-Request) must redirect (302)."""
+        monkeypatch.setattr(app_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
+        monkeypatch.setattr(app_module, "delete_statement_data", lambda *a, **kw: None)
+        response = client.post(f"/statement/{STATEMENT_ID}/delete")
+        assert response.status_code == 302
+
+    def test_htmx_delete_returns_empty_200_with_trigger(self, client, monkeypatch):
+        """A POST delete with HX-Request: true must return empty 200 with HX-Trigger header."""
+        monkeypatch.setattr(app_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
+        monkeypatch.setattr(app_module, "delete_statement_data", lambda *a, **kw: None)
+        response = client.post(f"/statement/{STATEMENT_ID}/delete", headers={"HX-Request": "true"})
+        assert response.status_code == 200
+        assert response.headers.get("HX-Trigger") == "listUpdated"
+        assert response.data == b""
+
+
+class TestStatementsCountEndpoint:
+    """The /statements/count endpoint returns the current statement count HTML."""
+
+    def test_returns_count_html(self, client, monkeypatch):
+        """The endpoint must return an HTML fragment with the statement count."""
+        sample_statements = [{"StatementID": "s1", "ContactName": "A", "Completed": "false"}, {"StatementID": "s2", "ContactName": "B", "Completed": "false"}]
+        monkeypatch.setattr(app_module, "get_incomplete_statements", lambda *a, **kw: sample_statements)
+        monkeypatch.setattr(app_module, "get_completed_statements", lambda *a, **kw: [])
+        response = client.get("/statements/count")
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert "2 statements" in html

@@ -13,7 +13,7 @@ import redis
 import stripe
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
-from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, jsonify, make_response, redirect, render_template, request, session, url_for
 from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
@@ -804,8 +804,10 @@ def statements():
         statements=len(statement_rows),
     )
 
+    # HTMX requests receive only the content partial; normal requests get the full page.
+    template = "partials/statements_content.html" if _is_htmx_request() else "statements.html"
     return render_template(
-        "statements.html",
+        template,
         statements=statement_rows,
         show_completed=show_completed,
         message=message,
@@ -816,6 +818,29 @@ def statements():
         per_page=pagination.per_page,
         total_pages=pagination.total_pages,
         statement_count=statement_count,
+    )
+
+
+@app.route("/statements/count")
+@active_tenant_required("Please select a tenant.")
+@xero_token_required
+@route_handler_logging
+def statements_count():
+    """Return the current statement count as an HTML fragment for HTMX count refresh.
+
+    Reads the same view param as the statements list so the count reflects the
+    currently visible tab (incomplete vs. completed).  Returns two out-of-band
+    span elements that HTMX can swap into the page without a full reload.
+    """
+    view = request.args.get("view", "incomplete").lower()
+    show_completed = view == "completed"
+    rows = get_completed_statements() if show_completed else get_incomplete_statements()
+    count = len(rows)
+    label = f"{count} statement{'s' if count != 1 else ''}"
+    # Two OOB spans: one for the main action bar, one for the sticky dock.
+    return (
+        f'<span class="action-count-chip" id="statements-count-chip" hx-swap-oob="true">{label}</span>\n'
+        f'<span class="action-count-chip" id="statements-count-chip-sticky" hx-swap-oob="true">{label}</span>'
     )
 
 
@@ -853,6 +878,12 @@ def delete_statement(statement_id: str):
         logger.exception("Failed to delete statement", tenant_id=tenant_id, statement_id=statement_id, error=exc)
         session["tenant_error"] = "Unable to delete the statement. Please try again."
 
+    # HTMX deletions: return an empty 200 with a trigger so the client can
+    # refresh the list without a full page reload.
+    if _is_htmx_request():
+        response = make_response("", 200)
+        response.headers["HX-Trigger"] = "listUpdated"
+        return response
     return redirect(url_for("statements", **redirect_args))
 
 
