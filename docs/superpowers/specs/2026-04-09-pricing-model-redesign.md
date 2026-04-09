@@ -249,6 +249,20 @@ No schema migrations needed (DynamoDB is schemaless). Old entries without `Price
 
 ---
 
+## UI naming: "pages" not "tokens"
+
+The backend uses "tokens" as an abstract billing unit (1 token = 1 PDF page today, but the ratio could change). The **user-facing UI uses "pages"** exclusively — customers think in terms of PDF pages, and adding a "token" abstraction creates unnecessary cognitive load.
+
+**Rules:**
+- All customer-visible text says "pages" (templates, JS messages, error messages, `llms.md`, pricing page, etc.)
+- All backend code, DynamoDB attributes, ledger entries, logs, and internal variable names continue to say "tokens"
+- README and developer docs note that "tokens are called pages in the UI"
+- Flask route URLs (`/buy-tokens`, `url_for('buy_tokens')`) stay as-is — they're internal identifiers, not customer-visible text
+
+**Scope:** ~37 user-facing string occurrences across templates, JS, Python error messages, `llms.md`, and the welcome banner.
+
+---
+
 ## Decisions log
 
 | Decision | Choice | Rationale |
