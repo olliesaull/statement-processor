@@ -22,7 +22,7 @@ def extract_monetary_values(headers: list[str], rows: list[list[str]], total_col
     """Collect raw monetary cell values from the total column(s).
 
     First tries to match ``total_columns`` against ``headers`` by name.
-    If no columns match (e.g. Textract picked up a title row instead of
+    If no columns match (e.g. extraction picked up a title row instead of
     real headers), falls back to scanning all cells for monetary-looking
     values — skipping columns that match ``exclude_columns`` (typically
     date columns whose separators would pollute the analysis).

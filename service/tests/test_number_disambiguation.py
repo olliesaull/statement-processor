@@ -239,7 +239,7 @@ def test_extract_monetary_values_missing_column_no_fallback_data() -> None:
 
 def test_extract_fallback_when_headers_dont_match() -> None:
     """When total column names don't match headers, scan all cells."""
-    # Textract picked up title row instead of real column headers.
+    # Extraction picked up title row instead of real column headers.
     headers = ["ITEMS NOT", "YET PAID", "AS AT DATE", "THIS STATEMENT", "", "", ""]
     rows = [["03.07.2023", "76977177", "SKC CLM ORDER", "208078519", "", "3,848.97", "0.00"], ["03.07.2023", "76982233", "0076977177", "208078520", "", "0.00", "126.50-"]]
     values = extract_monetary_values(headers, rows, ["Invoices", "Credit Notes", "Total"])

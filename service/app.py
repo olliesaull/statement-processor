@@ -61,7 +61,7 @@ from utils.statement_upload_validation import PreparedStatementUpload, build_sta
 from utils.statement_view import build_right_rows, build_row_comparisons, match_invoices_to_statement_items, prepare_display_mappings
 from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
 from utils.tenant_status import get_tenant_status
-from utils.workflows import start_textraction_state_machine
+from utils.workflows import start_extraction_state_machine
 from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
 
 # python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app
@@ -361,7 +361,7 @@ def _get_active_contacts_for_upload() -> tuple[list[dict[str, Any]], dict[str, s
 
 
 def _process_statement_upload(tenant_id: str | None, reserved_upload: ReservedStatementUpload) -> str:
-    """Upload a reserved statement PDF and kick off textraction.
+    """Upload a reserved statement PDF and kick off extraction.
 
     Args:
         tenant_id: Active Xero tenant.
@@ -394,18 +394,18 @@ def _process_statement_upload(tenant_id: str | None, reserved_upload: ReservedSt
         logger.exception("Failed to upload reserved statement PDF", tenant_id=tenant_id, contact_id=reserved_upload.contact_id, statement_id=statement_id, s3_key=pdf_statement_key, error=exc)
         raise StatementUploadStartError("The statement PDF could not be uploaded.") from exc
 
-    # Kick off background textraction so it's ready by the time the user views it.
+    # Kick off background extraction so it's ready by the time the user views it.
     json_statement_key = statement_json_s3_key(tenant_id, statement_id)
-    started = start_textraction_state_machine(
+    started = start_extraction_state_machine(
         tenant_id=tenant_id, contact_id=reserved_upload.contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key, page_count=reserved_upload.page_count
     )
 
     log_kwargs = {"tenant_id": tenant_id, "contact_id": reserved_upload.contact_id, "statement_id": statement_id, "pdf_key": pdf_statement_key, "json_key": json_statement_key}
 
     if started:
-        logger.info("Started textraction workflow", **log_kwargs)
+        logger.info("Started extraction workflow", **log_kwargs)
     else:
-        logger.error("Failed to start textraction workflow", **log_kwargs)
+        logger.error("Failed to start extraction workflow", **log_kwargs)
         raise StatementUploadStartError("The statement workflow could not be started.")
 
     return statement_id
