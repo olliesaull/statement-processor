@@ -2131,4 +2131,16 @@ a:focus-visible {
 .legal-content p { margin-bottom: 0.75rem; }
 .legal-content ul { padding-left: 1.25rem; margin-bottom: 0.75rem; }
 .legal-content a { color: var(--blue-600); }
+
+/* ---------- HTMX loading indicator ---------- */
+/* Fade content area and block pointer events during in-flight HTMX requests.
+   .htmx-request is added by HTMX to the element matched by hx-indicator.
+   The indicator is set to "closest .page-main", so this targets the content
+   divs within it during any partial swap on the statement or statements pages. */
+.htmx-request #statement-content,
+.htmx-request #statements-content {
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 200ms ease-in-out;
+}
 .legal-content strong { color: var(--slate-800); }
