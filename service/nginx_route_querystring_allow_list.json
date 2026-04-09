@@ -2,6 +2,8 @@
   "comment": "Allowed query parameters per route. Routes not listed here have query strings stripped.",
   "comment_statements": "Statement list sorting, filtering, and pagination",
   "/statements": ["view", "sort", "dir", "page", "per_page"],
+  "comment_statements_count": "Statement count chip refresh — view param selects incomplete vs completed tab",
+  "/statements/count": ["view"],
   "comment_statement_detail": "Statement detail view controls, export, and pagination",
   "/statement/<statement_id>": ["items_view", "show_payments", "download", "page"],
   "comment_oauth": "Xero OAuth callback — success (code, scope, state, session_state) and error paths",

@@ -357,6 +357,11 @@ document.addEventListener("htmx:responseError", (event) => {
   showToast("Something went wrong — please refresh the page.", "danger");
 });
 
+// After a statement is deleted, refresh the count chips from the server.
+document.addEventListener("listUpdated", () => {
+  htmx.ajax("GET", "/statements/count" + window.location.search, { swap: "none" });
+});
+
 // #region AFK Checker
 let isPolling = true; // Track if long polling is active
 let userActive = true; // Track user activity
