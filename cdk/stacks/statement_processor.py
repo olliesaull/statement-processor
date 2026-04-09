@@ -161,7 +161,7 @@ class StatementProcessorStack(Stack):
             runtime=Runtime.FROM_IMAGE,
             architecture=_lambda.Architecture.ARM_64,
             timeout=Duration.seconds(660),
-            log_group=textraction_log_group,
+            log_group=extraction_log_group,
             environment={
                 "STAGE": "prod" if is_production else "dev",
                 "S3_BUCKET_NAME": S3_BUCKET_NAME,
