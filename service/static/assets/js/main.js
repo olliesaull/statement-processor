@@ -265,7 +265,24 @@ const checkQueryParamToasts = () => {
   }
 };
 
+let paginationJumpAbortController = null;
+
+const closeAllPaginationPopovers = () => {
+  document.querySelectorAll("[data-pagination-jump-popover][data-open]").forEach((p) => {
+    p.removeAttribute("data-open");
+  });
+  document.querySelectorAll("[data-pagination-jump-toggle]").forEach((t) => {
+    t.setAttribute("aria-expanded", "false");
+  });
+};
+
 const setupPaginationJump = () => {
+  if (paginationJumpAbortController) {
+    paginationJumpAbortController.abort();
+  }
+  paginationJumpAbortController = new AbortController();
+  const signal = paginationJumpAbortController.signal;
+
   document.querySelectorAll("[data-pagination-jump]").forEach((container) => {
     const toggle = container.querySelector("[data-pagination-jump-toggle]");
     const popover = container.querySelector("[data-pagination-jump-popover]");
@@ -279,22 +296,13 @@ const setupPaginationJump = () => {
         popover.setAttribute("data-open", "");
         toggle.setAttribute("aria-expanded", "true");
       }
-    });
+    }, { signal });
   });
 
-  document.addEventListener("click", closeAllPaginationPopovers);
+  document.addEventListener("click", closeAllPaginationPopovers, { signal });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeAllPaginationPopovers();
-  });
-};
-
-const closeAllPaginationPopovers = () => {
-  document.querySelectorAll("[data-pagination-jump-popover][data-open]").forEach((p) => {
-    p.removeAttribute("data-open");
-  });
-  document.querySelectorAll("[data-pagination-jump-toggle]").forEach((t) => {
-    t.setAttribute("aria-expanded", "false");
-  });
+  }, { signal });
 };
 
 window.addEventListener("load", () => {
@@ -333,6 +341,20 @@ window.addEventListener("load", () => {
       btn.addEventListener("click", () => handleSyncClick(btn));
     });
   }
+});
+
+// --- HTMX event handlers (registered outside load handler) ---
+
+// Re-initialise UI components after HTMX swaps new content into the DOM.
+document.addEventListener("htmx:afterSwap", () => {
+  setupStickyActionDocks();
+  setupScrollProxy();
+  setupPaginationJump();
+});
+
+// Show a toast when an HTMX request fails.
+document.addEventListener("htmx:responseError", (event) => {
+  showToast("Something went wrong — please refresh the page.", "danger");
 });
 
 // #region AFK Checker
