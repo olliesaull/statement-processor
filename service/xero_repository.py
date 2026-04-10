@@ -467,3 +467,76 @@ def get_payments_by_contact(contact_id: str) -> list[dict[str, Any]]:
     except Exception:
         logger.exception("Failed to load payments for contact from cache", tenant_id=tenant_id, contact_id=contact_id)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Per-contact combined Xero data (invoices + credit notes + payments).
+# ---------------------------------------------------------------------------
+
+_EMPTY_CONTACT_DATA: dict[str, list[dict[str, Any]]] = {"invoices": [], "credit_notes": [], "payments": []}
+
+
+def get_xero_data_by_contact(contact_id: str) -> dict[str, list[dict[str, Any]]]:
+    """Load combined Xero data for a single contact.
+
+    Tries the pre-indexed per-contact file first (xero_by_contact/{contact_id}.json).
+    Falls back to loading the full datasets and filtering by contact_id if the
+    per-contact file doesn't exist (backward compatibility for tenants that
+    synced before per-contact indexing was deployed).
+
+    Returns:
+        Dict with keys ``invoices``, ``credit_notes``, ``payments`` — each a
+        list of dicts for the requested contact.
+    """
+    tenant_id = session.get("xero_tenant_id")
+    if not tenant_id or not contact_id:
+        return dict(_EMPTY_CONTACT_DATA)
+
+    # Try the per-contact index file first (fast path).
+    per_contact_data = _load_per_contact_file(tenant_id, contact_id)
+    if per_contact_data is not None:
+        return per_contact_data
+
+    # Fallback: load full datasets and filter by contact_id.
+    logger.info("Per-contact file not found, falling back to full datasets", tenant_id=tenant_id, contact_id=contact_id)
+    return {
+        "invoices": [inv for inv in (load_local_dataset(XeroType.INVOICES, tenant_id=tenant_id) or []) if isinstance(inv, dict) and inv.get("contact_id") == contact_id],
+        "credit_notes": [cn for cn in (load_local_dataset(XeroType.CREDIT_NOTES, tenant_id=tenant_id) or []) if isinstance(cn, dict) and cn.get("contact_id") == contact_id],
+        "payments": [pay for pay in (load_local_dataset(XeroType.PAYMENTS, tenant_id=tenant_id) or []) if isinstance(pay, dict) and pay.get("contact_id") == contact_id],
+    }
+
+
+def _load_per_contact_file(tenant_id: str, contact_id: str) -> dict[str, Any] | None:
+    """Load the per-contact JSON file from local cache or S3.
+
+    Returns the parsed dict on success, or None if the file doesn't exist
+    anywhere (triggers the fallback to full datasets).
+    """
+    local_path = os.path.join(LOCAL_DATA_DIR, tenant_id, "xero_by_contact", f"{contact_id}.json")
+    local_dir = os.path.dirname(local_path)
+
+    try:
+        with open(local_path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        # Not cached locally — try S3.
+        s3_key = f"{tenant_id}/data/xero_by_contact/{contact_id}.json"
+        try:
+            os.makedirs(local_dir, exist_ok=True)
+            s3_client.download_file(S3_BUCKET_NAME, s3_key, local_path)
+            logger.info("Downloaded per-contact file from S3", tenant_id=tenant_id, contact_id=contact_id)
+            with open(local_path, encoding="utf-8") as handle:
+                return json.load(handle)
+        except FileNotFoundError:
+            return None
+        except s3_client.exceptions.NoSuchKey:
+            return None
+        except Exception:
+            logger.exception("Failed to download per-contact file from S3", tenant_id=tenant_id, contact_id=contact_id, s3_key=s3_key)
+            return None
+    except json.JSONDecodeError:
+        logger.exception("Failed to parse per-contact file", tenant_id=tenant_id, contact_id=contact_id, path=local_path)
+        return None
+    except Exception:
+        logger.exception("Failed to load per-contact file", tenant_id=tenant_id, contact_id=contact_id, path=local_path)
+        return None

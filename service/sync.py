@@ -5,6 +5,7 @@ This module:
 - fetches contacts, invoices, payments, and credit notes from Xero
 - merges incremental results with cached data
 - writes datasets locally and uploads them to S3
+- builds per-contact index files for fast statement page lookups
 - updates tenant sync status in DynamoDB
 """
 
@@ -298,6 +299,71 @@ def update_tenant_status(tenant_id: str, tenant_status: TenantStatus = TenantSta
         return False
 
 
+def build_per_contact_index(tenant_id: str) -> None:
+    """Group synced Xero data by contact_id and write per-contact files.
+
+    Reads the flat dataset files (invoices.json, credit_notes.json,
+    payments.json) from local disk, groups each by contact_id, and writes
+    a combined {contact_id}.json into xero_by_contact/ — both locally
+    and in S3. This allows the statement detail page to load only the
+    data for one contact instead of the full tenant dataset.
+
+    Called after each sync (both full and incremental). Always rebuilds
+    all per-contact files from the current flat files — the cost is
+    negligible (in-memory grouping + a few S3 PUTs).
+    """
+    local_dir = os.path.join(LOCAL_DATA_DIR, tenant_id)
+
+    def _load_flat(filename: str) -> list[dict[str, Any]]:
+        path = os.path.join(local_dir, filename)
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            return [item for item in data if isinstance(item, dict)]
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    invoices = _load_flat("invoices.json")
+    credit_notes = _load_flat("credit_notes.json")
+    payments = _load_flat("payments.json")
+
+    # Group by contact_id.
+    by_contact: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for inv in invoices:
+        cid = inv.get("contact_id")
+        if cid:
+            by_contact.setdefault(cid, {"invoices": [], "credit_notes": [], "payments": []})["invoices"].append(inv)
+    for cn in credit_notes:
+        cid = cn.get("contact_id")
+        if cid:
+            by_contact.setdefault(cid, {"invoices": [], "credit_notes": [], "payments": []})["credit_notes"].append(cn)
+    for pay in payments:
+        cid = pay.get("contact_id")
+        if cid:
+            by_contact.setdefault(cid, {"invoices": [], "credit_notes": [], "payments": []})["payments"].append(pay)
+
+    if not by_contact:
+        return
+
+    contact_dir = os.path.join(local_dir, "xero_by_contact")
+    os.makedirs(contact_dir, exist_ok=True)
+
+    for contact_id, contact_data in by_contact.items():
+        filename = f"{contact_id}.json"
+        local_path = os.path.join(contact_dir, filename)
+        s3_key = f"{tenant_id}/data/xero_by_contact/{filename}"
+
+        with open(local_path, "w", encoding="utf-8") as handle:
+            json.dump(contact_data, handle, ensure_ascii=False, default=str)
+
+        try:
+            s3_client.upload_file(local_path, S3_BUCKET_NAME, s3_key)
+        except Exception:
+            logger.exception("Failed to upload per-contact file to S3", tenant_id=tenant_id, contact_id=contact_id, s3_key=s3_key)
+
+    logger.info("Built per-contact index", tenant_id=tenant_id, contacts=len(by_contact))
+
+
 def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[str, Any] | None = None) -> None:
     """Sync all datasets for a tenant and update tenant status."""
     tenant_record = TenantDataRepository.get_item(tenant_id)
@@ -313,5 +379,11 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
     for sync_func in sync_tasks:
         if not sync_func(api, tenant_id, modified_since=modified_since):
             all_ok = False
+
+    # Build per-contact index files for fast statement page lookups.
+    try:
+        build_per_contact_index(tenant_id)
+    except Exception:
+        logger.exception("Failed to build per-contact index", tenant_id=tenant_id)
 
     update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=start_time_ms if all_ok else None)

@@ -64,7 +64,7 @@ from utils.statement_view import build_right_rows, build_row_comparisons, match_
 from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
 from utils.tenant_status import get_tenant_status
 from utils.workflows import start_extraction_state_machine
-from xero_repository import get_contacts, get_credit_notes_by_contact, get_invoices_by_contact, get_payments_by_contact
+from xero_repository import get_contacts, get_xero_data_by_contact
 
 # python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app
 
@@ -1333,10 +1333,13 @@ def statement(statement_id: str):
         items: list[StatementItemPayload] = data.get("statement_items", []) or []
         display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, statement_data=data)
 
-        # 2) Fetch Xero documents and classify each statement item
-        invoices: list[XeroDocumentPayload] = get_invoices_by_contact(contact_id) or []
-        credit_notes: list[XeroDocumentPayload] = get_credit_notes_by_contact(contact_id) or []
-        payments: list[XeroDocumentPayload] = get_payments_by_contact(contact_id) or []
+        # 2) Fetch Xero documents and classify each statement item.
+        #    Uses the per-contact index file when available (fast path),
+        #    falling back to loading full datasets for pre-migration tenants.
+        xero_data = get_xero_data_by_contact(contact_id)
+        invoices: list[XeroDocumentPayload] = xero_data["invoices"]
+        credit_notes: list[XeroDocumentPayload] = xero_data["credit_notes"]
+        payments: list[XeroDocumentPayload] = xero_data["payments"]
         logger.info("Fetched Xero documents", statement_id=statement_id, contact_id=contact_id, invoices=len(invoices), credit_notes=len(credit_notes), payments=len(payments))
 
         docs_for_matching = invoices + credit_notes

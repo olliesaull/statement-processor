@@ -63,9 +63,7 @@ def client(_app, monkeypatch):
     # so they must be patched in the app_module namespace (not the source module).
     monkeypatch.setattr(app_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
     monkeypatch.setattr(app_module, "fetch_json_statement", lambda *a, **kw: SAMPLE_STATEMENT_JSON)
-    monkeypatch.setattr(app_module, "get_invoices_by_contact", lambda *a, **kw: [])
-    monkeypatch.setattr(app_module, "get_credit_notes_by_contact", lambda *a, **kw: [])
-    monkeypatch.setattr(app_module, "get_payments_by_contact", lambda *a, **kw: [])
+    monkeypatch.setattr(app_module, "get_xero_data_by_contact", lambda *a, **kw: {"invoices": [], "credit_notes": [], "payments": []})
     monkeypatch.setattr(app_module, "get_statement_item_status_map", lambda *a, **kw: {})
     monkeypatch.setattr(app_module, "_persist_classification_updates", lambda **kw: None)
 
