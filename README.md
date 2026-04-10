@@ -97,6 +97,7 @@
     ├── requirements.txt
     ├── requirements-dev.txt
     ├── run_as_container.sh
+    ├── statement_view_cache.py
     ├── sync.py
     ├── tenant_data_repository.py
     ├── xero_repository.py
@@ -504,6 +505,23 @@ The statement detail (`/statement/<id>`) and statements list (`/statements`) pag
 
 The statement detail page fetches the statement JSON from S3 on every load. To avoid this network round-trip on repeat interactions, `fetch_json_statement` caches the S3 JSON to local disk (`/tmp/data/{tenant_id}/statements/{statement_id}.json`) with a 15-minute TTL. This follows the same pattern used by the Xero dataset cache in `xero_repository.py`. The S3 JSON is effectively immutable for a given statement ID during normal use — re-uploads create new statement IDs.
 
+### Statement view cache (Redis)
+
+After the initial page load completes the full build pipeline (S3 fetch, Xero data load, matching, classification, row building), the computed view data (`statement_rows` + `display_headers`) is cached in Redis for 120 seconds (`statement_view_cache.py`). Subsequent HTMX swaps — filter toggles, pagination — hit the cache and skip the entire pipeline, going straight to filtering + rendering (~20-50ms instead of ~350ms).
+
+- **Cache key**: `stmt_view:{tenant_id}:{statement_id}`
+- **Invalidation**: POST actions (mark complete/incomplete) delete the cache key before re-rendering so the pipeline rebuilds with fresh DynamoDB data.
+- **Excel downloads**: Bypass the cache because they need intermediate pipeline data not stored in the cache.
+- **Failure mode**: Redis errors are logged but never raised — a cache failure just means the pipeline re-runs (same as pre-cache behaviour).
+
+### Per-contact Xero data index
+
+At sync time, `build_per_contact_index()` in `sync.py` groups the flat dataset files (`invoices.json`, `credit_notes.json`, `payments.json`) by `contact_id` and writes per-contact JSON files to `{tenant_id}/data/xero_by_contact/{contact_id}.json` (local disk + S3). The statement detail page reads this single small file via `get_xero_data_by_contact()` in `xero_repository.py` instead of loading three full tenant datasets and filtering in-memory.
+
+- **Backward compatible**: If the per-contact file doesn't exist (pre-migration tenants), `get_xero_data_by_contact()` falls back to loading the full datasets and filtering — no re-sync required.
+- **Rebuilt every sync**: Both full and incremental syncs rebuild all per-contact files from the updated flat files. The cost is negligible (in-memory JSON grouping + a few S3 PUTs).
+- **Tenant erasure**: No changes needed — the erasure Lambda deletes by `{tenant_id}/` prefix, which covers `xero_by_contact/`.
+
 ### JS re-initialisation
 
 When HTMX swaps content, DOM elements that had event listeners or IntersectionObservers attached are replaced. The `setupStickyActionDocks`, `setupScrollProxy`, and `setupPaginationJump` functions in `main.js` use `AbortController` for listener cleanup and are re-run via `htmx:afterSwap` to safely re-initialise after each swap.
@@ -753,6 +771,9 @@ The script downloads files into `service/static/assets/vendor/` and generates
 - `{tenant_id}/data/{resource}.json` where `resource` is one of `contacts`, `invoices`, `credit_notes`, `payments` (`service/xero_repository.py`, `service/sync.py`).
   - Written by: `service/sync.py` after fetching from Xero.
   - Read by: `service/xero_repository.py` (download to local cache when missing).
+- `{tenant_id}/data/xero_by_contact/{contact_id}.json` — combined invoices, credit notes, and payments for a single contact.
+  - Written by: `service/sync.py:build_per_contact_index()` after each sync.
+  - Read by: `service/xero_repository.py:get_xero_data_by_contact()` on the statement detail page.
 
 ## Auto Config Suggestion — REMOVED
 
