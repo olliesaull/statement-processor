@@ -3,7 +3,7 @@
 # Runs tooling in the current directory so symlinked copies behave locally.
 #
 
-.PHONY: help rebuild-venvs update-venvs format lint type-check security vulture test test-verbose clean run-app
+.PHONY: help rebuild-venvs update-venvs format lint type-check security vulture test test-verbose test-coverage clean run-app
 
 # Common exclusions for Python tooling.
 PY_EXCLUDES := -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/__pycache__/*' -not -path '*/cdk/*' -not -path '*/scripts/*'
@@ -34,6 +34,7 @@ help:
 	@echo "🧪 Testing:"
 	@printf "  %-16s %s\n" "test" "Run unit tests in ./tests (excludes Playwright)"
 	@printf "  %-16s %s\n" "test-verbose" "Run unit tests in verbose mode (excludes Playwright)"
+	@printf "  %-16s %s\n" "test-coverage" "Run tests with coverage report (fail-under 67%)"
 	@echo ""
 	@echo "🧹 Cleanup:"
 	@printf "  %-16s %s\n" "clean" "Remove Python caches and build artifacts"
@@ -88,6 +89,10 @@ test:
 test-verbose:
 	@echo "🧪 Running unit tests (verbose)..."
 	@bash -c "source venv/bin/activate && python3.13 -m pytest -vv -s --tb=long tests || true"
+
+test-coverage:
+	@echo "🧪 Running tests with coverage..."
+	@bash -c "source venv/bin/activate && python3.13 -m pytest --cov --cov-report=term-missing --cov-fail-under=67 tests || true"
 
 # Clean common Python caches and generated files.
 clean:

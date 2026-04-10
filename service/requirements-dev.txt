@@ -1,6 +1,7 @@
 bandit
 mypy
 pylint
+pytest-cov
 pytest-playwright
 ruff
 vulture
