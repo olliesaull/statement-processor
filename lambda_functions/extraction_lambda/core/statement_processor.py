@@ -13,6 +13,7 @@ Coordinates the extraction pipeline after Step Functions invokes the Lambda:
 
 import io
 import json
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,39 @@ from core.models import ExtractionResult, StatementItem, SupplierStatement
 from core.processing_progress import update_processing_stage
 from core.validation.anomaly_detection import apply_outlier_flags
 from logger import logger
+
+# region Data structures
+
+
+@dataclass(frozen=True)
+class ExtractionOutput:
+    """Return value of run_extraction.
+
+    Bundles the output filename and serialized statement dict so
+    callers get named fields instead of indexing a raw dict.
+    """
+
+    filename: str
+    statement: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PersistItemsRequest:
+    """Parameter object for _persist_statement_items.
+
+    Groups the six arguments into a single typed container
+    to reduce positional-argument count and improve readability.
+    """
+
+    tenant_id: str
+    contact_id: str | None
+    statement_id: str | None
+    items: list[dict[str, Any]]
+    earliest_item_date: str | None = None
+    latest_item_date: str | None = None
+
+
+# endregion
 
 
 def _derive_date_range(items: list[StatementItem], date_format: str) -> tuple[str | None, str | None]:
@@ -114,22 +148,20 @@ def _sanitize_for_dynamodb(value: Any) -> Any:  # pylint: disable=too-many-retur
     return value
 
 
-def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,too-many-positional-arguments
-    tenant_id: str, contact_id: str | None, statement_id: str | None, items: list[dict[str, Any]], *, earliest_item_date: str | None = None, latest_item_date: str | None = None
-) -> None:
+def _persist_statement_items(req: PersistItemsRequest) -> None:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """Persist extracted statement line items into DynamoDB.
 
     Replaces existing item rows (delete + reinsert). Preserves
     per-item completion status across re-processing.
     """
-    if not statement_id:
+    if not req.statement_id:
         return
 
     # Fetch existing item rows to preserve completion state.
     keys_to_delete: list[str] = []
     existing_status: dict[str, bool] = {}
     query_kwargs: dict[str, Any] = {
-        "KeyConditionExpression": Key("TenantID").eq(tenant_id) & Key("StatementID").begins_with(f"{statement_id}#item-"),
+        "KeyConditionExpression": Key("TenantID").eq(req.tenant_id) & Key("StatementID").begins_with(f"{req.statement_id}#item-"),
         "ProjectionExpression": "#sid, #completed",
         "ExpressionAttributeNames": {"#sid": "StatementID", "#completed": "Completed"},
     }
@@ -151,23 +183,23 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
         query_kwargs["ExclusiveStartKey"] = lek
 
     try:
-        header_resp = tenant_statements_table.get_item(Key={"TenantID": tenant_id, "StatementID": statement_id})
+        header_resp = tenant_statements_table.get_item(Key={"TenantID": req.tenant_id, "StatementID": req.statement_id})
         header_item = header_resp.get("Item") if isinstance(header_resp, dict) else None
         header_completed = str(header_item.get("Completed", "false")).strip().lower() == "true" if header_item else False
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Failed to fetch statement header completion flag", tenant_id=tenant_id, statement_id=statement_id, error=str(exc), exc_info=True)
+        logger.warning("Failed to fetch statement header completion flag", tenant_id=req.tenant_id, statement_id=req.statement_id, error=str(exc), exc_info=True)
         header_completed = False
 
     if keys_to_delete:
         with tenant_statements_table.batch_writer() as batch:
             for sort_key in keys_to_delete:
-                batch.delete_item(Key={"TenantID": tenant_id, "StatementID": sort_key})
+                batch.delete_item(Key={"TenantID": req.tenant_id, "StatementID": sort_key})
 
-    if not items:
+    if not req.items:
         return
 
     with tenant_statements_table.batch_writer() as batch:
-        for item in items:
+        for item in req.items:
             if not isinstance(item, dict):
                 continue
             item_id = item.get("statement_item_id")
@@ -178,42 +210,45 @@ def _persist_statement_items(  # pylint: disable=too-many-arguments,too-many-loc
             sanitized_payload["statement_item_id"] = item_id
 
             record: dict[str, Any] = {
-                "TenantID": tenant_id,
+                "TenantID": req.tenant_id,
                 "StatementID": item_id,
                 "StatementItemID": item_id,
-                "ParentStatementID": statement_id,
+                "ParentStatementID": req.statement_id,
                 "RecordType": "statement_item",
                 "Completed": "true" if existing_status.get(item_id, header_completed) else "false",
             }
-            if contact_id:
-                record["ContactID"] = contact_id
+            if req.contact_id:
+                record["ContactID"] = req.contact_id
 
             record.update(sanitized_payload)
             batch.put_item(Item=record)
 
-    if statement_id and (earliest_item_date or latest_item_date):
+    if req.statement_id and (req.earliest_item_date or req.latest_item_date):
         update_parts: list[str] = []
         attr_names: dict[str, str] = {}
         attr_values: dict[str, Any] = {}
 
-        if earliest_item_date:
+        if req.earliest_item_date:
             attr_names["#earliestItemDate"] = "EarliestItemDate"
-            attr_values[":earliestItemDate"] = earliest_item_date
+            attr_values[":earliestItemDate"] = req.earliest_item_date
             update_parts.append("#earliestItemDate = :earliestItemDate")
-        if latest_item_date:
+        if req.latest_item_date:
             attr_names["#latestItemDate"] = "LatestItemDate"
-            attr_values[":latestItemDate"] = latest_item_date
+            attr_values[":latestItemDate"] = req.latest_item_date
             update_parts.append("#latestItemDate = :latestItemDate")
 
         if update_parts:
             tenant_statements_table.update_item(
-                Key={"TenantID": tenant_id, "StatementID": statement_id}, UpdateExpression="SET " + ", ".join(update_parts), ExpressionAttributeNames=attr_names, ExpressionAttributeValues=attr_values
+                Key={"TenantID": req.tenant_id, "StatementID": req.statement_id},
+                UpdateExpression="SET " + ", ".join(update_parts),
+                ExpressionAttributeNames=attr_names,
+                ExpressionAttributeValues=attr_values,
             )
 
 
 def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     bucket: str, pdf_key: str, json_key: str, tenant_id: str, contact_id: str, statement_id: str, page_count: int
-) -> dict[str, Any]:
+) -> ExtractionOutput:
     """End-to-end processing for a single statement.
 
     Called by the Lambda handler. Reads the PDF from S3, runs extraction
@@ -275,12 +310,14 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
     # Persist items to DynamoDB (best effort).
     try:
         _persist_statement_items(
-            tenant_id=tenant_id,
-            contact_id=contact_id,
-            statement_id=statement_id,
-            items=statement_dict.get("statement_items", []) or [],
-            earliest_item_date=statement_dict.get("earliest_item_date"),
-            latest_item_date=statement_dict.get("latest_item_date"),
+            PersistItemsRequest(
+                tenant_id=tenant_id,
+                contact_id=contact_id,
+                statement_id=statement_id,
+                items=statement_dict.get("statement_items", []) or [],
+                earliest_item_date=statement_dict.get("earliest_item_date"),
+                latest_item_date=statement_dict.get("latest_item_date"),
+            )
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Failed to persist statement items", statement_id=statement_id, tenant_id=tenant_id, error=str(exc))
@@ -303,4 +340,4 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
     update_processing_stage(tenant_id, statement_id, ProcessingStage.COMPLETE)
 
     filename = f"{Path(pdf_key).stem}.json"
-    return {"filename": filename, "statement": statement_dict}
+    return ExtractionOutput(filename=filename, statement=statement_dict)

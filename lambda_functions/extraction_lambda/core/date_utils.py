@@ -7,16 +7,20 @@ This module:
 - Parses date strings into `datetime` values
 - Formats ISO dates back into the configured template
 - Summarizes common patterns across samples
+
+Note: Unification with service date_utils is a future common/ candidate.
 """
 
 import calendar
 import re
-from collections import Counter
+from collections import Counter, namedtuple
 from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from typing import Any
 
 from logger import logger
+
+# region Constants
 
 # Order matters: match longer tokens before shorter ones so "MMMM" wins over "MM".
 TOKEN_ORDER: Sequence[str] = ("YYYY", "MMMM", "MMM", "MM", "DD", "YY", "Do", "dddd", "M", "D")
@@ -40,12 +44,31 @@ MONTH_NAME_TO_NUM = {name.lower(): idx for idx, name in enumerate(calendar.month
 MONTH_ABBR_TO_NUM = {abbr.lower(): idx for idx, abbr in enumerate(calendar.month_abbr) if abbr}
 MONTH_NAME_TO_NUM["sept"] = 9
 
+# endregion
+
+# region Types
+
+# Holds the compiled artefacts produced by _prepare_template.
+# - regex: compiled pattern used to match a date string against the template.
+# - group_order: list of (group_name, token) pairs that map regex capture groups
+#   back to the token type (e.g. "YYYY", "MM") for value extraction.
+# - tokens: the original token list, used by _format_tokens during formatting.
+CompiledTemplate = namedtuple("CompiledTemplate", ["regex", "group_order", "tokens"])
+
+# endregion
+
+
+# region Public API
+
 
 def parse_with_format(value: Any, template: str | None) -> datetime | None:  # pylint: disable=too-many-branches,too-many-return-statements,too-many-locals
     """
     Parse ``value`` using the custom Supplier Date Format tokens.
 
     Returns a `datetime` (date-only) when parsing succeeds, otherwise `None`.
+    Raises `ValueError` when a month name is unrecognised (propagated from
+    the inner loop so callers can distinguish bad templates from non-matching
+    values).
     """
     if value is None:
         return None
@@ -57,15 +80,14 @@ def parse_with_format(value: Any, template: str | None) -> datetime | None:  # p
 
     # Compile the template into a regex and metadata used during extraction.
     compiled = _prepare_template(template)
-    regex, group_order, _ = compiled
-    match = regex.match(s)
+    match = compiled.regex.match(s)
     if not match:
         logger.debug("Date value did not match template", value=s, template=template)
         return None
 
     components: dict[str, int] = {}
     try:
-        for group_name, token in group_order:
+        for group_name, token in compiled.group_order:
             raw = match.group(group_name)
             if not raw:
                 continue
@@ -121,12 +143,15 @@ def format_iso_with(value: Any, template: str | None) -> str:
         return str(value)
 
     compiled = _prepare_template(template)
-    _, _, tokens, *_ = compiled
-    return _format_tokens(tokens, dt)
+    return _format_tokens(compiled.tokens, dt)
 
 
 def coerce_datetime_with_template(value: Any, template: str | None) -> datetime | None:
-    """Try parsing with a template first, then fall back to ISO coercion."""
+    """Try parsing with a template first, then fall back to ISO coercion.
+
+    Silently catches `ValueError` from `parse_with_format` and falls back to
+    `_coerce_to_datetime`, so callers don't need to handle both error modes.
+    """
     parsed: datetime | None = None
     if template:
         try:
@@ -140,8 +165,18 @@ def coerce_datetime_with_template(value: Any, template: str | None) -> datetime 
     return _coerce_to_datetime(value)
 
 
+# endregion
+
+
+# region Internal helpers — date component utilities
+
+
 def _set_component(components: dict[str, int], key: str, value: int) -> None:
-    """Set a date component, raising if a conflicting value is seen."""
+    """Set a date component, raising if a conflicting value is seen.
+
+    Prevents a template from accidentally overwriting a component that was
+    already resolved from a different token (e.g. two year tokens).
+    """
     if key in components and components[key] != value:
         raise ValueError(f"Conflicting values for {key}: {components[key]} vs {value}")
     components[key] = value
@@ -156,12 +191,17 @@ def _parse_ordinal(value: str) -> int:
 
 
 def _month_from_name(value: str) -> int | None:
-    """Return the month number for a name/abbreviation, or None if unrecognized."""
+    """Return the month number for a name/abbreviation, or None if unrecognized.
+
+    Tries full name, then standard abbreviation, then a 3-character prefix
+    fallback (covers e.g. "Marc" → "Mar" → 3).
+    """
     txt = value.strip().lower()
     if txt in MONTH_NAME_TO_NUM:
         return MONTH_NAME_TO_NUM[txt]
     if txt in MONTH_ABBR_TO_NUM:
         return MONTH_ABBR_TO_NUM[txt]
+    # Allow longer strings whose first three characters are a known abbreviation.
     prefix = txt[:3]
     if prefix in MONTH_ABBR_TO_NUM:
         return MONTH_ABBR_TO_NUM[prefix]
@@ -177,7 +217,11 @@ def _coerce_to_iso_string(value: Any) -> str | None:
 
 
 def _coerce_to_datetime(value: Any) -> datetime | None:  # pylint: disable=too-many-branches,too-many-return-statements
-    """Best-effort conversion of input values to a date-only datetime."""
+    """Best-effort conversion of input values to a date-only datetime.
+
+    Strips time components so the result is always midnight-anchored.
+    Tries ISO YYYY-MM-DD fast path first, then falls back to fromisoformat.
+    """
     if isinstance(value, datetime):
         return datetime(value.year, value.month, value.day)
     if isinstance(value, date):
@@ -186,6 +230,7 @@ def _coerce_to_datetime(value: Any) -> datetime | None:  # pylint: disable=too-m
     if not s:
         return None
     try:
+        # Fast path for the canonical YYYY-MM-DD format (may have trailing time).
         if len(s) >= 10 and s[4] == "-" and s[7] == "-":
             return datetime.strptime(s[:10], "%Y-%m-%d")
         return datetime.strptime(s, "%Y-%m-%d")
@@ -194,6 +239,11 @@ def _coerce_to_datetime(value: Any) -> datetime | None:  # pylint: disable=too-m
             return datetime.fromisoformat(s)
         except (ValueError, TypeError):
             return None
+
+
+# endregion
+
+# region Internal helpers — template compilation and formatting
 
 
 def _format_tokens(tokens: Sequence, dt: datetime) -> str:  # pylint: disable=too-many-branches
@@ -234,14 +284,23 @@ def _format_ordinal(day: int) -> str:
     return f"{day}{suffix}"
 
 
-def _prepare_template(template: str):
-    """Tokenize and compile a date template for parsing/formatting."""
+def _prepare_template(template: str) -> CompiledTemplate:
+    """Tokenize and compile a date template for parsing/formatting.
+
+    Returns a `CompiledTemplate` namedtuple holding the compiled regex, the
+    ordered list of capture group → token mappings, and the raw token list
+    used for formatting.
+    """
     tokens = _tokenize_format(template)
     return _compile(tokens)
 
 
-def _tokenize_format(template: str):
-    """Split a template string into tokens and separator literals."""
+def _tokenize_format(template: str) -> list[tuple[str, str]]:
+    """Split a template string into tokens and separator literals.
+
+    Each token is a ``(kind, value)`` pair where kind is one of the keys in
+    TOKEN_ORDER (e.g. "YYYY", "MM") or "SEP" for literal separators.
+    """
     tokens: list[tuple[str, str]] = []
     cursor = 0
     remaining = template
@@ -267,10 +326,15 @@ def _tokenize_format(template: str):
     return tokens
 
 
-def _compile(tokens: Sequence):
-    """Build a regex from tokens and preserve metadata needed during parsing."""
+def _compile(tokens: Sequence) -> CompiledTemplate:
+    """Build a regex from tokens and preserve metadata needed during parsing.
+
+    Assigns unique group names (t0, t1, …) to avoid name collisions when the
+    same token kind appears more than once in a template.
+    """
 
     def name_gen():
+        """Yield monotonically increasing regex capture group names."""
         idx = 0
         while True:
             yield f"t{idx}"
@@ -289,11 +353,21 @@ def _compile(tokens: Sequence):
             regex_parts.append(re.escape(str(value)))
 
     regex = re.compile("".join(regex_parts) + r"$")
-    return (regex, group_order, tokens)
+    return CompiledTemplate(regex=regex, group_order=group_order, tokens=tokens)
+
+
+# endregion
+
+# region Pattern summarisation
 
 
 def common_formats(samples: Iterable[str], top_k: int = 5) -> list[str]:
-    """Summarize the most common character-level date templates from samples."""
+    """Summarize the most common character-level date templates from samples.
+
+    Normalizes each sample to a character-class pattern (digits → "9",
+    letters → "A", other → literal) and returns the top-k most frequent
+    patterns. Useful for inferring the likely date format from a document.
+    """
 
     def normalize_template(template: str) -> str:
         # Collapse letters/digits while retaining separators for pattern grouping.
@@ -313,3 +387,6 @@ def common_formats(samples: Iterable[str], top_k: int = 5) -> list[str]:
         normalized[normalize_template(template)] += 1
 
     return [tpl for tpl, _ in normalized.most_common(top_k)]
+
+
+# endregion

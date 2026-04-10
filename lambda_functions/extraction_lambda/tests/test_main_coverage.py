@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.billing import BillingSettlementError
+from core.statement_processor import ExtractionOutput
 from main import _consume_reserved_tokens, _release_reserved_tokens, lambda_handler
 
 
@@ -111,7 +112,7 @@ class TestConsumeFailurePath:
     """When extraction succeeds but billing consume fails."""
 
     def test_consume_failure_returns_error(self, monkeypatch) -> None:
-        monkeypatch.setattr("main.run_extraction", lambda **kw: {"filename": "stmt.json", "statement": {"statement_items": [{"n": 1}]}})
+        monkeypatch.setattr("main.run_extraction", lambda **kw: ExtractionOutput(filename="stmt.json", statement={"statement_items": [{"n": 1}]}))
         monkeypatch.setattr("main._consume_reserved_tokens", lambda *a, **kw: False)
 
         result = lambda_handler(_valid_event(), None)
@@ -120,14 +121,14 @@ class TestConsumeFailurePath:
 
 
 # ---------------------------------------------------------------------------
-# lambda_handler — non-dict result / missing statement_items
+# lambda_handler — empty/partial statement dict
 # ---------------------------------------------------------------------------
 class TestEdgeCaseResults:
-    """Cover the branch where result['statement'] is not a dict."""
+    """Cover empty statement payload and missing statement_items."""
 
-    def test_non_dict_statement_payload(self, monkeypatch) -> None:
-        """When statement payload is not a dict, item_count defaults to 0."""
-        monkeypatch.setattr("main.run_extraction", lambda **kw: {"filename": "stmt.json", "statement": "not-a-dict"})
+    def test_empty_statement_payload(self, monkeypatch) -> None:
+        """When statement dict is empty, item_count defaults to 0."""
+        monkeypatch.setattr("main.run_extraction", lambda **kw: ExtractionOutput(filename="stmt.json", statement={}))
         monkeypatch.setattr("main._consume_reserved_tokens", lambda *a, **kw: True)
 
         result = lambda_handler(_valid_event(), None)
@@ -138,7 +139,7 @@ class TestEdgeCaseResults:
 
     def test_none_statement_items(self, monkeypatch) -> None:
         """When statement_items key is absent, item_count defaults to 0."""
-        monkeypatch.setattr("main.run_extraction", lambda **kw: {"filename": "stmt.json", "statement": {}})
+        monkeypatch.setattr("main.run_extraction", lambda **kw: ExtractionOutput(filename="stmt.json", statement={}))
         monkeypatch.setattr("main._consume_reserved_tokens", lambda *a, **kw: True)
 
         result = lambda_handler(_valid_event(), None)
@@ -151,7 +152,7 @@ class TestEdgeCaseResults:
 
         def _capture_extraction(**kw):
             captured.update(kw)
-            return {"filename": "stmt.json", "statement": {"statement_items": []}}
+            return ExtractionOutput(filename="stmt.json", statement={"statement_items": []})
 
         monkeypatch.setattr("main.run_extraction", _capture_extraction)
         monkeypatch.setattr("main._consume_reserved_tokens", lambda *a, **kw: True)
@@ -163,7 +164,7 @@ class TestEdgeCaseResults:
         """Verify all fields in a successful response."""
         monkeypatch.setattr(
             "main.run_extraction",
-            lambda **kw: {"filename": "stmt-1.json", "statement": {"statement_items": [{"n": 1}, {"n": 2}], "earliest_item_date": "2024-01-01", "latest_item_date": "2024-06-30"}},
+            lambda **kw: ExtractionOutput(filename="stmt-1.json", statement={"statement_items": [{"n": 1}, {"n": 2}], "earliest_item_date": "2024-01-01", "latest_item_date": "2024-06-30"}),
         )
         monkeypatch.setattr("main._consume_reserved_tokens", lambda *a, **kw: True)
 

@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from core.models import ExtractionResult, StatementItem, SupplierStatement
-from core.statement_processor import _derive_date_range, _map_extraction_to_statement, _persist_statement_items, _sanitize_for_dynamodb, run_extraction
+from core.statement_processor import ExtractionOutput, PersistItemsRequest, _derive_date_range, _map_extraction_to_statement, _persist_statement_items, _sanitize_for_dynamodb, run_extraction
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +172,7 @@ class TestPersistStatementItems:
         return table
 
     def test_no_statement_id_returns_early(self, mock_table) -> None:
-        _persist_statement_items("t1", "c1", None, [])
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id="c1", statement_id=None, items=[]))
         mock_table.query.assert_not_called()
 
     def test_empty_items_deletes_existing(self, mock_table) -> None:
@@ -183,12 +183,10 @@ class TestPersistStatementItems:
         mock_table.batch_writer.return_value.__enter__ = MagicMock(return_value=batch_ctx)
         mock_table.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
 
-        _persist_statement_items("t1", "c1", "stmt-1", [])
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id="c1", statement_id="stmt-1", items=[]))
 
         # Existing items deleted.
         batch_ctx.delete_item.assert_called_once()
-        # No inserts — batch_writer called once for deletes, not again for puts.
-        # (second batch_writer call would be for inserts, which is skipped)
 
     def test_writes_items_with_contact_id(self, mock_table) -> None:
         """Items are written with ContactID when provided."""
@@ -199,7 +197,7 @@ class TestPersistStatementItems:
         mock_table.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
 
         items = [{"statement_item_id": "stmt-1#item-0001", "date": "01/01/2024"}]
-        _persist_statement_items("t1", "c1", "stmt-1", items)
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id="c1", statement_id="stmt-1", items=items))
 
         batch_ctx.put_item.assert_called_once()
         put_args = batch_ctx.put_item.call_args
@@ -217,7 +215,7 @@ class TestPersistStatementItems:
         mock_table.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
 
         items = [{"statement_item_id": "stmt-1#item-0001", "date": "01/01/2024"}]
-        _persist_statement_items("t1", "c1", "stmt-1", items)
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id="c1", statement_id="stmt-1", items=items))
 
         put_args = batch_ctx.put_item.call_args
         record = put_args.kwargs.get("Item") or put_args[1].get("Item")
@@ -232,7 +230,7 @@ class TestPersistStatementItems:
         mock_table.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
 
         items = [{"statement_item_id": "stmt-1#item-0001"}]
-        _persist_statement_items("t1", "c1", "stmt-1", items)
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id="c1", statement_id="stmt-1", items=items))
 
         put_args = batch_ctx.put_item.call_args
         record = put_args.kwargs.get("Item") or put_args[1].get("Item")
@@ -247,7 +245,7 @@ class TestPersistStatementItems:
         mock_table.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
 
         items = [{"date": "01/01/2024"}]  # no statement_item_id
-        _persist_statement_items("t1", "c1", "stmt-1", items)
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id="c1", statement_id="stmt-1", items=items))
 
         batch_ctx.put_item.assert_not_called()
 
@@ -260,7 +258,7 @@ class TestPersistStatementItems:
         mock_table.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
 
         items = ["not-a-dict"]
-        _persist_statement_items("t1", "c1", "stmt-1", items)
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id="c1", statement_id="stmt-1", items=items))
 
         batch_ctx.put_item.assert_not_called()
 
@@ -273,7 +271,7 @@ class TestPersistStatementItems:
         mock_table.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
 
         items = [{"statement_item_id": "stmt-1#item-0001"}]
-        _persist_statement_items("t1", None, "stmt-1", items, earliest_item_date="2024-01-01", latest_item_date="2024-06-30")
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id=None, statement_id="stmt-1", items=items, earliest_item_date="2024-01-01", latest_item_date="2024-06-30"))
 
         mock_table.update_item.assert_called_once()
 
@@ -286,7 +284,7 @@ class TestPersistStatementItems:
         mock_table.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
 
         items = [{"statement_item_id": "stmt-1#item-0001"}]
-        _persist_statement_items("t1", None, "stmt-1", items)
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id=None, statement_id="stmt-1", items=items))
 
         put_args = batch_ctx.put_item.call_args
         record = put_args.kwargs.get("Item") or put_args[1].get("Item")
@@ -303,7 +301,7 @@ class TestPersistStatementItems:
         mock_table.batch_writer.return_value.__enter__ = MagicMock(return_value=batch_ctx)
         mock_table.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
 
-        _persist_statement_items("t1", "c1", "stmt-1", [])
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id="c1", statement_id="stmt-1", items=[]))
 
         assert mock_table.query.call_count == 2
         # Both existing items deleted.
@@ -318,7 +316,7 @@ class TestPersistStatementItems:
         mock_table.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
 
         items = [{"statement_item_id": "stmt-1#item-0001"}]
-        _persist_statement_items("t1", "c1", "stmt-1", items)
+        _persist_statement_items(PersistItemsRequest(tenant_id="t1", contact_id="c1", statement_id="stmt-1", items=items))
 
         put_args = batch_ctx.put_item.call_args
         record = put_args.kwargs.get("Item") or put_args[1].get("Item")
@@ -368,9 +366,9 @@ class TestRunExtraction:
 
     def test_returns_filename_and_statement(self, extraction_mocks) -> None:
         result = run_extraction(bucket="test-bucket", pdf_key="t1/statements/stmt-1.pdf", json_key="t1/statements/stmt-1.json", tenant_id="t1", contact_id="c1", statement_id="stmt-1", page_count=1)
-        assert result["filename"] == "stmt-1.json"
-        assert "statement" in result
-        assert isinstance(result["statement"], dict)
+        assert isinstance(result, ExtractionOutput)
+        assert result.filename == "stmt-1.json"
+        assert isinstance(result.statement, dict)
 
     def test_reads_pdf_from_s3(self, extraction_mocks) -> None:
         run_extraction(bucket="test-bucket", pdf_key="t1/stmt.pdf", json_key="t1/stmt.json", tenant_id="t1", contact_id="c1", statement_id="stmt-1", page_count=1)
@@ -396,7 +394,7 @@ class TestRunExtraction:
 
         # Should not raise despite DDB failure.
         result = run_extraction(bucket="test-bucket", pdf_key="t1/stmt.pdf", json_key="t1/stmt.json", tenant_id="t1", contact_id="c1", statement_id="stmt-1", page_count=1)
-        assert "filename" in result
+        assert isinstance(result, ExtractionOutput)
 
     def test_bedrock_request_id_failure_does_not_raise(self, extraction_mocks) -> None:
         """Failure to write Bedrock request IDs is logged but doesn't blow up."""
@@ -406,7 +404,7 @@ class TestRunExtraction:
         extraction_mocks["table"].update_item.side_effect = [None, Exception("update failed")]
 
         result = run_extraction(bucket="test-bucket", pdf_key="t1/stmt.pdf", json_key="t1/stmt.json", tenant_id="t1", contact_id="c1", statement_id="stmt-1", page_count=1)
-        assert result["filename"] == "stmt.json"
+        assert result.filename == "stmt.json"
 
     def test_null_table_skips_request_id_write(self, extraction_mocks, monkeypatch) -> None:
         """When tenant_statements_table is None, request ID write is skipped."""
@@ -414,7 +412,7 @@ class TestRunExtraction:
 
         # _persist_statement_items also uses tenant_statements_table via module
         # global, so mock it at the function level to avoid the NoneType error.
-        monkeypatch.setattr("core.statement_processor._persist_statement_items", lambda **kw: None)
+        monkeypatch.setattr("core.statement_processor._persist_statement_items", lambda req: None)
 
         result = run_extraction(bucket="test-bucket", pdf_key="t1/stmt.pdf", json_key="t1/stmt.json", tenant_id="t1", contact_id="c1", statement_id="stmt-1", page_count=1)
-        assert "filename" in result
+        assert isinstance(result, ExtractionOutput)

@@ -12,6 +12,7 @@ from datetime import date, datetime
 import pytest
 
 from core.date_utils import (
+    CompiledTemplate,
     _coerce_to_datetime,
     _coerce_to_iso_string,
     _format_ordinal,
@@ -355,6 +356,48 @@ class TestTokenize:
         tokens = _tokenize_format("DD MMMM YYYY")
         kinds = [kind for kind, _ in tokens]
         assert kinds == ["DD", "SEP", "MMMM", "SEP", "YYYY"]
+
+
+class TestCompiledTemplate:
+    """CompiledTemplate namedtuple: field access and iteration."""
+
+    def test_is_compiled_template_instance(self) -> None:
+        result = _prepare_template("DD/MM/YYYY")
+        assert isinstance(result, CompiledTemplate)
+
+    def test_attribute_access_regex(self) -> None:
+        result = _prepare_template("DD/MM/YYYY")
+        assert result.regex.match("15/03/2024")
+        assert not result.regex.match("2024-03-15")
+
+    def test_attribute_access_group_order(self) -> None:
+        result = _prepare_template("DD/MM/YYYY")
+        # group_order holds (group_name, token) pairs for each date token.
+        assert isinstance(result.group_order, list)
+        token_kinds = [token for _, token in result.group_order]
+        assert "DD" in token_kinds
+        assert "MM" in token_kinds
+        assert "YYYY" in token_kinds
+
+    def test_attribute_access_tokens(self) -> None:
+        result = _prepare_template("DD/MM/YYYY")
+        # tokens contains all parts including SEP separators.
+        assert isinstance(result.tokens, list)
+        kinds = [kind for kind, _ in result.tokens]
+        assert "DD" in kinds
+        assert "SEP" in kinds
+        assert "YYYY" in kinds
+
+    def test_iterable_unpacking_still_works(self) -> None:
+        """Tuple-style unpacking must remain valid for backward compatibility."""
+        regex, group_order, tokens = _prepare_template("DD/MM/YYYY")
+        assert regex.match("15/03/2024")
+        assert len(group_order) == 3  # DD, MM, YYYY
+        assert len(tokens) == 5  # DD, /, MM, /, YYYY
+
+    def test_len_is_three(self) -> None:
+        result = _prepare_template("DD/MM/YYYY")
+        assert len(result) == 3
 
 
 class TestPrepareTemplate:

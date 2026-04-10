@@ -13,6 +13,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -20,7 +21,7 @@ from pypdf import PdfReader, PdfWriter
 
 from logger import logger
 
-# -- Constants ----------------------------------------------------------------
+# region Constants
 
 MODEL_ID = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -47,7 +48,57 @@ _CURRENCY_PREFIX_RE = re.compile(r"^[A-Za-z\u20ac$\u00a3\u00a5\u20b9]{1,3}\s*")
 # System prompt loaded once from adjacent markdown file.
 _PROMPT_PATH = Path(__file__).parent / "extraction_prompt.md"
 
-# -- Tool schema --------------------------------------------------------------
+# endregion
+
+# region Data structures
+
+
+@dataclass(frozen=True)
+class PdfChunk:
+    """A self-contained PDF chunk with its page range.
+
+    Replaces the raw (bytes, start_page, end_page) tuple for clarity
+    at call sites that previously unpacked positional indices.
+    """
+
+    pdf_bytes: bytes
+    start_page: int  # 1-indexed
+    end_page: int  # 1-indexed, inclusive
+
+
+@dataclass(frozen=True)
+class BedrockResponse:
+    """Parsed response from a single Bedrock Converse API call.
+
+    Bundles the tool output with token usage and request ID so callers
+    don't need to remember tuple positions.
+    """
+
+    tool_input: dict[str, Any]
+    input_tokens: int
+    output_tokens: int
+    request_id: str
+
+
+@dataclass(frozen=True)
+class ChunkResult:
+    """Result of processing a single continuation chunk.
+
+    Captures everything needed to merge a chunk back into the main
+    item list: the items, token usage, and any metadata warnings.
+    """
+
+    chunk_index: int
+    items: list[dict[str, Any]]
+    input_tokens: int
+    output_tokens: int
+    request_id: str
+    warnings: dict[str, str]
+
+
+# endregion
+
+# region Tool schema
 
 EXTRACT_TOOL: dict[str, Any] = {
     "name": "extract_statement_rows",
@@ -79,10 +130,12 @@ EXTRACT_TOOL: dict[str, Any] = {
 }
 
 
-# -- PDF chunking -------------------------------------------------------------
+# endregion
+
+# region PDF chunking
 
 
-def chunk_pdf(reader: PdfReader) -> list[tuple[bytes, int, int]]:
+def chunk_pdf(reader: PdfReader) -> list[PdfChunk]:
     """Split a PDF into overlapping page chunks.
 
     Each chunk is a self-contained PDF (as bytes) with 1-page overlap
@@ -90,7 +143,7 @@ def chunk_pdf(reader: PdfReader) -> list[tuple[bytes, int, int]]:
     captured. Chunks exceeding MAX_CHUNK_BYTES are recursively halved.
 
     Returns:
-        List of (pdf_bytes, start_page_1indexed, end_page_1indexed).
+        List of PdfChunk (pdf_bytes, start_page, end_page) with 1-indexed pages.
     """
     total_pages = len(reader.pages)
 
@@ -102,7 +155,7 @@ def chunk_pdf(reader: PdfReader) -> list[tuple[bytes, int, int]]:
         ranges.append((start, end))
         start = end - 1 if end < total_pages else end
 
-    chunks: list[tuple[bytes, int, int]] = []
+    chunks: list[PdfChunk] = []
     for page_start, page_end in ranges:
         sub_chunks = _build_chunk_bytes(reader, page_start, page_end)
         chunks.extend(sub_chunks)
@@ -110,7 +163,7 @@ def chunk_pdf(reader: PdfReader) -> list[tuple[bytes, int, int]]:
     return chunks
 
 
-def _build_chunk_bytes(reader: PdfReader, page_start: int, page_end: int) -> list[tuple[bytes, int, int]]:
+def _build_chunk_bytes(reader: PdfReader, page_start: int, page_end: int) -> list[PdfChunk]:
     """Build PDF bytes for a page range, splitting if over size limit."""
     writer = PdfWriter()
     for i in range(page_start, page_end):
@@ -123,7 +176,7 @@ def _build_chunk_bytes(reader: PdfReader, page_start: int, page_end: int) -> lis
     if len(pdf_bytes) <= MAX_CHUNK_BYTES or (page_end - page_start) <= 1:
         if len(pdf_bytes) > MAX_CHUNK_BYTES:
             logger.error("Single page exceeds Bedrock document block size limit", page=page_start + 1, chunk_bytes=len(pdf_bytes), max_bytes=MAX_CHUNK_BYTES)
-        return [(pdf_bytes, page_start + 1, page_end)]
+        return [PdfChunk(pdf_bytes=pdf_bytes, start_page=page_start + 1, end_page=page_end)]
 
     # Too large -- split in half and recurse.
     mid = page_start + (page_end - page_start) // 2
@@ -132,7 +185,9 @@ def _build_chunk_bytes(reader: PdfReader, page_start: int, page_end: int) -> lis
     return left + right
 
 
-# -- Post-processing ----------------------------------------------------------
+# endregion
+
+# region Post-processing
 
 
 def convert_amount(raw: str) -> float | str:
@@ -367,7 +422,9 @@ def _items_equal(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return all(a.get(k) == b.get(k) for k in keys)
 
 
-# -- Bedrock API --------------------------------------------------------------
+# endregion
+
+# region Bedrock API
 
 
 def _get_bedrock_client() -> Any:
@@ -385,11 +442,11 @@ def _load_system_prompt() -> str:
     return _PROMPT_PATH.read_text(encoding="utf-8")
 
 
-def _call_bedrock(client: Any, system_prompt: str, pdf_bytes: bytes, user_text: str) -> tuple[dict[str, Any], int, int, str]:
+def _call_bedrock(client: Any, system_prompt: str, pdf_bytes: bytes, user_text: str) -> BedrockResponse:
     """Call Bedrock Converse API with a PDF document and forced tool use.
 
     Returns:
-        (tool_input_dict, input_tokens, output_tokens, request_id).
+        BedrockResponse with parsed tool input, token counts, and request ID.
     """
     response = client.converse(
         modelId=MODEL_ID,
@@ -404,12 +461,12 @@ def _call_bedrock(client: Any, system_prompt: str, pdf_bytes: bytes, user_text: 
         if tool_use and tool_use.get("name") == "extract_statement_rows":
             usage = response.get("usage", {})
             request_id = response.get("ResponseMetadata", {}).get("RequestId", "")
-            return (tool_use["input"], usage.get("inputTokens", 0), usage.get("outputTokens", 0), request_id)
+            return BedrockResponse(tool_input=tool_use["input"], input_tokens=usage.get("inputTokens", 0), output_tokens=usage.get("outputTokens", 0), request_id=request_id)
 
     raise ValueError("Bedrock response did not contain an extract_statement_rows tool use block")
 
 
-def _call_bedrock_with_retry(client: Any, system_prompt: str, pdf_bytes: bytes, user_text: str) -> tuple[dict[str, Any], int, int, str]:
+def _call_bedrock_with_retry(client: Any, system_prompt: str, pdf_bytes: bytes, user_text: str) -> BedrockResponse:
     """Call Bedrock with retries for transient server/throttling errors.
 
     Retries up to MAX_RETRIES times with exponential backoff.
@@ -442,7 +499,9 @@ def _call_bedrock_with_retry(client: Any, system_prompt: str, pdf_bytes: bytes, 
     raise last_error  # type: ignore[misc]
 
 
-# -- Main entry point ---------------------------------------------------------
+# endregion
+
+# region Main entry point
 
 
 def extract_statement(pdf_bytes: bytes, page_count: int, on_chunk_complete: Callable[[int, int], None] | None = None) -> "ExtractionResult":
@@ -479,26 +538,26 @@ def extract_statement(pdf_bytes: bytes, page_count: int, on_chunk_complete: Call
 
     # -- Process chunk 1 (provides headers + metadata for rest) --
 
-    pdf_bytes_0, start_0, end_0 = chunks[0]
-    logger.info("Processing chunk", chunk=1, total_chunks=chunk_count, pages=f"{start_0}-{end_0}")
+    first_chunk = chunks[0]
+    logger.info("Processing chunk", chunk=1, total_chunks=chunk_count, pages=f"{first_chunk.start_page}-{first_chunk.end_page}")
 
-    result_0, in_tok_0, out_tok_0, req_id_0 = _call_bedrock_with_retry(client, system_prompt, pdf_bytes_0, "Extract all line items from this statement.")
-    request_ids.append(req_id_0)
+    first_response = _call_bedrock_with_retry(client, system_prompt, first_chunk.pdf_bytes, "Extract all line items from this statement.")
+    request_ids.append(first_response.request_id)
 
-    detected_headers = result_0.get("detected_headers", [])
-    column_order = result_0.get("column_order", [])
-    date_format = result_0.get("date_format", "")
+    detected_headers = first_response.tool_input.get("detected_headers", [])
+    column_order = first_response.tool_input.get("column_order", [])
+    date_format = first_response.tool_input.get("date_format", "")
 
     logger.info("Chunk 1 metadata", detected_headers=detected_headers, column_order=column_order, date_format=date_format)
 
-    all_items = reconstruct_items(column_order, result_0.get("items", []))
+    all_items = reconstruct_items(column_order, first_response.tool_input.get("items", []))
     logger.info("Chunk 1 items", count=len(all_items))
 
     if on_chunk_complete:
         on_chunk_complete(1, chunk_count)
 
-    total_input_tokens = in_tok_0
-    total_output_tokens = out_tok_0
+    total_input_tokens = first_response.input_tokens
+    total_output_tokens = first_response.output_tokens
 
     # -- Process remaining chunks in parallel --
 
@@ -506,14 +565,14 @@ def extract_statement(pdf_bytes: bytes, page_count: int, on_chunk_complete: Call
         headers_str = ", ".join(detected_headers)
         col_order_str = json.dumps(column_order)
 
-        def _process_continuation(chunk_idx: int) -> tuple[int, list[dict[str, Any]], int, int, str, dict[str, str]]:
+        def _process_continuation(chunk_idx: int) -> ChunkResult:
             """Process a single continuation chunk."""
-            c_bytes, c_start, c_end = chunks[chunk_idx]
-            logger.info("Processing chunk", chunk=chunk_idx + 1, total_chunks=chunk_count, pages=f"{c_start}-{c_end}")
+            chunk = chunks[chunk_idx]
+            logger.info("Processing chunk", chunk=chunk_idx + 1, total_chunks=chunk_count, pages=f"{chunk.start_page}-{chunk.end_page}")
 
             c_user_text = (
                 f"This is a continuation of a multi-page statement "
-                f"(pages {c_start}-{c_end} of {page_count}).\n"
+                f"(pages {chunk.start_page}-{chunk.end_page} of {page_count}).\n"
                 f"The table headers from page 1 are: "
                 f"[{headers_str}]\n"
                 f"Use this exact column_order: {col_order_str}\n"
@@ -523,43 +582,44 @@ def extract_statement(pdf_bytes: bytes, page_count: int, on_chunk_complete: Call
                 f"the headers above to identify columns.\n"
                 f"Extract ALL data rows from every page in this chunk."
             )
-            c_result, c_in, c_out, c_req_id = _call_bedrock_with_retry(client, system_prompt, c_bytes, c_user_text)
+            c_response = _call_bedrock_with_retry(client, system_prompt, chunk.pdf_bytes, c_user_text)
 
             # Log metadata disagreements with chunk 1 (the canonical source).
             warnings: dict[str, str] = {}
             canonical_meta = {"date_format": date_format}
             for field, canonical in canonical_meta.items():
-                chunk_val = c_result.get(field, "")
+                chunk_val = c_response.tool_input.get(field, "")
                 if chunk_val and chunk_val != canonical:
                     warnings[field] = chunk_val
                     logger.warning("Chunk metadata disagreement", chunk=chunk_idx + 1, field=field, chunk_value=chunk_val, canonical_value=canonical)
 
-            c_col_order = c_result.get("column_order", column_order)
-            c_items = reconstruct_items(c_col_order, c_result.get("items", []))
+            c_col_order = c_response.tool_input.get("column_order", column_order)
+            c_items = reconstruct_items(c_col_order, c_response.tool_input.get("items", []))
             logger.info("Chunk items", chunk=chunk_idx + 1, count=len(c_items))
 
-            return (chunk_idx, c_items, c_in, c_out, c_req_id, warnings)
+            return ChunkResult(chunk_index=chunk_idx, items=c_items, input_tokens=c_response.input_tokens, output_tokens=c_response.output_tokens, request_id=c_response.request_id, warnings=warnings)
 
         # Dispatch chunks 2+ in parallel, merge in page order.
-        chunk_results: dict[int, tuple[list[dict[str, Any]], int, int, str]] = {}
+        chunk_results: dict[int, ChunkResult] = {}
         with ThreadPoolExecutor(max_workers=MAX_PARALLEL_CHUNKS) as pool:
             futures = {pool.submit(_process_continuation, idx): idx for idx in range(1, chunk_count)}
             for future in as_completed(futures):
-                idx, c_items, c_in, c_out, c_req_id, _ = future.result()
-                chunk_results[idx] = (c_items, c_in, c_out, c_req_id)
+                result = future.result()
+                chunk_results[result.chunk_index] = result
                 if on_chunk_complete:
                     # +1 because chunk 0 was already completed before parallel dispatch.
                     completed_so_far = len(chunk_results) + 1
                     on_chunk_complete(completed_so_far, chunk_count)
 
         # Merge in chunk order, stripping overlap prefixes.
+        # Note: cr.warnings was already logged inside _process_continuation.
         for idx in range(1, chunk_count):
-            c_items, c_in, c_out, c_req_id = chunk_results[idx]
-            c_items = strip_overlap_prefix(all_items, c_items)
-            all_items.extend(c_items)
-            total_input_tokens += c_in
-            total_output_tokens += c_out
-            request_ids.append(c_req_id)
+            cr = chunk_results[idx]
+            deduped_items = strip_overlap_prefix(all_items, cr.items)
+            all_items.extend(deduped_items)
+            total_input_tokens += cr.input_tokens
+            total_output_tokens += cr.output_tokens
+            request_ids.append(cr.request_id)
 
     # -- Post-process --
 
@@ -592,3 +652,6 @@ def extract_statement(pdf_bytes: bytes, page_count: int, on_chunk_complete: Call
         output_tokens=total_output_tokens,
         request_ids=request_ids,
     )
+
+
+# endregion

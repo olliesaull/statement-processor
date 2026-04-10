@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.statement_processor import ExtractionOutput
 from main import lambda_handler
 
 
@@ -10,7 +11,7 @@ def test_lambda_handler_consumes_tokens_after_success(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "main.run_extraction",
-        lambda **kwargs: {"filename": "statement.json", "statement": {"statement_items": [{"number": "INV-1"}], "earliest_item_date": "2025-01-01", "latest_item_date": "2025-01-31"}},
+        lambda **kwargs: ExtractionOutput(filename="statement.json", statement={"statement_items": [{"number": "INV-1"}], "earliest_item_date": "2025-01-01", "latest_item_date": "2025-01-31"}),
     )
     monkeypatch.setattr("main._consume_reserved_tokens", lambda tenant_id, statement_id: True)
 
