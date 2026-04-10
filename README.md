@@ -121,8 +121,11 @@
     └── utils/
         ├── __init__.py
         ├── auth.py
+        ├── checkout.py
         ├── dynamo.py
         ├── formatting.py
+        ├── statement_detail.py
+        ├── statement_upload.py
         ├── statement_view.py
         ├── storage.py
         ├── tenant_status.py
@@ -208,10 +211,10 @@ Check the inbox for `info@dotelastic.com` and click the verification link. Until
 
 **State machine definitions and entry points**
 - `ExtractionStateMachine` is defined in `cdk/stacks/statement_processor.py` as a 2-state workflow: `ProcessStatement` -> `DidStatementProcessingSucceed?`. The previous 6-state Textract polling workflow (`StartTextractDocumentAnalysis` -> `WaitForTextract` -> `GetTextractStatus` -> `IsTextractFinished?` -> `ProcessStatement` -> `DidStatementProcessingSucceed?`) was replaced because Bedrock calls are synchronous — the Lambda sends PDF chunks to Bedrock and receives structured JSON back in one call, eliminating the need for polling.
-- Executions are started from the Flask service via `service/utils/workflows.py:start_extraction_state_machine`, invoked during upload in `service/app.py:_process_statement_upload`.
+- Executions are started from the Flask service via `service/utils/workflows.py:start_extraction_state_machine`, invoked during upload in `service/utils/statement_upload.py:process_statement_upload`.
 
 **Step-by-step flow (code-grounded)**
-1. Upload handler registers statement metadata and starts the state machine (`service/app.py:_process_statement_upload` -> `service/utils/workflows.py:start_extraction_state_machine`).
+1. Upload handler registers statement metadata and starts the state machine (`service/utils/statement_upload.py:process_statement_upload` -> `service/utils/workflows.py:start_extraction_state_machine`).
 2. Step Functions invokes `ExtractionLambda` with S3 keys (`ProcessStatement`).
 3. Lambda downloads the PDF from S3, chunks it (up to ~10 pages per chunk with 1-page overlap), and sends each chunk to Bedrock via the Converse API with forced tool use (`extract_statement_rows`) to receive structured JSON back (`lambda_functions/extraction_lambda/core/extraction.py`).
 4. Lambda merges chunk results, deduplicates overlap rows, builds statement JSON with self-describing metadata (`header_mapping`, `date_format`, `date_confidence`, `decimal_separator`, `thousands_separator`), persists items to DynamoDB, and writes JSON to S3 (`lambda_functions/extraction_lambda/core/statement_processor.py`). On success it consumes the earlier token reservation; on failure it releases the reservation back to `TenantBillingTable`.
@@ -287,15 +290,18 @@ The Bedrock Converse API requires model access to be enabled in the AWS console.
 
 - **Main modules/packages**
   - `service/core/`: domain models and logic (e.g. `item_classification.py`, `models.py`). The config-related modules (`contact_config_metadata.py`, `get_contact_config.py`, `config_suggestion.py`, `bedrock_client.py`, `date_disambiguation.py`) have been removed.
-  - `service/utils/`: cross‑cutting utilities:
+  - `service/utils/`: cross-cutting utilities:
     - Auth/session helpers: `service/utils/auth.py`
+    - Checkout helpers: `service/utils/checkout.py` — billing validation, Stripe customer resolution, checkout session creation, and token crediting. Extracted from `app.py` to keep checkout routes thin.
     - DynamoDB access: `service/utils/dynamo.py`
     - S3 keying + uploads: `service/utils/storage.py`
     - Step Functions start: `service/utils/workflows.py`
+    - Statement detail helpers: `service/utils/statement_detail.py` — the full statement build pipeline (classification, matching, row building, Excel export). Extracted from `app.py` so the route file only handles request/response flow.
+    - Statement upload helpers: `service/utils/statement_upload.py` — token reservation, S3 upload, and extraction workflow startup. Extracted from `app.py` to separate upload orchestration from route handling.
     - Statement view/matching logic: `service/utils/statement_view.py`
     - Statement Excel export assembly: `service/utils/statement_excel_export.py`
       - Builds XLSX payload bytes, worksheet styling (match/mismatch/anomaly + completed variants), mismatch borders, legend sheet, and download filename metadata.
-      - `service/app.py` now calls this module and only wraps the payload in a Flask response.
+      - `service/utils/statement_detail.py` wraps the payload in a Flask response via `build_statement_excel_response`.
     - Shared statement row helpers: `service/utils/statement_rows.py`
       - Centralizes row item-type labeling (`invoice` -> `INV`, etc.) and Xero ID lookup from matched row payloads.
       - Reused by both HTML row-building and Excel export paths to keep link/label behavior aligned.

@@ -1,12 +1,10 @@
 """Flask application for the statement processor service."""
 
-import json
 import os
 import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
-from io import BytesIO
 from typing import Any
 
 import stripe
@@ -17,10 +15,7 @@ from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 from src.enums import TokenReservationStatus
 
-from billing_service import LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
 from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, LOCAL_DATA_DIR, S3_BUCKET_NAME, STAGE, redis_client
-from core.item_classification import guess_statement_item_type
-from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, PaymentNumberMap, StatementItemPayload, StatementRowsByHeader, StatementRowViewModel, XeroDocumentPayload
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
 from pricing_config import MAX_TOKENS, MIN_TOKENS, PricingConfig
@@ -42,31 +37,29 @@ from utils.auth import (
     set_session_is_set_cookie,
     xero_token_required,
 )
+from utils.checkout import create_checkout_session, credit_tokens_from_checkout, generate_checkout_failure_ref, resolve_or_create_stripe_customer, validate_billing_fields
 from utils.content import load_faqs, load_legal_page, load_llms_txt
 from utils.dynamo import (
     delete_statement_data,
     get_completed_statements,
     get_incomplete_statements,
-    get_statement_item_status_map,
     get_statement_record,
     mark_statement_completed,
-    persist_item_types_to_dynamo,
     repair_processing_stage,
     set_all_statement_items_completed,
     set_statement_item_completed,
 )
 from utils.email import send_login_notification_email
 from utils.pagination import paginate
-from utils.statement_rows import format_item_type_label as _format_item_type_label
-from utils.statement_rows import xero_ids_for_row as _xero_ids_for_row
-from utils.statement_upload_validation import PreparedStatementUpload, build_statement_upload_preflight, prepare_statement_uploads, validate_upload_payload
-from utils.statement_view import build_right_rows, build_row_comparisons, match_invoices_to_statement_items, prepare_display_mappings
-from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key, statement_pdf_s3_key, upload_statement_to_s3
+from utils.statement_detail import build_statement_view_data
+from utils.statement_upload import get_active_contacts_for_upload, handle_upload_statements_post
+from utils.statement_upload_validation import build_statement_upload_preflight
+from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key
 from utils.tenant_status import get_tenant_status
-from utils.workflows import start_extraction_state_machine
-from xero_repository import get_contacts, get_xero_data_by_contact
 
 # python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app
+
+# region App configuration and helpers
 
 STATEMENT_ITEMS_PER_PAGE = 50
 
@@ -141,10 +134,6 @@ _executor = ThreadPoolExecutor(max_workers=5)
 
 # Stripe service instance — used by checkout routes.
 stripe_service = StripeService()
-
-
-class StatementUploadStartError(RuntimeError):
-    """Raised when a reserved statement cannot be handed off to processing."""
 
 
 @app.context_processor
@@ -265,6 +254,11 @@ def _absolute_app_url(path: str) -> str:
     return f"https://{DOMAIN_NAME}{path}"
 
 
+# endregion
+
+# region Tenant API routes
+
+
 @app.route("/api/tenant-statuses", methods=["GET"])
 @xero_token_required
 def tenant_status():
@@ -310,6 +304,11 @@ def trigger_tenant_sync(tenant_id: str):
         return jsonify({"error": "Failed to trigger sync"}), 500
 
 
+# endregion
+
+# region Public pages
+
+
 @app.route("/")
 @route_handler_logging
 def index():
@@ -322,6 +321,11 @@ def index():
 def healthz():
     """Return a minimal unauthenticated liveness response for App Runner."""
     return "", 200
+
+
+# endregion
+
+# region Tenant management routes
 
 
 @app.route("/tenant_management")
@@ -366,134 +370,9 @@ def ignore_favicon():
     return "", 204
 
 
-def _get_active_contacts_for_upload() -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Return active contacts and a name -> ID lookup for the upload form."""
-    contacts_raw = get_contacts()
-    contacts_active = [c for c in contacts_raw if str(c.get("contact_status") or "").upper() == "ACTIVE"]
-    contacts_list = sorted(contacts_active, key=lambda c: (c.get("name") or "").casefold())
-    contact_lookup = {c["name"]: c["contact_id"] for c in contacts_list}
-    return contacts_list, contact_lookup
+# endregion
 
-
-def _process_statement_upload(tenant_id: str | None, reserved_upload: ReservedStatementUpload) -> str:
-    """Upload a reserved statement PDF and kick off extraction.
-
-    Args:
-        tenant_id: Active Xero tenant.
-        reserved_upload: Upload row that already has a statement id and token reservation.
-
-    Returns:
-        The statement id linked to the upload.
-
-    Raises:
-        StatementUploadStartError: S3 upload or workflow startup failed after reservation.
-    """
-    file_bytes = getattr(reserved_upload.uploaded_file, "content_length", None)
-    statement_id = reserved_upload.statement_id
-    logger.info(
-        "Preparing statement upload",
-        tenant_id=tenant_id,
-        contact_id=reserved_upload.contact_id,
-        contact_name=reserved_upload.contact_name,
-        statement_id=statement_id,
-        statement_filename=reserved_upload.uploaded_file.filename,
-        bytes=file_bytes,
-    )
-
-    # Upload PDF to S3 first so downstream processing can read it.
-    pdf_statement_key = statement_pdf_s3_key(tenant_id, statement_id)
-    try:
-        upload_statement_to_s3(fs_like=reserved_upload.uploaded_file, key=pdf_statement_key)
-        logger.info("Uploaded statement PDF", tenant_id=tenant_id, contact_id=reserved_upload.contact_id, statement_id=statement_id, s3_key=pdf_statement_key)
-    except Exception as exc:
-        logger.exception("Failed to upload reserved statement PDF", tenant_id=tenant_id, contact_id=reserved_upload.contact_id, statement_id=statement_id, s3_key=pdf_statement_key, error=exc)
-        raise StatementUploadStartError("The statement PDF could not be uploaded.") from exc
-
-    # Kick off background extraction so it's ready by the time the user views it.
-    json_statement_key = statement_json_s3_key(tenant_id, statement_id)
-    started = start_extraction_state_machine(
-        tenant_id=tenant_id, contact_id=reserved_upload.contact_id, statement_id=statement_id, pdf_key=pdf_statement_key, json_key=json_statement_key, page_count=reserved_upload.page_count
-    )
-
-    log_kwargs = {"tenant_id": tenant_id, "contact_id": reserved_upload.contact_id, "statement_id": statement_id, "pdf_key": pdf_statement_key, "json_key": json_statement_key}
-
-    if started:
-        logger.info("Started extraction workflow", **log_kwargs)
-    else:
-        logger.error("Failed to start extraction workflow", **log_kwargs)
-        raise StatementUploadStartError("The statement workflow could not be started.")
-
-    return statement_id
-
-
-def _handle_reserved_upload_failure(tenant_id: str | None, reserved_upload: ReservedStatementUpload, exc: Exception, error_messages: list[str]) -> None:
-    """Release tokens and clean up statement data after upload-start failure."""
-    logger.exception("Upload failed after token reservation; releasing tokens", tenant_id=tenant_id, statement_id=reserved_upload.statement_id, contact_id=reserved_upload.contact_id, error=exc)
-
-    release_succeeded = False
-    try:
-        release_succeeded = BillingService.release_statement_reservation(tenant_id, reserved_upload.statement_id)
-    except BillingServiceError as release_exc:
-        logger.exception("Failed to release reserved tokens after upload-start failure", tenant_id=tenant_id, statement_id=reserved_upload.statement_id, error=release_exc)
-
-    filename = reserved_upload.uploaded_file.filename or "Unnamed PDF"
-    if not release_succeeded:
-        error_messages.append(f"{filename}: The upload was not started and token recovery needs operator attention.")
-        return
-
-    try:
-        delete_statement_data(tenant_id, reserved_upload.statement_id)
-    except Exception as cleanup_exc:
-        logger.exception("Failed to clean up statement after upload-start failure", tenant_id=tenant_id, statement_id=reserved_upload.statement_id, error=cleanup_exc)
-
-    error_messages.append(f"{filename}: The upload was not started. Any reserved tokens were returned.")
-
-
-def _reserve_statement_uploads(tenant_id: str | None, prepared_uploads: list[PreparedStatementUpload], error_messages: list[str]) -> list[ReservedStatementUpload]:
-    """Reserve tokens for a validated batch and collect user-facing errors."""
-    try:
-        return BillingService.reserve_statement_uploads(tenant_id, prepared_uploads)
-    except InsufficientTokensError:
-        logger.info("Upload blocked; token reservation failed due to insufficient balance", tenant_id=tenant_id, files=len(prepared_uploads))
-        error_messages.append("The tenant no longer has enough available pages for this upload. Refresh the page, remove some PDFs, or buy more pages before trying again.")
-    except BillingServiceError as exc:
-        logger.exception("Upload blocked; token reservation failed", tenant_id=tenant_id, files=len(prepared_uploads), error=exc)
-        error_messages.append("Could not reserve pages for this upload. Please try again.")
-    return []
-
-
-def _handle_upload_statements_post(tenant_id: str | None, *, contact_lookup: dict[str, str], error_messages: list[str]) -> int:
-    """Validate, reserve, and start workflow processing for one upload POST.
-
-    All uploads go straight to token reservation and Step Functions — there
-    is no longer a config-review gate because Bedrock extraction derives
-    header mappings directly from the PDF content.
-
-    Returns:
-        Number of uploads that started processing successfully.
-    """
-    files = [f for f in request.files.getlist("statements") if f and f.filename]
-    names = request.form.getlist("contact_names")
-    logger.info("Upload statements submitted", tenant_id=tenant_id, files=len(files), names=len(names))
-
-    if not validate_upload_payload(files, names):
-        return 0
-
-    prepared_uploads = prepare_statement_uploads(tenant_id, files, names, contact_lookup, error_messages)
-    if not prepared_uploads:
-        return 0
-
-    # Reserve tokens and start the extraction workflow for every valid upload.
-    reserved_uploads = _reserve_statement_uploads(tenant_id, prepared_uploads, error_messages)
-    uploads_ok = 0
-    for reserved_upload in reserved_uploads:
-        try:
-            _process_statement_upload(tenant_id=tenant_id, reserved_upload=reserved_upload)
-            uploads_ok += 1
-        except StatementUploadStartError as exc:
-            _handle_reserved_upload_failure(tenant_id, reserved_upload, exc, error_messages)
-
-    return uploads_ok
+# region Statement upload routes
 
 
 @app.route("/api/upload-statements/preflight", methods=["POST"])
@@ -540,20 +419,25 @@ def upload_statements():
     """Upload one or more PDF statements and register them for processing."""
     tenant_id = session.get("xero_tenant_id")
 
-    contacts_list, contact_lookup = _get_active_contacts_for_upload()
+    contacts_list, contact_lookup = get_active_contacts_for_upload()
     available_pages = TenantBillingRepository.get_tenant_token_balance(tenant_id)
     success_count: int | None = None
     error_messages: list[str] = []
     logger.info("Rendering upload statements", tenant_id=tenant_id, available_contacts=len(contacts_list), available_pages=available_pages)
 
     if request.method == "POST":
-        uploads_ok = _handle_upload_statements_post(tenant_id, contact_lookup=contact_lookup, error_messages=error_messages)
+        uploads_ok = handle_upload_statements_post(tenant_id, contact_lookup=contact_lookup, error_messages=error_messages)
 
         if uploads_ok:
             success_count = uploads_ok
         logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=list(error_messages))
 
     return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages, available_pages=available_pages)
+
+
+# endregion
+
+# region Content pages
 
 
 @app.route("/instructions")
@@ -599,6 +483,11 @@ def terms():
     """Render the terms and conditions page from markdown content."""
     content = load_legal_page("terms.md")
     return render_template("terms.html", content=content)
+
+
+# endregion
+
+# region SEO and crawling
 
 
 def _get_authenticated_routes() -> list[str]:
@@ -677,6 +566,11 @@ def sitemap_xml():
 def llms_txt():
     """Serve llms.txt — product overview for LLM consumption (llmstxt.org spec)."""
     return Response(load_llms_txt(), mimetype="text/plain")
+
+
+# endregion
+
+# region Statement list and detail routes
 
 
 @app.route("/statements")
@@ -945,389 +839,6 @@ def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: A
     return None
 
 
-def _build_match_by_item_id(matched_invoice_to_statement_item: MatchedInvoiceMap) -> MatchByItemId:
-    """Return a map of statement_item_id to matched document type/source."""
-    match_by_item_id: MatchByItemId = {}
-    for match in matched_invoice_to_statement_item.values():
-        stmt_item = match.get("statement_item") if isinstance(match, dict) else None
-        doc = match.get("invoice") if isinstance(match, dict) else None
-        if not isinstance(stmt_item, dict) or not isinstance(doc, dict):
-            continue
-        statement_item_id = stmt_item.get("statement_item_id")
-        if not statement_item_id:
-            continue
-        doc_type = str(doc.get("type") or "").upper()
-        if doc.get("credit_note_id") or doc_type.endswith("CREDIT"):
-            match_by_item_id[statement_item_id] = {"type": "credit_note", "source": "credit_note_match"}
-        else:
-            match_by_item_id[statement_item_id] = {"type": "invoice", "source": "invoice_match"}
-    return match_by_item_id
-
-
-def _build_payment_number_map(invoices: list[XeroDocumentPayload], payments: list[XeroDocumentPayload]) -> PaymentNumberMap:
-    """Build a map of invoice number -> payment rows for payment inference."""
-    invoice_number_by_id: dict[str, str] = {}
-    for inv in invoices:
-        inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
-        inv_number = str(inv.get("number") or "").strip() if isinstance(inv, dict) else ""
-        if inv_id and inv_number:
-            invoice_number_by_id[str(inv_id)] = inv_number
-
-    payment_number_map: PaymentNumberMap = {}
-    for payment in payments:
-        if not isinstance(payment, dict):
-            continue
-        invoice_id = payment.get("invoice_id")
-        if not invoice_id:
-            continue
-        invoice_number = invoice_number_by_id.get(str(invoice_id))
-        if not invoice_number:
-            continue
-        payment_number_map.setdefault(invoice_number, []).append(payment)
-    return payment_number_map
-
-
-def _classify_statement_items(
-    *,
-    items: list[StatementItemPayload],
-    rows_by_header: StatementRowsByHeader,
-    item_number_header: str | None,
-    header_mapping: dict[str, str] | None,
-    matched_invoice_to_statement_item: MatchedInvoiceMap,
-    matched_numbers: set[str],
-    match_by_item_id: MatchByItemId,
-    payment_number_map: PaymentNumberMap,
-    statement_id: str,
-) -> tuple[list[str], dict[str, str]]:
-    """Classify statement items in-place and return item types + updates."""
-    classification_updates: dict[str, str] = {}
-    for idx, it in enumerate(items):
-        if not isinstance(it, dict):
-            continue
-        statement_item_id = it.get("statement_item_id")
-        raw = it.get("raw", {}) if isinstance(it.get("raw"), dict) else {}
-        current_type = str(it.get("item_type") or "").strip().lower()
-        row_number = ""
-        if item_number_header and idx < len(rows_by_header):
-            row_number = str(rows_by_header[idx].get(item_number_header) or "").strip()
-
-        new_type: str | None
-        source: str | None
-        new_type = None
-        source = None
-
-        if statement_item_id and statement_item_id in match_by_item_id:
-            entry = match_by_item_id[statement_item_id]
-            new_type = entry["type"]
-            source = entry["source"]
-        elif row_number and row_number in matched_numbers:
-            match = matched_invoice_to_statement_item.get(row_number)
-            doc = match.get("invoice") if isinstance(match, dict) else None
-            if isinstance(doc, dict):
-                doc_type = str(doc.get("type") or "").upper()
-                if doc.get("credit_note_id") or doc_type.endswith("CREDIT"):
-                    new_type = "credit_note"
-                    source = "credit_note_match"
-                else:
-                    new_type = "invoice"
-                    source = "invoice_match"
-        elif row_number and row_number not in matched_numbers and row_number in payment_number_map:
-            new_type = "payment"
-            source = "payment_match"
-
-        if not new_type:
-            new_type = guess_statement_item_type(raw_row=raw, total_entries=it.get("total"), header_mapping=header_mapping)
-            source = "heuristic"
-
-        if new_type and new_type != current_type:
-            it["item_type"] = new_type
-            if statement_item_id:
-                classification_updates[statement_item_id] = new_type
-            logger.info("Statement item type updated", statement_id=statement_id, statement_item_id=statement_item_id, new_type=new_type, previous_type=current_type or "", source=source)
-
-    item_types = [str((it.get("item_type") if isinstance(it, dict) else "") or "").strip().lower() for it in items]
-    return item_types, classification_updates
-
-
-def _persist_classification_updates(*, data: dict[str, Any], statement_id: str, tenant_id: str, json_statement_key: str, classification_updates: dict[str, str]) -> None:
-    """Persist updated item types back to S3 and DynamoDB."""
-    if not classification_updates:
-        return
-
-    try:
-        json_payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-        upload_statement_to_s3(BytesIO(json_payload), json_statement_key)
-        logger.info("Persisted statement item types to S3", statement_id=statement_id, updated=len(classification_updates))
-    except Exception as exc:
-        logger.exception("Failed to persist statement JSON", statement_id=statement_id, error=str(exc))
-
-    persist_item_types_to_dynamo(tenant_id, classification_updates)
-    logger.info("Persisted statement item types to DynamoDB", statement_id=statement_id, updated=len(classification_updates))
-
-
-def _build_row_matches(rows_by_header: StatementRowsByHeader, item_number_header: str | None, matched_invoice_to_statement_item: MatchedInvoiceMap, row_comparisons: list[list[Any]]) -> list[bool]:
-    """Return the per-row match status for coloring and export."""
-    if item_number_header:
-        row_matches: list[bool] = []
-        for r in rows_by_header:
-            num = (r.get(item_number_header) or "").strip()
-            row_matches.append(bool(num and matched_invoice_to_statement_item.get(num)))
-        return row_matches
-
-    # Fallback: if no number mapping, use strict all-cells match
-    return [all(cell.matches for cell in row) for row in row_comparisons]
-
-
-def _build_statement_excel_response(
-    *,
-    display_headers: list[str],
-    rows_by_header: StatementRowsByHeader,
-    right_rows_by_header: StatementRowsByHeader,
-    row_comparisons: list[list[Any]],
-    row_matches: list[bool],
-    item_types: list[str],
-    items: list[StatementItemPayload],
-    item_number_header: str | None,
-    matched_invoice_to_statement_item: MatchedInvoiceMap,
-    item_status_map: dict[str, bool],
-    record: dict[str, Any],
-    statement_id: str,
-    tenant_id: str,
-) -> Any:
-    """Build an XLSX export response for the current statement view.
-
-    Args:
-        display_headers: Statement display headers.
-        rows_by_header: Statement rows keyed by header.
-        right_rows_by_header: Xero rows keyed by header.
-        row_comparisons: Per-cell comparison results.
-        row_matches: Per-row match flags.
-        item_types: Item type labels per row.
-        items: Statement items payload.
-        item_number_header: Header used to map Xero links.
-        matched_invoice_to_statement_item: Matched Xero invoice map.
-        item_status_map: Statement item completion flags.
-        record: Statement metadata record.
-        statement_id: Statement identifier.
-        tenant_id: Active tenant identifier.
-
-    Returns:
-        Flask response containing the XLSX export.
-    """
-    from utils.statement_excel_export import build_statement_excel_payload  # pylint: disable=import-outside-toplevel
-
-    # Pylint's duplicate-code check compares raw argument forwarding blocks.
-    # This explicit mapping is intentional so the route wrapper stays easy to audit.
-    # pylint: disable=duplicate-code
-    excel_payload, download_name, row_count = build_statement_excel_payload(
-        display_headers=display_headers,
-        rows_by_header=rows_by_header,
-        right_rows_by_header=right_rows_by_header,
-        row_comparisons=row_comparisons,
-        row_matches=row_matches,
-        item_types=item_types,
-        items=items,
-        item_number_header=item_number_header,
-        matched_invoice_to_statement_item=matched_invoice_to_statement_item,
-        item_status_map=item_status_map,
-        record=record,
-        statement_id=statement_id,
-    )
-    # pylint: enable=duplicate-code
-    response = app.response_class(excel_payload, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
-    logger.info("Statement Excel generated", tenant_id=tenant_id, statement_id=statement_id, rows=row_count, excel_filename=download_name)
-    return response
-
-
-def _item_status(item: StatementItemPayload, item_status_map: dict[str, bool]) -> tuple[str | None, bool]:
-    """Return the statement item ID and completion status."""
-    statement_item_id = item.get("statement_item_id") if isinstance(item, dict) else None
-    if statement_item_id:
-        return statement_item_id, item_status_map.get(statement_item_id, False)
-    return None, False
-
-
-def _item_flags(item: StatementItemPayload) -> list[str]:
-    """Return normalized, unique flags for a statement item."""
-    if not isinstance(item, dict):
-        return []
-    raw_flags = item.get("_flags") or []
-    if not isinstance(raw_flags, list):
-        return []
-    seen_flags: set[str] = set()
-    flags: list[str] = []
-    for flag in raw_flags:
-        if not isinstance(flag, str):
-            continue
-        normalized = flag.strip()
-        if not normalized or normalized in seen_flags:
-            continue
-        seen_flags.add(normalized)
-        flags.append(normalized)
-    return flags
-
-
-def _build_statement_view_data(*, tenant_id: str, statement_id: str, contact_id: str | None, data: dict[str, Any], record: dict[str, Any]) -> dict[str, Any] | Response:
-    """Run the full statement build pipeline and return cacheable view data.
-
-    This is always the uncached path — the caller is responsible for checking
-    the Redis cache first and for handling early-exit states (processing,
-    failed) before calling this function.
-
-    Args:
-        tenant_id: Active tenant.
-        statement_id: Statement being viewed.
-        contact_id: Xero contact linked to this statement (may be None).
-        data: Parsed statement JSON from S3 (the ``fetch_json_statement`` result).
-        record: DynamoDB statement record (used for Excel downloads).
-
-    Returns:
-        Dict with ``statement_rows`` and ``display_headers`` on the normal
-        path.  Returns a Flask ``Response`` for ``?download=xlsx`` requests
-        (the caller must handle this — see the xlsx guard in the route).
-    """
-    # 1) Parse display configuration and left-side rows.
-    items: list[StatementItemPayload] = data.get("statement_items", []) or []
-    display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, statement_data=data)
-
-    # 2) Fetch Xero documents and classify each statement item.
-    xero_data = get_xero_data_by_contact(contact_id, tenant_id=tenant_id)
-    invoices: list[XeroDocumentPayload] = xero_data["invoices"]
-    credit_notes: list[XeroDocumentPayload] = xero_data["credit_notes"]
-    payments: list[XeroDocumentPayload] = xero_data["payments"]
-    logger.info("Fetched Xero documents", statement_id=statement_id, contact_id=contact_id, invoices=len(invoices), credit_notes=len(credit_notes), payments=len(payments))
-
-    docs_for_matching = invoices + credit_notes
-    matched_invoice_to_statement_item: MatchedInvoiceMap = match_invoices_to_statement_items(
-        items=items, rows_by_header=rows_by_header, item_number_header=item_number_header, invoices=docs_for_matching
-    )
-
-    matched_numbers: set[str] = {key for key in matched_invoice_to_statement_item if isinstance(key, str)}
-    match_by_item_id = _build_match_by_item_id(matched_invoice_to_statement_item)
-    payment_number_map = _build_payment_number_map(invoices, payments)
-
-    item_types, classification_updates = _classify_statement_items(
-        items=items,
-        rows_by_header=rows_by_header,
-        item_number_header=item_number_header,
-        header_mapping=data.get("header_mapping", {}),
-        matched_invoice_to_statement_item=matched_invoice_to_statement_item,
-        matched_numbers=matched_numbers,
-        match_by_item_id=match_by_item_id,
-        payment_number_map=payment_number_map,
-        statement_id=statement_id,
-    )
-
-    _persist_classification_updates(
-        data=data, statement_id=statement_id, tenant_id=tenant_id, json_statement_key=statement_json_s3_key(tenant_id, statement_id), classification_updates=classification_updates
-    )
-
-    # 3) Build right-hand rows from matched invoices.
-    right_rows_by_header = build_right_rows(
-        rows_by_header=rows_by_header,
-        display_headers=display_headers,
-        header_to_field=header_to_field,
-        matched_map=matched_invoice_to_statement_item,
-        item_number_header=item_number_header,
-        date_format=data.get("date_format"),
-    )
-
-    # 4) Compare LEFT (statement) vs RIGHT (Xero) for per-cell indicators.
-    row_comparisons = build_row_comparisons(left_rows=rows_by_header, right_rows=right_rows_by_header, display_headers=display_headers, header_to_field=header_to_field)
-    row_matches = _build_row_matches(rows_by_header, item_number_header, matched_invoice_to_statement_item, row_comparisons)
-
-    item_status_map = get_statement_item_status_map(tenant_id, statement_id)
-
-    # Excel downloads need intermediate pipeline data (rows_by_header,
-    # right_rows_by_header, etc.) that is not stored in the cached dict.
-    # The caller bypasses the cache for xlsx requests and handles this
-    # response directly.
-    if request.args.get("download") == "xlsx":
-        return _build_statement_excel_response(
-            display_headers=display_headers,
-            rows_by_header=rows_by_header,
-            right_rows_by_header=right_rows_by_header,
-            row_comparisons=row_comparisons,
-            row_matches=row_matches,
-            item_types=item_types,
-            items=items,
-            item_number_header=item_number_header,
-            matched_invoice_to_statement_item=matched_invoice_to_statement_item,
-            item_status_map=item_status_map,
-            record=record,
-            statement_id=statement_id,
-            tenant_id=tenant_id,
-        )
-
-    statement_rows = _build_statement_rows(
-        rows_by_header=rows_by_header,
-        row_comparisons=row_comparisons,
-        row_matches=row_matches,
-        items=items,
-        item_types=item_types,
-        item_status_map=item_status_map,
-        item_number_header=item_number_header,
-        matched_invoice_to_statement_item=matched_invoice_to_statement_item,
-    )
-
-    return {"statement_rows": statement_rows, "display_headers": display_headers}
-
-
-def _build_statement_rows(
-    *,
-    rows_by_header: StatementRowsByHeader,
-    row_comparisons: list[list[Any]],
-    row_matches: list[bool],
-    items: list[StatementItemPayload],
-    item_types: list[str],
-    item_status_map: dict[str, bool],
-    item_number_header: str | None,
-    matched_invoice_to_statement_item: MatchedInvoiceMap,
-) -> list[StatementRowViewModel]:
-    """Build the rows displayed in the statement detail UI.
-
-    Args:
-        rows_by_header: Statement rows keyed by header names.
-        row_comparisons: Per-cell comparison results.
-        row_matches: Per-row match flags.
-        items: Statement item payloads.
-        item_types: Item type labels per row.
-        item_status_map: Statement item completion flags.
-        item_number_header: Header used to map Xero links.
-        matched_invoice_to_statement_item: Matched Xero invoice map.
-
-    Returns:
-        List of row dicts for the statement detail table.
-    """
-    statement_rows: list[StatementRowViewModel] = []
-    for idx, left_row in enumerate(rows_by_header):
-        item = items[idx] if idx < len(items) else {}
-        statement_item_id, is_item_completed = _item_status(item, item_status_map)
-
-        flags = _item_flags(item)
-
-        # Build Xero links by extracting IDs from matched data
-        xero_invoice_id, xero_credit_note_id = _xero_ids_for_row(item_number_header, left_row, matched_invoice_to_statement_item)
-
-        item_type = (item.get("item_type") if isinstance(item, dict) else None) or (item_types[idx] if idx < len(item_types) else "invoice")
-        statement_rows.append(
-            {
-                "statement_item_id": statement_item_id,
-                "cell_comparisons": row_comparisons[idx] if idx < len(row_comparisons) else [],
-                "matches": row_matches[idx] if idx < len(row_matches) else False,
-                "is_completed": is_item_completed,
-                "flags": flags,
-                "item_type": item_type,
-                "item_type_label": _format_item_type_label(item_type),
-                "xero_invoice_id": xero_invoice_id,
-                "xero_credit_note_id": xero_credit_note_id,
-            }
-        )
-
-    return statement_rows
-
-
 @app.route("/statement/<statement_id>", methods=["GET", "POST"])
 @active_tenant_required("Please select a tenant to view statements.")
 @xero_token_required
@@ -1403,8 +914,8 @@ def statement(statement_id: str):
 
     # --- Excel download: bypass cache, needs full pipeline data. ---
     if request.args.get("download") == "xlsx":
-        result = _build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, data=statement_json_data, record=record)
-        # _build_statement_view_data returns a Response for xlsx requests.
+        result = build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, data=statement_json_data, record=record)
+        # build_statement_view_data returns a Response for xlsx requests.
         return result
 
     # --- Normal path: check Redis cache, fall back to full pipeline. ---
@@ -1416,7 +927,7 @@ def statement(statement_id: str):
         display_headers = cached_view["display_headers"]
     else:
         # Cache miss: run the full build pipeline.
-        result = _build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, data=statement_json_data, record=record)
+        result = build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, data=statement_json_data, record=record)
         statement_rows = result["statement_rows"]
         display_headers = result["display_headers"]
         cache_statement_view(tenant_id, statement_id, result)
@@ -1470,6 +981,11 @@ def statement(statement_id: str):
     # the #statement-content region without a full page reload.
     template = "partials/statement_content.html" if _is_htmx_request() else "statement.html"
     return render_template(template, **context)
+
+
+# endregion
+
+# region Tenant selection and disconnect routes
 
 
 @app.route("/tenants/select", methods=["POST"])
@@ -1576,6 +1092,11 @@ def disconnect_tenant():
     return redirect(management_url)
 
 
+# endregion
+
+# region Banner API
+
+
 @app.route("/api/banner/dismiss", methods=["POST"])
 def api_dismiss_banner():
     """Permanently dismiss a banner for the active tenant.
@@ -1609,6 +1130,11 @@ def api_dismiss_banner():
     session["_dismissed_banners"] = cached
 
     return "", 204
+
+
+# endregion
+
+# region Authentication routes
 
 
 @app.route("/login")
@@ -1741,6 +1267,11 @@ def logout():
     session.clear()
     response = redirect(url_for("index"))
     return clear_session_is_set_cookie(response)
+
+
+# endregion
+
+# region Pricing and checkout routes
 
 
 @app.route("/pricing")
@@ -1884,17 +1415,7 @@ def checkout_create():
     billing_country = request.form.get("billing_country", "").strip()
 
     # Validate required fields — re-render billing form on failure.
-    missing = []
-    if not billing_name:
-        missing.append("Name")
-    if not billing_email:
-        missing.append("Email")
-    if not billing_line1:
-        missing.append("Address line 1")
-    if not billing_postal_code:
-        missing.append("Postal code")
-    if not billing_country:
-        missing.append("Country")
+    missing = validate_billing_fields(billing_name=billing_name, billing_email=billing_email, billing_line1=billing_line1, billing_postal_code=billing_postal_code, billing_country=billing_country)
 
     if missing:
         total_pence = PricingConfig.calculate_total_pence(token_count)
@@ -1919,36 +1440,26 @@ def checkout_create():
         logger.warning("Purchase tenant not in user's tenant list", purchase_tenant_id=purchase_tenant_id)
         return redirect(url_for("buy_tokens"))
 
-    # Calculate graduated price.
-    total_amount_pence = PricingConfig.calculate_total_pence(token_count)
-
     address = {"line1": billing_line1, "line2": billing_line2, "city": billing_city, "state": billing_state, "postal_code": billing_postal_code, "country": billing_country}
 
     success_url = url_for("checkout_success", _external=True) + "?session_id={CHECKOUT_SESSION_ID}"
     cancel_url = url_for("checkout_cancel", _external=True)
 
     try:
-        # Persistent customer: reuse existing or create new.
-        existing_customer_id = TenantBillingRepository.get_stripe_customer_id(purchase_tenant_id)
-        if existing_customer_id:
-            stripe_service.update_customer(customer_id=existing_customer_id, name=billing_name, email=billing_email, address=address)
-            customer_id = existing_customer_id
-        else:
-            customer_id = stripe_service.create_customer(name=billing_name, email=billing_email, address=address, tenant_id=purchase_tenant_id)
-            TenantBillingRepository.set_stripe_customer_id(purchase_tenant_id, customer_id)
-
-        stripe_session = stripe_service.create_checkout_session(
-            customer_id=customer_id, token_count=token_count, total_amount_pence=total_amount_pence, tenant_id=purchase_tenant_id, success_url=success_url, cancel_url=cancel_url
-        )
+        customer_id = resolve_or_create_stripe_customer(stripe_service, tenant_id=purchase_tenant_id, billing_name=billing_name, billing_email=billing_email, address=address)
+        checkout_url = create_checkout_session(stripe_service, customer_id=customer_id, token_count=token_count, tenant_id=purchase_tenant_id, success_url=success_url, cancel_url=cancel_url)
     except stripe.StripeError:
-        logger.exception("Failed to create Stripe checkout session", tenant_id=purchase_tenant_id)
-        ref = secrets.token_hex(8)
+        ref = generate_checkout_failure_ref()
+        return redirect(url_for("checkout_failed", ref=ref))
+
+    if not checkout_url:
+        ref = generate_checkout_failure_ref()
         return redirect(url_for("checkout_failed", ref=ref))
 
     session.pop("pending_token_count", None)
     session.pop("pending_purchase_tenant_id", None)
 
-    return redirect(stripe_session.url, code=303)
+    return redirect(checkout_url, code=303)
 
 
 @app.route("/checkout/success")
@@ -1998,16 +1509,8 @@ def checkout_success():
 
     token_count = int(stripe_session.metadata["token_count"])
 
-    # Credit tokens with effective rate for audit trail. ledger_entry_id ties
-    # this ledger row to the Stripe session in StripeEventStoreTable.
-    effective_rate = PricingConfig.effective_rate_pence(token_count)
-    ledger_entry_id = f"purchase#{session_id}"
-    BillingService.adjust_token_balance(tenant_id, token_count, source=LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, ledger_entry_id=ledger_entry_id, price_per_token_pence=effective_rate)
-
-    # Mark session as processed so page refreshes don't re-credit.
-    StripeRepository.record_processed_session(session_id=session_id, tenant_id=tenant_id, tokens_credited=token_count, ledger_entry_id=ledger_entry_id)
-
-    new_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
+    # Credit tokens and record the Stripe session as processed.
+    new_balance = credit_tokens_from_checkout(session_id=session_id, tenant_id=tenant_id, token_count=token_count)
     return render_template("checkout_success.html", tokens_credited=token_count, new_balance=new_balance)
 
 
@@ -2035,6 +1538,11 @@ def checkout_failed():
     """
     ref = request.args.get("ref", "")
     return render_template("checkout_failed.html", ref=ref)
+
+
+# endregion
+
+# region Miscellaneous routes
 
 
 @app.route("/.well-known/<path:path>")
@@ -2072,3 +1580,5 @@ if STAGE == "local":
         response.set_cookie("cookie_consent", "true", max_age=86400, path="/")
         response.set_cookie("session_is_set", "true", max_age=86400, path="/")
         return response
+
+# endregion

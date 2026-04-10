@@ -16,6 +16,7 @@ from flask_session import Session
 
 import app as app_module
 import utils.auth
+import utils.statement_detail as statement_detail_module
 
 TENANT_ID = "tenant-htmx-test"
 STATEMENT_ID = "stmt-htmx-001"
@@ -59,13 +60,13 @@ def client(_app, monkeypatch):
     monkeypatch.setattr(utils.auth, "get_tenant_status", lambda tenant_id: TenantStatus.FREE)
 
     # Stub data layer calls used by the statement route.
-    # All of these are imported at the top of app.py with `from ... import X`,
-    # so they must be patched in the app_module namespace (not the source module).
+    # Functions imported at the top of app.py are patched in app_module namespace.
+    # Functions now in utils.statement_detail are patched there instead.
     monkeypatch.setattr(app_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
     monkeypatch.setattr(app_module, "fetch_json_statement", lambda *a, **kw: SAMPLE_STATEMENT_JSON)
-    monkeypatch.setattr(app_module, "get_xero_data_by_contact", lambda *a, **kw: {"invoices": [], "credit_notes": [], "payments": []})
-    monkeypatch.setattr(app_module, "get_statement_item_status_map", lambda *a, **kw: {})
-    monkeypatch.setattr(app_module, "_persist_classification_updates", lambda **kw: None)
+    monkeypatch.setattr(statement_detail_module, "get_xero_data_by_contact", lambda *a, **kw: {"invoices": [], "credit_notes": [], "payments": []})
+    monkeypatch.setattr(statement_detail_module, "get_statement_item_status_map", lambda *a, **kw: {})
+    monkeypatch.setattr(statement_detail_module, "persist_classification_updates", lambda **kw: None)
 
     # Stub statement view cache — always miss so the pipeline runs.
     monkeypatch.setattr(app_module, "get_cached_statement_view", lambda *a, **kw: None)
