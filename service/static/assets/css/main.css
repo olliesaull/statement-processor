@@ -5,6 +5,7 @@
    Bootstrap 5.3.3 is self-hosted in vendor/bootstrap-5.3.3/
    ========================================================================== */
 
+/* region Design tokens */
 /* ---------- 1. Design tokens + Bootstrap variable mappings ---------- */
 :root {
   --blue-700:  #1a56db;
@@ -79,6 +80,9 @@
   --bs-secondary-bg: var(--slate-100);
 }
 
+/* endregion */
+
+/* region Base */
 /* ---------- 2. Base styles ---------- */
 body {
   font-family: var(--font-body);
@@ -119,6 +123,9 @@ a:focus-visible {
   box-shadow: 0 0 0 0.25rem rgba(37,99,235,0.2);
 }
 
+/* endregion */
+
+/* region Navbar */
 /* ---------- 3. Navbar (Bootstrap navbar restyled) ---------- */
 .navbar {
   background: rgba(255,255,255,0.92);
@@ -186,6 +193,9 @@ a:focus-visible {
   height: 18px;
 }
 
+/* endregion */
+
+/* region Buttons */
 /* ---------- 4. Buttons ---------- */
 .btn {
   border-radius: var(--radius);
@@ -274,6 +284,9 @@ a:focus-visible {
   --bs-btn-hover-border-color: var(--red-500);
 }
 
+/* endregion */
+
+/* region Alerts, badges, cards, tables, forms */
 /* ---------- 5. Alerts, badges, cards, tables, forms ---------- */
 /* White background + coloured left accent so banners contrast on both
    white pages and the blue-gradient homepage. */
@@ -366,6 +379,9 @@ a:focus-visible {
   color: var(--slate-500);
 }
 
+/* endregion */
+
+/* region Page components */
 /* ---------- 6. Page components ---------- */
 .content-max-720 {
   max-width: 720px;
@@ -660,6 +676,9 @@ a:focus-visible {
   padding: 0.2rem 1.75rem 0.2rem 0.5rem;
 }
 
+/* endregion */
+
+/* region Upload page */
 /* ---------- 7. Upload page classes ---------- */
 .upload-statements-page {
   display: flex;
@@ -751,6 +770,9 @@ a:focus-visible {
   color: var(--red-500);
 }
 
+/* endregion */
+
+/* region Config page */
 /* ---------- 8. Config page classes ---------- */
 .configs-xero-column-example {
   width: 55%;
@@ -765,6 +787,9 @@ a:focus-visible {
   max-width: 100%;
 }
 
+/* endregion */
+
+/* region Tenant page */
 /* ---------- 9. Tenant page classes ---------- */
 .tenant-current-chip {
   background-color: var(--blue-50);
@@ -805,9 +830,12 @@ a:focus-visible {
   background-color: var(--blue-50);
 }
 
+/* endregion */
+
 /* ---------- 10. (Instructions page — old classes removed) ---------- */
 /* ---------- 11. (Home page — old classes removed) ---------- */
 
+/* region Marketing components */
 /* ---------- 12. Marketing components ---------- */
 
 /* Hero section */
@@ -1531,6 +1559,9 @@ a:focus-visible {
   line-height: 1.6;
 }
 
+/* endregion */
+
+/* region Scroll-reveal animations */
 /* ---------- 13. Scroll-reveal animations ---------- */
 .reveal {
   opacity: 0;
@@ -1558,6 +1589,9 @@ a:focus-visible {
   transform: translateY(0);
 }
 
+/* endregion */
+
+/* region Statements list page */
 /* ---------- 14. Statements list page ---------- */
 .statements-sort-bar {
   display: flex;
@@ -1620,6 +1654,9 @@ a:focus-visible {
   padding-bottom: 0.5rem;
 }
 
+/* endregion */
+
+/* region Statement detail page */
 /* ---------- 15. Statement detail page ---------- */
 .statement-page-header {
   max-width: 100%;
@@ -1813,6 +1850,9 @@ a:focus-visible {
   flex: 1 1 auto;
 }
 
+/* endregion */
+
+/* region Footer */
 /* ---------- 16. Footer ---------- */
 .site-footer {
   background: var(--slate-900);
@@ -1903,6 +1943,9 @@ a:focus-visible {
   color: var(--slate-500);
 }
 
+/* endregion */
+
+/* region Landscape tip banner */
 /* ---------- Landscape tip banner (mobile portrait only) ---------- */
 .landscape-tip {
   display: none;
@@ -1936,6 +1979,9 @@ a:focus-visible {
   }
 }
 
+/* endregion */
+
+/* region Scroll proxy */
 /* ---------- Sticky horizontal scrollbar proxy ---------- */
 .scroll-proxy {
   position: fixed;
@@ -1977,6 +2023,9 @@ a:focus-visible {
   height: 1px;
 }
 
+/* endregion */
+
+/* region Responsive media queries */
 /* ---------- 17. Responsive media queries ---------- */
 
 /* Tablet and below */
@@ -2105,6 +2154,9 @@ a:focus-visible {
   }
 }
 
+/* endregion */
+
+/* region FAQ page */
 /* ---------- FAQ page ---------- */
 .faq-sidebar-link { color: var(--slate-600); text-decoration: none; font-size: 0.95rem; transition: color var(--transition); }
 .faq-sidebar-link:hover, .faq-sidebar-link.active { color: var(--blue-600); }
@@ -2127,6 +2179,9 @@ a:focus-visible {
 .faq-back-to-top:hover { color: var(--blue-600); }
 .scroll-offset { scroll-margin-top: 100px; }
 
+/* endregion */
+
+/* region Legal pages */
 /* ---------- Legal pages ---------- */
 .legal-content { max-width: 800px; line-height: 1.8; color: var(--slate-700); }
 .legal-content h1 { font-size: 1.75rem; margin-top: 2rem; margin-bottom: 1rem; }
@@ -2138,6 +2193,9 @@ a:focus-visible {
 .legal-content ul { padding-left: 1.25rem; margin-bottom: 0.75rem; }
 .legal-content a { color: var(--blue-600); }
 
+/* endregion */
+
+/* region HTMX loading indicator */
 /* ---------- HTMX loading indicator ---------- */
 /* Block pointer events immediately during in-flight HTMX requests to prevent
    double-clicks. The opacity fade only kicks in after 300ms so fast requests
@@ -2155,3 +2213,4 @@ a:focus-visible {
   to { opacity: 0.5; }
 }
 .legal-content strong { color: var(--slate-800); }
+/* endregion */

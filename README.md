@@ -346,7 +346,7 @@ The Bedrock Converse API requires model access to be enabled in the AWS console.
     - `/api/tenant-statuses` (GET): returns tenant sync statuses for polling UI.
     - `/api/tenants/<tenant_id>/sync` (POST): triggers background Xero sync for a tenant.
     - `/api/banner/dismiss` (POST): permanently dismiss a banner for the current tenant. Accepts `{"dismiss_key": "<key>"}` and writes the key to the tenant's `DismissedBanners` set in `TenantDataTable` via `TenantDataRepository.dismiss_banner`. Returns `204` on success.
-    - **Auth behavior for API routes**: When `@xero_token_required` protects a `/api/...` endpoint and the session token is missing or expired, the decorator returns `401` JSON (`{"error": "auth_required"}`) instead of redirecting. The frontend polling/sync code (`service/static/assets/js/main.js`) treats either a 401 response or a redirected login response as a signal to navigate to `/login`, so passive actions still force a full re-login.
+    - **Auth behavior for API routes**: When `@xero_token_required` protects a `/api/...` endpoint and the session token is missing or expired, the decorator returns `401` JSON (`{"error": "auth_required"}`) instead of redirecting. The frontend polling/sync code (`service/static/assets/js/tenant-sync.js`) treats either a 401 response or a redirected login response as a signal to navigate to `/login`, so passive actions still force a full re-login.
   - **Stripe / page purchasing**
     - `/pricing` (GET): public-facing pricing page — no auth required, shows graduated volume pricing (from £0.08/page).
     - `/buy-pages` (GET): page amount input form with live graduated price calculator and tenant selector dropdown; requires Xero auth. Accepts optional `?tenant_id=` query param to pre-select a tenant. **UI naming convention:** the user-facing UI says "pages" everywhere, but the backend continues to use "tokens" internally (DynamoDB attributes, ledger entries, variable names, function names, routes). This keeps the billing unit decoupled from the display name — the token-to-page ratio could change in the future.
@@ -528,9 +528,24 @@ At sync time, `build_per_contact_index()` in `sync.py` groups the flat dataset f
 - **Rebuilt every sync**: Both full and incremental syncs rebuild all per-contact files from the updated flat files. The cost is negligible (in-memory JSON grouping + a few S3 PUTs).
 - **Tenant erasure**: No changes needed — the erasure Lambda deletes by `{tenant_id}/` prefix, which covers `xero_by_contact/`.
 
+### JS module structure
+
+The frontend JavaScript is split into focused ES modules under `service/static/assets/js/`, all loaded without a build step via `<script type="module">`:
+
+| File | Responsibility |
+|---|---|
+| `main.js` | Entry point. Bootstraps all page-level behaviour (navbar, cookies, toasts, sticky docks, scroll-reveal, pagination) and registers HTMX event handlers. Imports from the modules below. |
+| `scroll-proxy.js` | Sticky horizontal scrollbar proxy for the wide statement comparison table. Bidirectionally syncs scroll position between the fixed proxy bar and the table wrapper. |
+| `tenant-sync.js` | Tenant sync polling and AFK detection for `/tenant_management`. Polls `/api/tenant-statuses` every 30 seconds; pauses polling after 60 seconds of user inactivity. |
+| `csrf.js` | Shared CSRF helpers (`getCsrfToken`, `appendCsrfTokenToFormData`, `buildCsrfUrlEncodedBody`). |
+| `upload-statements.js` | Upload page logic — row management, client-side PDF page-count estimation, and server-side preflight gating. |
+| `modal.js` | Thin Bootstrap 5 modal wrapper (`appModal.show(id)`). |
+
+`main.js` is the only file referenced in `base.html` via `<script type="module" src="...">`. The browser fetches `scroll-proxy.js` and `tenant-sync.js` automatically as ES module imports — no extra `<script>` tags are needed.
+
 ### JS re-initialisation
 
-When HTMX swaps content, DOM elements that had event listeners or IntersectionObservers attached are replaced. The `setupStickyActionDocks`, `setupScrollProxy`, and `setupPaginationJump` functions in `main.js` use `AbortController` for listener cleanup and are re-run via `htmx:afterSwap` to safely re-initialise after each swap.
+When HTMX swaps content, DOM elements that had event listeners or IntersectionObservers attached are replaced. The `setupStickyActionDocks`, `setupScrollProxy`, and `setupPaginationJump` functions (in `main.js` and `scroll-proxy.js`) use `AbortController` for listener cleanup and are re-run via `htmx:afterSwap` to safely re-initialise after each swap.
 
 ### Delete with count refresh (statements list page)
 
