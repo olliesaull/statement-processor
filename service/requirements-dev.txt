@@ -6,3 +6,4 @@ ruff
 vulture
 pytest
 boto3-stubs[essential]
+semgrep
