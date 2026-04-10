@@ -10,7 +10,7 @@ This handler:
 from typing import Any
 
 from pydantic import ValidationError
-from src.enums import ProcessingStage
+from sp_common.enums import ProcessingStage
 
 from config import S3_BUCKET_NAME
 from core.billing import SOURCE_EXTRACTION_FAILURE, SOURCE_EXTRACTION_SUCCESS, BillingSettlementError, BillingSettlementService

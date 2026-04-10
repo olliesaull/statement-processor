@@ -13,8 +13,7 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
-from flask import session
-from src.enums import ProcessingStage
+from sp_common.enums import ProcessingStage
 
 from config import S3_BUCKET_NAME, s3_client, tenant_statements_table
 from logger import logger
@@ -100,25 +99,25 @@ def persist_item_types_to_dynamo(tenant_id: str | None, classification_updates: 
 
 # endregion
 
-# region Statement queries (session-based)
+# region Statement queries
 
 
-def get_incomplete_statements() -> list[dict[str, Any]]:
-    """Return statements for the active tenant that are not completed.
+def get_incomplete_statements(tenant_id: str) -> list[dict[str, Any]]:
+    """Return statements for *tenant_id* that are not completed.
 
-    Reads tenant_id from the Flask session.
+    Args:
+        tenant_id: Xero tenant identifier.
     """
-    tenant_id = session.get("xero_tenant_id")
     logger.info("Fetching incomplete statements", tenant_id=tenant_id)
     return _query_statements_by_completed(tenant_id, "false")
 
 
-def get_completed_statements() -> list[dict[str, Any]]:
-    """Return statements for the active tenant that are marked completed.
+def get_completed_statements(tenant_id: str) -> list[dict[str, Any]]:
+    """Return statements for *tenant_id* that are marked completed.
 
-    Reads tenant_id from the Flask session.
+    Args:
+        tenant_id: Xero tenant identifier.
     """
-    tenant_id = session.get("xero_tenant_id")
     logger.info("Fetching completed statements", tenant_id=tenant_id)
     return _query_statements_by_completed(tenant_id, "true")
 
@@ -185,13 +184,18 @@ def set_statement_item_completed(tenant_id: str, statement_item_id: str, complet
 
 
 def set_all_statement_items_completed(tenant_id: str, statement_id: str, completed: bool) -> None:
-    """Set completion flag for all statement items tied to a statement."""
+    """Set completion flag for all statement items tied to a statement.
+
+    Uses a thread pool to issue DynamoDB updates in parallel, matching the
+    pattern in persist_item_types_to_dynamo.
+    """
     statuses = get_statement_item_status_map(tenant_id, statement_id)
     if not statuses:
         return
 
-    for statement_item_id in statuses:
-        set_statement_item_completed(tenant_id, statement_item_id, completed)
+    worker_count = min(_DDB_UPDATE_MAX_WORKERS, len(statuses)) or 1
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        executor.map(lambda sid: set_statement_item_completed(tenant_id, sid, completed), statuses)
 
 
 # endregion

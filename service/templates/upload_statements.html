@@ -24,7 +24,7 @@
     </div>
   {% endif %}
 
-  <form method="POST" action="{{ url_for('statements_bp.upload_statements') }}" enctype="multipart/form-data" class="content-max-720" id="upload-statements-form"
+  <form method="POST" action="{{ url_for('statements.upload_statements') }}" enctype="multipart/form-data" class="content-max-720" id="upload-statements-form"
     data-preflight-url="{{ url_for('api.upload_statements_preflight') }}" data-login-url="{{ url_for('auth.login') }}"
     data-buy-tokens-url="{{ url_for('billing.buy_tokens') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

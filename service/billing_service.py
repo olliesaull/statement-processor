@@ -17,7 +17,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
-from src.enums import ProcessingStage, TokenReservationStatus
+from sp_common.enums import ProcessingStage, TokenReservationStatus
 from werkzeug.datastructures import FileStorage
 
 from config import TENANT_BILLING_TABLE_NAME, TENANT_STATEMENTS_TABLE_NAME, TENANT_TOKEN_LEDGER_TABLE_NAME, ddb_client, tenant_statements_table

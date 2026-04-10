@@ -4,8 +4,6 @@ Provides a single ``paginate()`` function used by both the statements list
 and statement detail routes to slice a pre-sorted dataset into pages.
 """
 
-from __future__ import annotations
-
 import math
 from dataclasses import dataclass
 

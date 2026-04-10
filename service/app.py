@@ -36,16 +36,6 @@ from utils.auth import scope_str
 # region App configuration and helpers
 
 
-def _is_htmx_request() -> bool:
-    """Return True if the current request was made by HTMX.
-
-    HTMX sets the ``HX-Request: true`` header on every request it initiates.
-    This is used to decide whether to return a full page render or only the
-    relevant content partial (no base layout).
-    """
-    return request.headers.get("HX-Request") == "true"
-
-
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 
@@ -152,6 +142,15 @@ def _absolute_app_url(path: str) -> str:
 # endregion
 
 # region Blueprint registration
+
+
+@app.before_request
+def _inject_tenant_logger_context():
+    """Add tenant_id to structured logger context for all requests."""
+    tenant_id = session.get("xero_tenant_id")
+    if tenant_id:
+        logger.append_keys(tenant_id=tenant_id)
+
 
 app.register_blueprint(public_bp)
 app.register_blueprint(seo_bp)

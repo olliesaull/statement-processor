@@ -56,7 +56,8 @@ const getCookie = (cookieName) => {
  * @param {number} maxAgeSeconds
  */
 const setCookie = (cookieName, value, maxAgeSeconds) => {
-    document.cookie = `${cookieName}=${value}; path=/; max-age=${maxAgeSeconds}; SameSite=Lax`;
+    const secure = window.location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `${cookieName}=${value}; path=/; max-age=${maxAgeSeconds}; SameSite=Lax${secure}`;
 };
 
 /**

@@ -8,7 +8,7 @@ but never fail the extraction pipeline.
 
 from typing import Any
 
-from src.enums import ProcessingStage
+from sp_common.enums import ProcessingStage
 
 from config import tenant_statements_table
 from logger import logger

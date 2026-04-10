@@ -70,12 +70,12 @@
                             href="{{ url_for('tenants.tenant_management') }}">Tenant Management</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'statements_bp.upload_statements' %}active{% endif %}"
-                            href="{{ url_for('statements_bp.upload_statements') }}">Upload Statements</a>
+                        <a class="nav-link {% if request.endpoint == 'statements.upload_statements' %}active{% endif %}"
+                            href="{{ url_for('statements.upload_statements') }}">Upload Statements</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'statements_bp.statements' %}active{% endif %}"
-                            href="{{ url_for('statements_bp.statements') }}">Statements</a>
+                        <a class="nav-link {% if request.endpoint == 'statements.statements' %}active{% endif %}"
+                            href="{{ url_for('statements.statements') }}">Statements</a>
                     </li>
                     <li class="nav-item">
                         <a id="nav-auth-link"

@@ -21,14 +21,6 @@ from utils.tenant_status import get_tenant_status
 tenants_bp = Blueprint("tenants", __name__)
 
 
-@tenants_bp.before_request
-def _inject_tenant_logger_context():
-    """Add tenant_id to structured logger context for all tenant routes."""
-    tenant_id = session.get("xero_tenant_id")
-    if tenant_id:
-        logger.append_keys(tenant_id=tenant_id)
-
-
 @tenants_bp.route("/tenant_management")
 @route_handler_logging
 @xero_token_required

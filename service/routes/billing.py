@@ -22,14 +22,6 @@ billing_bp = Blueprint("billing", __name__)
 _stripe_service = StripeService()
 
 
-@billing_bp.before_request
-def _inject_tenant_logger_context():
-    """Add tenant_id to structured logger context for all billing routes."""
-    tenant_id = session.get("xero_tenant_id")
-    if tenant_id:
-        logger.append_keys(tenant_id=tenant_id)
-
-
 @billing_bp.route("/buy-pages")
 @xero_token_required
 @route_handler_logging
@@ -174,13 +166,20 @@ def checkout_success():
     # Security: verify the session belongs to the authenticated tenant.
     # Prevents a user who obtains another tenant's session_id from crediting
     # the wrong account.
-    # Stripe metadata is a StripeObject, not a plain dict -- use bracket access.
-    session_tenant_id = stripe_session.metadata["tenant_id"] if "tenant_id" in stripe_session.metadata else None
+    session_tenant_id = stripe_session.metadata.get("tenant_id")
     if session_tenant_id != tenant_id:
         logger.warning("Session tenant_id mismatch", session_id=session_id, session_tenant_id=session_tenant_id, auth_tenant_id=tenant_id)
         return redirect(url_for("billing.checkout_failed"))
 
-    token_count = int(stripe_session.metadata["token_count"])
+    raw_token_count = stripe_session.metadata.get("token_count")
+    if not raw_token_count:
+        logger.error("Missing token_count in Stripe session metadata", session_id=session_id, tenant_id=tenant_id)
+        return redirect(url_for("billing.checkout_failed"))
+    try:
+        token_count = int(raw_token_count)
+    except (ValueError, TypeError):
+        logger.error("Invalid token_count in Stripe session metadata", session_id=session_id, raw=raw_token_count)
+        return redirect(url_for("billing.checkout_failed"))
 
     # Credit tokens and record the Stripe session as processed.
     new_balance = credit_tokens_from_checkout(session_id=session_id, tenant_id=tenant_id, token_count=token_count)

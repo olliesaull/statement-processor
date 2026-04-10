@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from flask import Blueprint, abort, make_response, redirect, render_template, request, session, url_for
-from src.enums import TokenReservationStatus
+from sp_common.enums import TokenReservationStatus
 
 from config import S3_BUCKET_NAME
 from logger import logger
@@ -30,7 +30,7 @@ from utils.statement_detail import build_statement_view_data
 from utils.statement_upload import get_active_contacts_for_upload, handle_upload_statements_post
 from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key
 
-statements_bp = Blueprint("statements_bp", __name__)
+statements_bp = Blueprint("statements", __name__)
 
 STATEMENT_ITEMS_PER_PAGE = 50
 
@@ -41,14 +41,6 @@ def _is_htmx_request() -> bool:
     HTMX sets the ``HX-Request: true`` header on every request it initiates.
     """
     return request.headers.get("HX-Request") == "true"
-
-
-@statements_bp.before_request
-def _inject_tenant_logger_context():
-    """Add tenant_id to structured logger context for all statement routes."""
-    tenant_id = session.get("xero_tenant_id")
-    if tenant_id:
-        logger.append_keys(tenant_id=tenant_id)
 
 
 @statements_bp.route("/statements")
@@ -63,7 +55,7 @@ def statements():
     # Read query params and normalize sort direction.
     view = request.args.get("view", "incomplete").lower()
     show_completed = view == "completed"
-    statement_rows = get_completed_statements() if show_completed else get_incomplete_statements()
+    statement_rows = get_completed_statements(tenant_id) if show_completed else get_incomplete_statements(tenant_id)
     sort_key = request.args.get("sort", "uploaded").lower()
     dir_param = (request.args.get("dir") or "").strip().lower()
     ALLOWED_DIR = {"asc", "desc"}
@@ -118,10 +110,15 @@ def statements():
     elif sort_key == "uploaded":
         statement_rows.sort(key=lambda r: r.get("_uploaded_at") or datetime.min.replace(tzinfo=UTC), reverse=reverse)
     else:
-        # Contact: alphabetical or reverse, always keep missing/blank names last
+        # Contact: alphabetical or reverse, always keep missing/blank names last.
         sort_key = "contact"
-        nonempty = [r for r in statement_rows if isinstance(r.get("ContactName"), str) and r.get("ContactName").strip()]
-        empty = [r for r in statement_rows if r not in nonempty]
+
+        def _has_contact(row: dict) -> bool:
+            name = row.get("ContactName")
+            return isinstance(name, str) and bool(name.strip())
+
+        nonempty = [r for r in statement_rows if _has_contact(r)]
+        empty = [r for r in statement_rows if not _has_contact(r)]
         nonempty.sort(key=lambda r: str(r.get("ContactName")).strip().casefold(), reverse=reverse)
         statement_rows = nonempty + empty
 
@@ -164,9 +161,9 @@ def statements():
         return default_dir_map.get(key, "desc")
 
     sort_links = {
-        "contact": url_for("statements_bp.statements", **dict(base_args, sort="contact", dir=next_dir_for("contact"))),
-        "date_range": url_for("statements_bp.statements", **dict(base_args, sort="date_range", dir=next_dir_for("date_range"))),
-        "uploaded": url_for("statements_bp.statements", **dict(base_args, sort="uploaded", dir=next_dir_for("uploaded"))),
+        "contact": url_for("statements.statements", **dict(base_args, sort="contact", dir=next_dir_for("contact"))),
+        "date_range": url_for("statements.statements", **dict(base_args, sort="date_range", dir=next_dir_for("date_range"))),
+        "uploaded": url_for("statements.statements", **dict(base_args, sort="uploaded", dir=next_dir_for("uploaded"))),
     }
 
     logger.info(
@@ -209,9 +206,10 @@ def statements_count():
     currently visible tab (incomplete vs. completed).  Returns two out-of-band
     span elements that HTMX can swap into the page without a full reload.
     """
+    tenant_id = session.get("xero_tenant_id")
     view = request.args.get("view", "incomplete").lower()
     show_completed = view == "completed"
-    rows = get_completed_statements() if show_completed else get_incomplete_statements()
+    rows = get_completed_statements(tenant_id) if show_completed else get_incomplete_statements(tenant_id)
     count = len(rows)
     label = f"{count} statement{'s' if count != 1 else ''}"
     # Two OOB spans: one for the main action bar, one for the sticky dock.
@@ -246,7 +244,7 @@ def delete_statement(statement_id: str):
     if record and str(record.get("TokenReservationStatus") or "").strip().lower() == TokenReservationStatus.RESERVED:
         logger.info("Delete rejected; statement still processing", tenant_id=tenant_id, statement_id=statement_id)
         session["tenant_error"] = "This statement is still processing and cannot be deleted yet."
-        return redirect(url_for("statements_bp.statements", **redirect_args))
+        return redirect(url_for("statements.statements", **redirect_args))
 
     try:
         delete_statement_data(tenant_id, statement_id)
@@ -261,7 +259,7 @@ def delete_statement(statement_id: str):
         response = make_response("", 200)
         response.headers["HX-Trigger"] = "listUpdated"
         return response
-    return redirect(url_for("statements_bp.statements", **redirect_args))
+    return redirect(url_for("statements.statements", **redirect_args))
 
 
 def _parse_items_view(raw_value: str | None) -> str:
@@ -295,7 +293,7 @@ def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: A
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.exception("Failed to toggle statement completion", statement_id=statement_id, tenant_id=tenant_id, desired_state=completed_flag, error=exc)
             abort(500)
-        return redirect(url_for("statements_bp.statements"))
+        return redirect(url_for("statements.statements"))
 
     if action in {"complete_item", "incomplete_item"}:
         statement_item_id = (form.get("statement_item_id") or "").strip()
@@ -312,7 +310,7 @@ def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: A
         # so the browser can swap the content without a full redirect/reload.
         if _is_htmx_request():
             return None
-        return redirect(url_for("statements_bp.statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false", page=page))
+        return redirect(url_for("statements.statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false", page=page))
 
     return None
 

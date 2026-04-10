@@ -22,9 +22,9 @@
 
 {% set statement_col_count = raw_statement_headers|length %}
 {% set visible_item_count = total_visible_count %}
-{% set prev_url = url_for('statements_bp.statement', statement_id=statement_id, page=page - 1, items_view=items_view, show_payments='true' if show_payments else 'false') %}
-{% set next_url = url_for('statements_bp.statement', statement_id=statement_id, page=page + 1, items_view=items_view, show_payments='true' if show_payments else 'false') %}
-{% set page_url_tpl = url_for('statements_bp.statement', statement_id=statement_id, page='__PAGE__', items_view=items_view, show_payments='true' if show_payments else 'false') %}
+{% set prev_url = url_for('statements.statement', statement_id=statement_id, page=page - 1, items_view=items_view, show_payments='true' if show_payments else 'false') %}
+{% set next_url = url_for('statements.statement', statement_id=statement_id, page=page + 1, items_view=items_view, show_payments='true' if show_payments else 'false') %}
+{% set page_url_tpl = url_for('statements.statement', statement_id=statement_id, page='__PAGE__', items_view=items_view, show_payments='true' if show_payments else 'false') %}
 
 {#
   hx-indicator="closest .page-main" causes the .page-main element to receive the
@@ -44,24 +44,24 @@
         {# Filter buttons use hx-get for HTMX-driven partial swaps; href provides fallback for no-JS #}
         <a
           class="btn btn-sm {% if items_view == 'incomplete' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-          href="{{ url_for('statements_bp.statement', statement_id=statement_id, items_view='incomplete', show_payments='true' if show_payments else 'false') }}"
-          hx-get="{{ url_for('statements_bp.statement', statement_id=statement_id, items_view='incomplete', show_payments='true' if show_payments else 'false') }}"
+          href="{{ url_for('statements.statement', statement_id=statement_id, items_view='incomplete', show_payments='true' if show_payments else 'false') }}"
+          hx-get="{{ url_for('statements.statement', statement_id=statement_id, items_view='incomplete', show_payments='true' if show_payments else 'false') }}"
           hx-target="#statement-content"
           hx-swap="outerHTML scroll:no-scroll"
           hx-push-url="true"
         >Incomplete ({{ incomplete_count }})</a>
         <a
           class="btn btn-sm {% if items_view == 'completed' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-          href="{{ url_for('statements_bp.statement', statement_id=statement_id, items_view='completed', show_payments='true' if show_payments else 'false') }}"
-          hx-get="{{ url_for('statements_bp.statement', statement_id=statement_id, items_view='completed', show_payments='true' if show_payments else 'false') }}"
+          href="{{ url_for('statements.statement', statement_id=statement_id, items_view='completed', show_payments='true' if show_payments else 'false') }}"
+          hx-get="{{ url_for('statements.statement', statement_id=statement_id, items_view='completed', show_payments='true' if show_payments else 'false') }}"
           hx-target="#statement-content"
           hx-swap="outerHTML scroll:no-scroll"
           hx-push-url="true"
         >Completed ({{ completed_count }})</a>
         <a
           class="btn btn-sm {% if items_view == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-          href="{{ url_for('statements_bp.statement', statement_id=statement_id, items_view='all', show_payments='true' if show_payments else 'false') }}"
-          hx-get="{{ url_for('statements_bp.statement', statement_id=statement_id, items_view='all', show_payments='true' if show_payments else 'false') }}"
+          href="{{ url_for('statements.statement', statement_id=statement_id, items_view='all', show_payments='true' if show_payments else 'false') }}"
+          hx-get="{{ url_for('statements.statement', statement_id=statement_id, items_view='all', show_payments='true' if show_payments else 'false') }}"
           hx-target="#statement-content"
           hx-swap="outerHTML scroll:no-scroll"
           hx-push-url="true"
@@ -72,8 +72,8 @@
           {# Payments toggle also swaps content via HTMX; href provides graceful degradation #}
           <a
             class="btn btn-sm {% if show_payments %}btn-primary{% else %}btn-outline-primary{% endif %}"
-            href="{{ url_for('statements_bp.statement', statement_id=statement_id, items_view=items_view, show_payments='false' if show_payments else 'true') }}"
-            hx-get="{{ url_for('statements_bp.statement', statement_id=statement_id, items_view=items_view, show_payments='false' if show_payments else 'true') }}"
+            href="{{ url_for('statements.statement', statement_id=statement_id, items_view=items_view, show_payments='false' if show_payments else 'true') }}"
+            hx-get="{{ url_for('statements.statement', statement_id=statement_id, items_view=items_view, show_payments='false' if show_payments else 'true') }}"
             hx-target="#statement-content"
             hx-swap="outerHTML scroll:no-scroll"
             hx-push-url="true"
@@ -86,7 +86,7 @@
     </div>
     <a
       class="btn btn-outline-primary"
-      href="{{ url_for('statements_bp.statement', statement_id=statement_id, download='xlsx', items_view=items_view, show_payments='true' if show_payments else 'false') }}"
+      href="{{ url_for('statements.statement', statement_id=statement_id, download='xlsx', items_view=items_view, show_payments='true' if show_payments else 'false') }}"
       data-automation="statement-download-excel"
     >Download Excel</a>
   </div>
@@ -198,9 +198,9 @@
                       #}
                       <form
                         method="post"
-                        action="{{ url_for('statements_bp.statement', statement_id=statement_id) }}"
+                        action="{{ url_for('statements.statement', statement_id=statement_id) }}"
                         class="d-inline"
-                        hx-post="{{ url_for('statements_bp.statement', statement_id=statement_id) }}"
+                        hx-post="{{ url_for('statements.statement', statement_id=statement_id) }}"
                         hx-target="#statement-content"
                         hx-swap="outerHTML scroll:no-scroll"
                       >
@@ -215,9 +215,9 @@
                     {% else %}
                       <form
                         method="post"
-                        action="{{ url_for('statements_bp.statement', statement_id=statement_id) }}"
+                        action="{{ url_for('statements.statement', statement_id=statement_id) }}"
                         class="d-inline"
-                        hx-post="{{ url_for('statements_bp.statement', statement_id=statement_id) }}"
+                        hx-post="{{ url_for('statements.statement', statement_id=statement_id) }}"
                         hx-target="#statement-content"
                         hx-swap="outerHTML scroll:no-scroll"
                       >
@@ -259,7 +259,7 @@
 
   <div class="page-panel page-panel-flat statement-actions-bar d-flex justify-content-between align-items-center flex-wrap gap-3" id="statement-footer-actions">
     <div class="d-flex align-items-center flex-wrap gap-2">
-      <a href="{{ url_for('statements_bp.statements') }}" class="btn btn-outline-secondary">Back to statements</a>
+      <a href="{{ url_for('statements.statements') }}" class="btn btn-outline-secondary">Back to statements</a>
       <span class="action-count-chip" data-automation="statement-item-count">
         {{ visible_item_count }} statement item{% if visible_item_count != 1 %}s{% endif %}
       </span>
@@ -284,7 +284,7 @@
         </form>
       {% endif %}
       {# Delete form intentionally does NOT use HTMX — it navigates away and requires confirmation #}
-      <form method="post" action="{{ url_for('statements_bp.delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
+      <form method="post" action="{{ url_for('statements.delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-outline-danger text-nowrap px-3 py-1" data-automation="statement-delete-button">Delete statement</button>
       </form>
@@ -293,7 +293,7 @@
 
   <div class="sticky-action-dock" data-sticky-dock data-sticky-target="#statement-footer-actions" aria-hidden="true">
     <div class="d-flex align-items-center flex-wrap gap-2">
-      <a href="{{ url_for('statements_bp.statements') }}" class="btn btn-outline-secondary">Back to statements</a>
+      <a href="{{ url_for('statements.statements') }}" class="btn btn-outline-secondary">Back to statements</a>
       <span class="action-count-chip">
         {{ visible_item_count }} statement item{% if visible_item_count != 1 %}s{% endif %}
       </span>
@@ -316,7 +316,7 @@
           <button type="submit" class="btn btn-success text-nowrap px-3 py-1">Complete statement</button>
         </form>
       {% endif %}
-      <form method="post" action="{{ url_for('statements_bp.delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
+      <form method="post" action="{{ url_for('statements.delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-outline-danger text-nowrap px-3 py-1">Delete statement</button>
       </form>

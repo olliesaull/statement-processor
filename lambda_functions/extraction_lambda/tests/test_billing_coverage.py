@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from botocore.exceptions import ClientError
-from src.enums import TokenReservationStatus
+from sp_common.enums import TokenReservationStatus
 
 from core.billing import ENTRY_TYPE_CONSUME, ENTRY_TYPE_RELEASE, SOURCE_EXTRACTION_FAILURE, SOURCE_EXTRACTION_SUCCESS, BillingSettlementError, BillingSettlementService, StatementReservationMetadata
 

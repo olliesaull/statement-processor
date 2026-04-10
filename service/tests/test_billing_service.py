@@ -5,7 +5,7 @@ from __future__ import annotations
 from io import BytesIO
 
 from botocore.exceptions import ClientError
-from src.enums import ProcessingStage, TokenReservationStatus
+from sp_common.enums import ProcessingStage, TokenReservationStatus
 from werkzeug.datastructures import FileStorage
 
 from billing_service import (

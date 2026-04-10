@@ -11,8 +11,8 @@ Lambda-specific models (ExtractionEvent, ExtractionResult, SupplierStatement) re
 """
 
 from pydantic import BaseModel, ConfigDict, Field
-from src.models import StatementItem
-from src.types import Number
+from sp_common.models import StatementItem
+from sp_common.types import Number
 
 # Re-export so existing imports continue to work.
 __all__ = ["ExtractionEvent", "ExtractionResult", "Number", "StatementItem", "SupplierStatement"]

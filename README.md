@@ -11,7 +11,7 @@
 
 - Shared libraries (internal to this repo):
   - `common/`: Shared Python package exported as `statement_processor_common`. Contains:
-    - `enums.py` — Production enums (`ProcessingStage`, `TokenReservationStatus`, `TokenMutationType`).
+    - `enums.py` — Production enums (`ProcessingStage`, `TokenReservationStatus`).
     - `models.py` — Shared dataclass/TypedDict types used across service and Lambda.
     - `types.py` — Type aliases and protocol definitions.
   - `service/core` and `service/utils`: Service-specific domain logic and helpers.
@@ -327,7 +327,6 @@ The `common/` directory exports a Python package (`statement_processor_common`) 
 - `src/enums.py` — Production enums:
   - `ProcessingStage` — statement extraction progress (`queued`, `chunking`, `extracting`, `post_processing`, `complete`, `failed`).
   - `TokenReservationStatus` — billing reservation state (`reserved`, `consumed`, `released`).
-  - `TokenMutationType` — ledger mutation type (`RESERVE`, `CONSUME`, `RELEASE`, `ADJUSTMENT`).
 - `src/models.py` — Dataclass and TypedDict types for statement data, billing models, and internal structures.
 - `src/types.py` — Type aliases and protocol definitions.
 
@@ -349,7 +348,7 @@ pip install -e common/
 ### Why separate?
 1. **Decoupling**: Extraction Lambda and service both depend on common models, but development can happen independently.
 2. **Type safety**: Shared dataclasses and TypedDict ensure consistent field names and types across codebases.
-3. **Single source of truth**: Enums like `ProcessingStage` and `TokenMutationType` are defined once and used everywhere, preventing sync errors.
+3. **Single source of truth**: Enums like `ProcessingStage` and `TokenReservationStatus` are defined once and used everywhere, preventing sync errors.
 4. **Package boundary**: Future billing or reporting services can import `statement_processor_common` without pulling in Flask or extraction dependencies.
 
 ### Design decisions
@@ -359,26 +358,23 @@ pip install -e common/
 - **Dataclass** is used for internal value objects and contracts between modules (e.g., extracted statement rows, billing ledger entries). Dataclasses are lighter-weight and serve as clear, immutable value containers without the overhead of validation.
 - **TypedDict** is used for dict-shaped data that flows through JSON serialization (e.g., statement JSON from Bedrock, DynamoDB items). TypedDict provides type hints without runtime overhead.
 
-**No external validation**
-`common/` has no dependencies beyond the Python stdlib. This keeps it lightweight and avoids pulling in validation frameworks into Lambda execution environments.
+**Minimal dependencies**
+`common/` depends only on `pydantic` (used for external input validation in `models.py`) and the Python stdlib. This keeps it lightweight and avoids pulling in heavy frameworks into Lambda execution environments.
 
 ## Flask Service
 
 ### Application structure
 
-- **Main application** (`service/app.py`, ~297 lines)
+- **Main application** (`service/app.py`)
   - Flask app creation, configuration (session, CSRF, OAuth, logging).
   - Blueprint registration and Flask-Session setup with Redis backend.
-  - Error handlers (CSRF, 404, 500) and context processors (banners, CSS variables).
-  - Shared helper functions: `_set_active_tenant`, `_trigger_initial_sync_if_required`, `_absolute_app_url`, `_extract_csrf_from_json_body`, `_is_htmx_request`.
-  - Authentication flow: `/login`, `/logout`, `/callback`, `/test-login` (dev-only).
-  - Tenant management: `/tenant_management`, `/tenants/select`, `/tenants/disconnect`.
-  - Statement flow: `/statements`, `/statement/<id>`, `/upload-statements`, `/statement/<id>/delete`.
-  - Billing flow: `/buy-pages`, `/checkout/success`, `/checkout/cancel`, `/checkout/failed`.
-  - API endpoints: `/api/tenant-statuses`, `/api/tenants/<id>/sync`, `/api/upload-statements/preflight`, `/api/checkout/create`, `/api/banner/dismiss`.
+  - App-level `before_request` hook for tenant logger context injection.
+  - Error handlers (CSRF) and context processors (banners, CSS variables).
+  - Shared helper functions: `_set_active_tenant`, `_trigger_initial_sync_if_required`, `_absolute_app_url`, `_extract_csrf_from_json_body`.
+  - `test_login` (dev-only) and `chrome_devtools_ping`.
 
 - **Route Blueprints** (`service/routes/`, 7 modules organized by domain)
-  - See **Blueprint architecture** section below for full table and responsibilities.
+  - All route handlers live here, not in `app.py`. See **Blueprint architecture** section below for the full table and responsibilities.
 
 - **Templates and UI assets**
   - `service/templates/` (Jinja2 views) and `service/static/` (static assets).
@@ -418,13 +414,13 @@ Route handlers are split into 7 Blueprints, each in its own module:
 | `billing` | `routes/billing.py` | `/buy-pages`, `/billing-details`, `/checkout/success`, `/checkout/cancel`, `/checkout/failed` | Token purchase and Stripe checkout result pages |
 | `api` | `routes/api.py` | `/api/tenant-statuses`, `/api/tenants/<id>/sync`, `/api/upload-statements/preflight`, `/api/checkout/create`, `/api/banner/dismiss` | JSON API endpoints |
 
-**What stays in `app.py`**: Flask app creation, config, CSRF, session, OAuth, Blueprint registration, error handlers (`handle_csrf_error`), context processors (`inject_banners`, `_inject_statement_row_palette_css`), `_extract_csrf_from_json_body`, `_is_htmx_request`, `test_login` (dev-only), `chrome_devtools_ping`, and shared helpers (`_set_active_tenant`, `_trigger_initial_sync_if_required`, `_absolute_app_url`).
+**What stays in `app.py`**: Flask app creation, config, CSRF, session, OAuth, Blueprint registration, app-level `before_request` hook (`_inject_tenant_logger_context`), error handlers (`handle_csrf_error`), context processors (`inject_banners`, `_inject_statement_row_palette_css`), `_extract_csrf_from_json_body`, `test_login` (dev-only), `chrome_devtools_ping`, and shared helpers (`_set_active_tenant`, `_trigger_initial_sync_if_required`, `_absolute_app_url`).
 
 **`url_for` convention**: All `url_for` calls use Blueprint-prefixed endpoint names (e.g., `url_for("public.index")`, `url_for("statements_bp.statements")`). This applies to both Python code and Jinja templates. When adding new routes or references, always use the full `blueprint_name.function_name` form.
 
 **Circular imports**: Some Blueprints (auth, tenants, api) import from `app.py` at request time using `import-outside-toplevel` to avoid circular dependency at module load. This is intentional and flagged by pylint as R0401 (cyclic-import); the warnings are acceptable.
 
-**`before_request` hooks**: The `tenants`, `statements_bp`, `billing`, and `api` Blueprints each have a `before_request` hook that injects `tenant_id` into the structured logger context via `logger.append_keys()`.
+**`before_request` hook**: Tenant logger context injection (`tenant_id` via `logger.append_keys()`) is handled by a single app-level `before_request` hook in `app.py`, so it runs for all requests across all Blueprints.
 
 ### How to add a new route
 

@@ -73,8 +73,8 @@
       <p class="mb-1">This statement could not be processed successfully.</p>
       <p class="text-muted mb-4">Any reserved pages were returned to the tenant balance. You can delete this statement and try again.</p>
       <div class="d-flex justify-content-center gap-2 flex-wrap">
-        <a href="{{ url_for('statements_bp.statements') }}" class="btn btn-outline-secondary">Back to statements</a>
-        <form method="post" action="{{ url_for('statements_bp.delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
+        <a href="{{ url_for('statements.statements') }}" class="btn btn-outline-secondary">Back to statements</a>
+        <form method="post" action="{{ url_for('statements.delete_statement', statement_id=statement_id) }}" class="mb-0" onsubmit="return confirm('Delete this statement? This cannot be undone.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn btn-outline-danger">Delete statement</button>
         </form>

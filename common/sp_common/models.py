@@ -24,8 +24,8 @@ class StatementItem(BaseModel):
     reference: str | None = ""
     raw: dict[str, Any] = Field(default_factory=dict)
 
-    @classmethod
-    def _coerce_number(cls, v: Any) -> Any:
+    @staticmethod
+    def _coerce_number(v: Any) -> Any:
         """Best-effort conversion of numeric-looking values into int/float."""
         if v is None:
             return ""

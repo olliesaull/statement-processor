@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from boto3.dynamodb.conditions import Key
-from src.enums import ProcessingStage
+from sp_common.enums import ProcessingStage
 
 from config import S3_BUCKET_NAME, s3_client, tenant_statements_table
 from core.date_utils import parse_with_format

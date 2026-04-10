@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 from botocore.exceptions import ClientError
-from src.enums import ProcessingStage
+from sp_common.enums import ProcessingStage
 
 import utils.dynamo as dynamo_module
 from utils.dynamo import (
@@ -110,27 +110,23 @@ class TestQueryStatementsByCompleted:
 
 
 class TestIncompleteAndCompletedStatements:
-    """Wrappers that read tenant_id from the Flask session."""
+    """Wrappers that accept tenant_id and delegate to the query helper."""
 
-    def test_get_incomplete_calls_query_with_false(self, fake_table, monkeypatch):
+    def test_get_incomplete_calls_query_with_false(self, fake_table):
         """get_incomplete_statements passes 'false' to the query helper."""
         fake_table.query.return_value = {"Items": [{"id": "1"}]}
-        # Mock session.get to return a tenant_id
-        monkeypatch.setattr(dynamo_module, "session", MagicMock(get=MagicMock(return_value=TENANT_ID)))
-        result = get_incomplete_statements()
+        result = get_incomplete_statements(TENANT_ID)
         assert result == [{"id": "1"}]
 
-    def test_get_completed_calls_query_with_true(self, fake_table, monkeypatch):
+    def test_get_completed_calls_query_with_true(self, fake_table):
         """get_completed_statements passes 'true' to the query helper."""
         fake_table.query.return_value = {"Items": [{"id": "2"}]}
-        monkeypatch.setattr(dynamo_module, "session", MagicMock(get=MagicMock(return_value=TENANT_ID)))
-        result = get_completed_statements()
+        result = get_completed_statements(TENANT_ID)
         assert result == [{"id": "2"}]
 
-    def test_returns_empty_when_session_has_no_tenant(self, fake_table, monkeypatch):
-        """Empty result when no tenant_id in the session."""
-        monkeypatch.setattr(dynamo_module, "session", MagicMock(get=MagicMock(return_value=None)))
-        result = get_incomplete_statements()
+    def test_returns_empty_when_tenant_is_none(self, fake_table):
+        """Empty result when tenant_id is None."""
+        result = get_incomplete_statements(None)
         assert result == []
         fake_table.query.assert_not_called()
 

@@ -8,18 +8,23 @@ Public API:
     extract_statement(pdf_bytes, page_count) -> ExtractionResult
 """
 
+import functools
 import io
 import json
 import re
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from pypdf import PdfReader, PdfWriter
 
 from logger import logger
+
+if TYPE_CHECKING:
+    from core.models import ExtractionResult
 
 # region Constants
 
@@ -437,6 +442,7 @@ def _get_bedrock_client() -> Any:
     return bedrock_runtime_client
 
 
+@functools.lru_cache(maxsize=1)
 def _load_system_prompt() -> str:
     """Load the system prompt from the adjacent markdown file."""
     return _PROMPT_PATH.read_text(encoding="utf-8")

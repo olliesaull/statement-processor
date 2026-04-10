@@ -36,13 +36,13 @@ Route handlers are split into 7 Blueprints, each in its own module under `servic
 | `billing` | `routes/billing.py` | `/buy-pages`, `/billing-details`, `/checkout/success`, `/checkout/cancel`, `/checkout/failed` | Token purchase and Stripe checkout result pages |
 | `api` | `routes/api.py` | `/api/tenant-statuses`, `/api/tenants/<id>/sync`, `/api/upload-statements/preflight`, `/api/checkout/create`, `/api/banner/dismiss` | JSON API endpoints |
 
-**Stays in `app.py`**: Flask app creation, config, CSRF, session, OAuth, Blueprint registration, error handlers (`handle_csrf_error`), context processors (`inject_banners`, `_inject_statement_row_palette_css`), `_extract_csrf_from_json_body`, `_is_htmx_request`, `test_login` (dev-only), `chrome_devtools_ping`, and shared helpers (`_set_active_tenant`, `_trigger_initial_sync_if_required`, `_absolute_app_url`).
+**Stays in `app.py`**: Flask app creation, config, CSRF, session, OAuth, Blueprint registration, app-level `before_request` hook (`_inject_tenant_logger_context`), error handlers (`handle_csrf_error`), context processors (`inject_banners`, `_inject_statement_row_palette_css`), `_extract_csrf_from_json_body`, `test_login` (dev-only), `chrome_devtools_ping`, and shared helpers (`_set_active_tenant`, `_trigger_initial_sync_if_required`, `_absolute_app_url`).
 
 **`url_for` convention**: All `url_for` calls use Blueprint-prefixed endpoint names (e.g., `url_for("public.index")`, `url_for("statements_bp.statements")`). This applies to both Python code and Jinja templates. When adding new routes or references, always use the full `blueprint_name.function_name` form.
 
 **Circular imports**: Some Blueprints (auth, tenants, api) import from `app.py` at request time using `import-outside-toplevel` to avoid circular dependency at module load. This is intentional and flagged by pylint as R0401 (cyclic-import); the warnings are acceptable.
 
-**`before_request` hooks**: The `tenants`, `statements_bp`, `billing`, and `api` Blueprints each have a `before_request` hook that injects `tenant_id` into the structured logger context via `logger.append_keys()`.
+**`before_request` hook**: Tenant logger context injection (`tenant_id` via `logger.append_keys()`) is handled by a single app-level `before_request` hook in `app.py`, so it runs for all requests across all Blueprints.
 
 ### Extraction pipeline (`lambda_functions/extraction_lambda/`)
 - Container Lambda entry point: [`lambda_functions/extraction_lambda/main.py`](lambda_functions/extraction_lambda/main.py).
@@ -58,7 +58,6 @@ Route handlers are split into 7 Blueprints, each in its own module under `servic
 ### Data stores
 - DynamoDB:
   - `TenantStatementsTable`
-  - `TenantContactsConfigTable`
   - `TenantDataTable`
   - `TenantBillingTable`
   - `TenantTokenLedgerTable`
@@ -113,13 +112,6 @@ Route handlers are split into 7 Blueprints, each in its own module under `servic
   - `EarliestItemDate`, `LatestItemDate`
   - `JobId`
   - `PdfPageCount`, `ReservationLedgerEntryID`, `TokenReservationStatus` for billing lifecycle tracking
-
-### `TenantContactsConfigTable`
-- Key: `TenantID` + `ContactID`
-- Stores `config` payload used by both service and extraction Lambda.
-- Required mapping behavior:
-  - `number` and `total` are mandatory in UI before save.
-  - `date_format` is required at extraction time (`table_to_json` raises if missing).
 
 ### S3 object layout
 - Statement PDF: `<tenant_id>/statements/<statement_id>.pdf`

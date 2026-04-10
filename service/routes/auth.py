@@ -57,14 +57,14 @@ def callback():  # pylint: disable=too-many-return-statements
     if error is not None:
         error_description = request.args.get("error_description") or error
         logger.error("OAuth error", error_code=400, error_description=error_description, error=error)
-        return f"OAuth error: {error_description}", 400
+        return f"OAuth error: {error_description}", 400, {"Content-Type": "text/plain; charset=utf-8"}
 
     try:
         tokens = oauth.xero.authorize_access_token()
     except OAuthError as exc:
         error_description = exc.description or exc.error
         logger.error("OAuth error", error_code=400, error_description=error_description, error=exc.error)
-        return f"OAuth error: {error_description}", 400
+        return f"OAuth error: {error_description}", 400, {"Content-Type": "text/plain; charset=utf-8"}
 
     if not isinstance(tokens, dict):
         logger.error("Invalid token response from Xero", error_code=400)
@@ -106,7 +106,11 @@ def callback():  # pylint: disable=too-many-return-statements
 
     conn_res = http_requests.get("https://api.xero.com/connections", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
 
-    conn_res.raise_for_status()
+    try:
+        conn_res.raise_for_status()
+    except http_requests.exceptions.HTTPError:
+        logger.error("Xero connections API request failed", status_code=conn_res.status_code)
+        return "Failed to retrieve Xero connections. Please try again.", 400, {"Content-Type": "text/plain; charset=utf-8"}
     connections = conn_res.json()
     if not connections:
         logger.error("No Xero connections found for this user.", error_code=400)

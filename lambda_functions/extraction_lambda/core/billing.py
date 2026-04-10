@@ -5,8 +5,6 @@ responsible for settling those reservations once the Step Functions workflow
 knows whether processing succeeded or failed.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -14,7 +12,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
-from src.enums import TokenReservationStatus
+from sp_common.enums import TokenReservationStatus
 
 from config import TENANT_BILLING_TABLE_NAME, TENANT_STATEMENTS_TABLE_NAME, TENANT_TOKEN_LEDGER_TABLE_NAME, ddb_client, tenant_statements_table
 from logger import logger

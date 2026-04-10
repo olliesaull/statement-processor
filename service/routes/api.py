@@ -1,7 +1,6 @@
 """JSON API routes -- tenant sync, upload preflight, checkout, and banners.
 
-All routes in this Blueprint return JSON responses.  The ``before_request``
-hook ensures error responses are JSON-formatted rather than HTML.
+All routes in this Blueprint return JSON responses.
 """
 
 from flask import Blueprint, jsonify, request, session, url_for
@@ -12,14 +11,6 @@ from utils.auth import route_handler_logging, xero_token_required
 from utils.statement_upload_validation import build_statement_upload_preflight
 
 api_bp = Blueprint("api", __name__)
-
-
-@api_bp.before_request
-def _inject_tenant_logger_context():
-    """Add tenant_id to structured logger context for all API routes."""
-    tenant_id = session.get("xero_tenant_id")
-    if tenant_id:
-        logger.append_keys(tenant_id=tenant_id)
 
 
 @api_bp.route("/api/tenant-statuses", methods=["GET"])
@@ -192,6 +183,7 @@ def checkout_create():
 
 
 @api_bp.route("/api/banner/dismiss", methods=["POST"])
+@xero_token_required
 def api_dismiss_banner():
     """Permanently dismiss a banner for the active tenant.
 
@@ -200,8 +192,6 @@ def api_dismiss_banner():
     the session cache so the banner disappears immediately.
     """
     tenant_id = session.get("xero_tenant_id")
-    if not tenant_id:
-        return jsonify({"error": "not_authenticated"}), 401
 
     data = request.get_json(silent=True) or {}
     dismiss_key = data.get("dismiss_key", "")
