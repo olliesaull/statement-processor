@@ -7,10 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies in builder stage.
-COPY requirements.txt ./
+# Install the shared common package first (non-editable for Docker).
+COPY common/ /common/
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir --target=/app/packages -r requirements.txt
+    && pip install --no-cache-dir --target=/app/packages /common
+
+# Install remaining dependencies (filter out the editable common install
+# since we already installed it non-editable above).
+COPY requirements.txt ./
+RUN grep -v '^\-e' requirements.txt > requirements-docker.txt \
+    && pip install --no-cache-dir --target=/app/packages -r requirements-docker.txt
 
 # Final stage
 FROM python:3.13-slim

@@ -1,3 +1,4 @@
+-e ../../common
 aws_lambda_powertools
 pypdf
 pydantic

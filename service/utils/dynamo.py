@@ -7,6 +7,7 @@ from typing import Any
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 from flask import session
+from src.enums import ProcessingStage
 
 from config import S3_BUCKET_NAME, s3_client, tenant_statements_table
 from logger import logger
@@ -167,7 +168,7 @@ def repair_processing_stage(tenant_id: str, statement_id: str) -> None:
             UpdateExpression="SET #stage = :failed REMOVE #progress, #total_sections",
             ConditionExpression="#stage <> :failed",
             ExpressionAttributeNames={"#stage": "ProcessingStage", "#progress": "ProcessingProgress", "#total_sections": "ProcessingTotalSections"},
-            ExpressionAttributeValues={":failed": "failed"},
+            ExpressionAttributeValues={":failed": ProcessingStage.FAILED},
         )
         logger.info("Read-repaired ProcessingStage to failed", tenant_id=tenant_id, statement_id=statement_id)
     except Exception as exc:  # pylint: disable=broad-exception-caught

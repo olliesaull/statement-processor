@@ -10,6 +10,9 @@ requests
 xero-python
 Flask-WTF
 
+# Shared
+-e ../common
+
 # Other
 pydantic
 dotenv

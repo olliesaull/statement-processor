@@ -5,6 +5,7 @@ from __future__ import annotations
 from io import BytesIO
 
 from botocore.exceptions import ClientError
+from src.enums import ProcessingStage, TokenReservationStatus
 from werkzeug.datastructures import FileStorage
 
 from billing_service import (
@@ -14,7 +15,6 @@ from billing_service import (
     ENTRY_TYPE_RESERVE,
     LAST_MUTATION_SOURCE_MANUAL_ADJUSTMENT,
     SOURCE_UPLOAD_START_FAILURE,
-    TOKEN_RESERVATION_STATUS_RESERVED,
     BillingService,
     BillingServiceError,
     InsufficientTokensError,
@@ -55,8 +55,8 @@ def test_reserve_statement_uploads_builds_atomic_billing_transaction(monkeypatch
     assert transact_items[0]["Update"]["ExpressionAttributeValues"][":total_pages"] == {"N": "5"}
     assert transact_items[1]["Put"]["Item"]["EntryType"] == {"S": ENTRY_TYPE_RESERVE}
     assert transact_items[2]["Put"]["Item"]["PdfPageCount"] == {"N": "2"}
-    assert transact_items[2]["Put"]["Item"]["TokenReservationStatus"] == {"S": TOKEN_RESERVATION_STATUS_RESERVED}
-    assert transact_items[2]["Put"]["Item"]["ProcessingStage"] == {"S": "queued"}
+    assert transact_items[2]["Put"]["Item"]["TokenReservationStatus"] == {"S": TokenReservationStatus.RESERVED}
+    assert transact_items[2]["Put"]["Item"]["ProcessingStage"] == {"S": ProcessingStage.QUEUED}
 
 
 def test_reserve_statement_uploads_surfaces_insufficient_balance(monkeypatch) -> None:
@@ -93,7 +93,7 @@ def test_release_statement_reservation_returns_tokens_and_links_to_reserve(monke
         "get_statement_reservation_metadata",
         classmethod(
             lambda cls, tenant_id, statement_id: StatementReservationMetadata(
-                statement_id=statement_id, page_count=4, reservation_ledger_entry_id=f"reserve#{statement_id}", status=TOKEN_RESERVATION_STATUS_RESERVED
+                statement_id=statement_id, page_count=4, reservation_ledger_entry_id=f"reserve#{statement_id}", status=TokenReservationStatus.RESERVED
             )
         ),
     )
@@ -122,7 +122,7 @@ def test_consume_statement_reservation_writes_zero_delta_settlement(monkeypatch)
         "get_statement_reservation_metadata",
         classmethod(
             lambda cls, tenant_id, statement_id: StatementReservationMetadata(
-                statement_id=statement_id, page_count=4, reservation_ledger_entry_id=f"reserve#{statement_id}", status=TOKEN_RESERVATION_STATUS_RESERVED
+                statement_id=statement_id, page_count=4, reservation_ledger_entry_id=f"reserve#{statement_id}", status=TokenReservationStatus.RESERVED
             )
         ),
     )
@@ -227,7 +227,7 @@ def test_reserve_confirmed_statement_builds_atomic_transaction(monkeypatch) -> N
     # Statement header: stamps reservation metadata (Update, not Put).
     header_update = transact_items[2]["Update"]
     assert header_update["ExpressionAttributeValues"][":rid"] == {"S": "reserve#stmt-abc"}
-    assert header_update["ExpressionAttributeValues"][":status"] == {"S": TOKEN_RESERVATION_STATUS_RESERVED}
+    assert header_update["ExpressionAttributeValues"][":status"] == {"S": TokenReservationStatus.RESERVED}
 
 
 def test_reserve_confirmed_statement_raises_on_insufficient_tokens(monkeypatch) -> None:

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from boto3.dynamodb.conditions import Key
+from src.enums import ProcessingStage
 
 from config import S3_BUCKET_NAME, s3_client, tenant_statements_table
 from core.date_utils import parse_with_format
@@ -223,7 +224,7 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
     pdf_bytes = obj["Body"].read()
 
     # -- Progress: chunking --
-    update_processing_stage(tenant_id, statement_id, "chunking")
+    update_processing_stage(tenant_id, statement_id, ProcessingStage.CHUNKING)
 
     logger.info("Starting extraction", tenant_id=tenant_id, statement_id=statement_id, page_count=page_count)
 
@@ -238,10 +239,10 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
             # Single-chunk PDF: set stage without progress info.
             # Stages still transition but there is only one Bedrock call
             # so chunk-level progress is meaningless.
-            update_processing_stage(tenant_id, statement_id, "extracting")
+            update_processing_stage(tenant_id, statement_id, ProcessingStage.EXTRACTING)
         else:
             # Multi-chunk PDF: set stage with progress and total_sections.
-            update_processing_stage(tenant_id, statement_id, "extracting", progress=f"{completed}/{total}", total_sections=total)
+            update_processing_stage(tenant_id, statement_id, ProcessingStage.EXTRACTING, progress=f"{completed}/{total}", total_sections=total)
 
     # Run extraction.
     extraction_result = extract_statement(pdf_bytes, page_count, on_chunk_complete=_on_chunk_complete)
@@ -265,7 +266,7 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
     logger.info("SupplierStatement built", statement_id=statement_id, date_range=f"{supplier_statement.earliest_item_date} to {supplier_statement.latest_item_date}")
 
     # -- Progress: post-processing --
-    update_processing_stage(tenant_id, statement_id, "post_processing")
+    update_processing_stage(tenant_id, statement_id, ProcessingStage.POST_PROCESSING)
 
     # Flag outliers without removing them.
     statement_dict, summary = apply_outlier_flags(statement_dict, remove=False)
@@ -299,7 +300,7 @@ def run_extraction(  # pylint: disable=too-many-arguments,too-many-positional-ar
             logger.warning("Failed to store Bedrock request IDs on statement", statement_id=statement_id, error=str(exc), exc_info=True)
 
     # -- Progress: complete --
-    update_processing_stage(tenant_id, statement_id, "complete")
+    update_processing_stage(tenant_id, statement_id, ProcessingStage.COMPLETE)
 
     filename = f"{Path(pdf_key).stem}.json"
     return {"filename": filename, "statement": statement_dict}

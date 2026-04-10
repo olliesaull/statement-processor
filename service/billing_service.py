@@ -17,6 +17,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
+from src.enums import ProcessingStage, TokenReservationStatus
 from werkzeug.datastructures import FileStorage
 
 from config import TENANT_BILLING_TABLE_NAME, TENANT_STATEMENTS_TABLE_NAME, TENANT_TOKEN_LEDGER_TABLE_NAME, ddb_client, tenant_statements_table
@@ -38,9 +39,6 @@ SOURCE_UPLOAD_SUBMIT = "service-upload-submit"
 STATEMENT_RECORD_TYPE = "statement"
 WELCOME_GRANT_TOKENS = 5
 LAST_MUTATION_SOURCE_WELCOME_GRANT = "welcome-grant"
-TOKEN_RESERVATION_STATUS_CONSUMED = "consumed"
-TOKEN_RESERVATION_STATUS_RELEASED = "released"
-TOKEN_RESERVATION_STATUS_RESERVED = "reserved"
 
 
 class BillingServiceError(RuntimeError):
@@ -150,11 +148,11 @@ class BillingService:
             "ReservationLedgerEntryID": reserved_upload.reservation_ledger_entry_id,
             # Settlement can be retried by Step Functions; we need one persisted
             # state flag to make consume/release operations conditionally idempotent.
-            "TokenReservationStatus": TOKEN_RESERVATION_STATUS_RESERVED,
+            "TokenReservationStatus": TokenReservationStatus.RESERVED,
             # Set initial processing stage so the UI can track progress
             # from the moment of upload. The Lambda transitions this
             # through chunking → extracting → post_processing → complete.
-            "ProcessingStage": "queued",
+            "ProcessingStage": ProcessingStage.QUEUED,
         }
 
     @classmethod
@@ -381,7 +379,7 @@ class BillingService:
                     "Key": cls._serialize_key(TenantID=tenant_id, StatementID=statement_id),
                     "UpdateExpression": "SET ReservationLedgerEntryID = :rid, TokenReservationStatus = :status",
                     "ConditionExpression": "attribute_exists(TenantID) AND attribute_exists(StatementID)",
-                    "ExpressionAttributeValues": cls._serialize_expression_values({":rid": reservation_id, ":status": TOKEN_RESERVATION_STATUS_RESERVED}),
+                    "ExpressionAttributeValues": cls._serialize_expression_values({":rid": reservation_id, ":status": TokenReservationStatus.RESERVED}),
                 }
             },
         ]
@@ -510,13 +508,13 @@ class BillingService:
         if not metadata:
             logger.warning("Billing settlement skipped; reservation metadata missing", tenant_id=tenant_id, statement_id=statement_id, entry_type=entry_type)
             return False
-        if metadata.status != TOKEN_RESERVATION_STATUS_RESERVED:
+        if metadata.status != TokenReservationStatus.RESERVED:
             logger.info("Billing settlement skipped; statement already settled", tenant_id=tenant_id, statement_id=statement_id, entry_type=entry_type, current_status=metadata.status)
             return False
 
         settled_at = cls._utc_now_iso()
-        settlement_ledger_entry_id = cls._release_ledger_entry_id(statement_id) if next_status == TOKEN_RESERVATION_STATUS_RELEASED else cls._consume_ledger_entry_id(statement_id)
-        effective_token_delta = metadata.page_count if next_status == TOKEN_RESERVATION_STATUS_RELEASED else 0
+        settlement_ledger_entry_id = cls._release_ledger_entry_id(statement_id) if next_status == TokenReservationStatus.RELEASED else cls._consume_ledger_entry_id(statement_id)
+        effective_token_delta = metadata.page_count if next_status == TokenReservationStatus.RELEASED else 0
         transact_items: list[dict[str, Any]] = []
 
         if update_balance:
@@ -574,7 +572,7 @@ class BillingService:
                     "UpdateExpression": "SET TokenReservationStatus = :next_status",
                     "ConditionExpression": "ReservationLedgerEntryID = :reservation_ledger_entry_id AND TokenReservationStatus = :expected_status",
                     "ExpressionAttributeValues": cls._serialize_expression_values(
-                        {":reservation_ledger_entry_id": metadata.reservation_ledger_entry_id, ":expected_status": TOKEN_RESERVATION_STATUS_RESERVED, ":next_status": next_status}
+                        {":reservation_ledger_entry_id": metadata.reservation_ledger_entry_id, ":expected_status": TokenReservationStatus.RESERVED, ":next_status": next_status}
                     ),
                 }
             }
@@ -596,12 +594,12 @@ class BillingService:
     def release_statement_reservation(cls, tenant_id: str, statement_id: str, *, source: str = SOURCE_UPLOAD_START_FAILURE) -> bool:
         """Release a statement reservation and return its pages to the balance."""
         return cls._settle_statement_reservation(
-            tenant_id=tenant_id, statement_id=statement_id, source=source, entry_type=ENTRY_TYPE_RELEASE, next_status=TOKEN_RESERVATION_STATUS_RELEASED, update_balance=True
+            tenant_id=tenant_id, statement_id=statement_id, source=source, entry_type=ENTRY_TYPE_RELEASE, next_status=TokenReservationStatus.RELEASED, update_balance=True
         )
 
     @classmethod
     def consume_statement_reservation(cls, tenant_id: str, statement_id: str, *, source: str = SOURCE_UPLOAD_SUBMIT) -> bool:
         """Mark a statement reservation as consumed after successful processing."""
         return cls._settle_statement_reservation(
-            tenant_id=tenant_id, statement_id=statement_id, source=source, entry_type=ENTRY_TYPE_CONSUME, next_status=TOKEN_RESERVATION_STATUS_CONSUMED, update_balance=False
+            tenant_id=tenant_id, statement_id=statement_id, source=source, entry_type=ENTRY_TYPE_CONSUME, next_status=TokenReservationStatus.CONSUMED, update_balance=False
         )

@@ -8,18 +8,19 @@ but never fail the extraction pipeline.
 
 from typing import Any
 
+from src.enums import ProcessingStage
+
 from config import tenant_statements_table
 from logger import logger
 
 
-def update_processing_stage(tenant_id: str, statement_id: str, stage: str, *, progress: str | None = None, total_sections: int | None = None) -> None:
+def update_processing_stage(tenant_id: str, statement_id: str, stage: str | ProcessingStage, *, progress: str | None = None, total_sections: int | None = None) -> None:
     """Update processing progress on the statement header row.
 
     Args:
         tenant_id: Tenant partition key.
         statement_id: Statement sort key.
-        stage: Current processing stage (queued, chunking, extracting,
-            post_processing, complete, failed).
+        stage: Current processing stage. Use ProcessingStage enum values.
         progress: Chunk progress string like "3/10". When None the
             ProcessingProgress attribute is removed.
         total_sections: Total number of sections. When None the

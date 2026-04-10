@@ -5,14 +5,17 @@ These are small, focused schemas that:
 - Validate/normalize the StepFunctions -> Lambda event payload (`ExtractionEvent`)
 - Define the extraction output contract (`ExtractionResult`)
 - Provide a typed representation of extracted statement data (`StatementItem`, `SupplierStatement`)
+
+StatementItem and Number are imported from the shared common package.
+Lambda-specific models (ExtractionEvent, ExtractionResult, SupplierStatement) remain here.
 """
 
-from typing import Any
+from pydantic import BaseModel, ConfigDict, Field
+from src.models import StatementItem
+from src.types import Number
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-# `total` values can arrive as numbers or numeric-looking strings; we normalize them into a simple union.
-Number = int | float | str
+# Re-export so existing imports continue to work.
+__all__ = ["ExtractionEvent", "ExtractionResult", "Number", "StatementItem", "SupplierStatement"]
 
 
 class ExtractionEvent(BaseModel):
@@ -31,55 +34,6 @@ class ExtractionEvent(BaseModel):
     json_key: str = Field(alias="jsonKey")
     pdf_bucket: str | None = Field(default=None, alias="pdfBucket")
     page_count: int = Field(alias="pageCount")
-
-
-class StatementItem(BaseModel):
-    """Canonical line item extracted from a supplier statement."""
-
-    statement_item_id: str = ""
-    date: str | None = ""
-    number: str | None = ""
-    total: dict[str, Number] = Field(default_factory=dict)
-    item_type: str = "invoice"
-    due_date: str | None = ""
-    reference: str | None = ""
-    raw: dict = Field(default_factory=dict)
-
-    @classmethod
-    def _coerce_number(cls, v: Any) -> Any:
-        """Best-effort conversion of numeric-looking values into int/float."""
-        if v is None:
-            return ""
-        if isinstance(v, (int, float)):
-            return v
-        s = str(v).replace(",", "").replace(" ", "").strip()
-        if s == "":
-            return ""
-        try:
-            return float(s) if "." in s else int(s)
-        except ValueError:
-            return v
-
-    @field_validator("total", mode="before")
-    @classmethod
-    def _coerce_total(cls, v: Any) -> dict[str, Number]:
-        """Normalize `total` into a simple `{label: value}` mapping."""
-
-        def _coerce_val(val: Any) -> Number:
-            return cls._coerce_number(val)
-
-        coerced: dict[str, Number] = {}
-
-        if v is None:
-            return {}
-        if isinstance(v, dict):
-            for key, value in v.items():
-                label = str(key or "").strip()
-                if not label:
-                    continue
-                coerced[label] = _coerce_val(value)
-            return coerced
-        return {}
 
 
 class ExtractionResult(BaseModel):
