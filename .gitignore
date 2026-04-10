@@ -8,6 +8,7 @@
 **vscode
 .idea/
 *.egg-info/
+**/.coverage
 *.pdf
 *.PDF
 .env
