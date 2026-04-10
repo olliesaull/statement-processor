@@ -327,7 +327,8 @@ def build_per_contact_index(tenant_id: str) -> None:
     credit_notes = _load_flat("credit_notes.json")
     payments = _load_flat("payments.json")
 
-    # Group by contact_id.
+    # Group by contact_id. Items without a contact_id are intentionally
+    # skipped — they can't be looked up by the statement detail page.
     by_contact: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for inv in invoices:
         cid = inv.get("contact_id")

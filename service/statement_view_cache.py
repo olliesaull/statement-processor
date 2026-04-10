@@ -21,7 +21,7 @@ from logger import logger
 _CACHE_TTL_SECONDS = 120
 _KEY_PREFIX = "stmt_view"
 
-# Lazy connection pool — connects on first use, not on import.
+# Connection pool created at import time; TCP handshake is deferred to first use.
 _redis: redis_lib.Redis = redis_lib.from_url(VALKEY_URL)
 
 

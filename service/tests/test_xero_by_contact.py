@@ -109,6 +109,26 @@ class TestGetXeroDataByContact:
         result = get_xero_data_by_contact("")
         assert result == {"invoices": [], "credit_notes": [], "payments": []}
 
+    def test_falls_back_when_s3_download_raises_generic_error(self, _data_dir, monkeypatch):
+        """S3 errors other than NoSuchKey should fall back to full datasets."""
+        monkeypatch.setattr(xero_module, "session", {"xero_tenant_id": TENANT_ID})
+
+        # Write full flat files so the fallback has data.
+        tenant_dir = _data_dir / TENANT_ID
+        tenant_dir.mkdir(parents=True)
+        (tenant_dir / "invoices.json").write_text(json.dumps([{"invoice_id": "inv-1", "contact_id": CONTACT_ID}]))
+        (tenant_dir / "credit_notes.json").write_text("[]")
+        (tenant_dir / "payments.json").write_text("[]")
+
+        # S3 download raises a generic error (network failure, etc.).
+        mock_s3 = MagicMock()
+        mock_s3.download_file.side_effect = OSError("network error")
+        mock_s3.exceptions = type("Exc", (), {"NoSuchKey": type("NoSuchKey", (Exception,), {})})()
+        monkeypatch.setattr(xero_module, "s3_client", mock_s3)
+
+        result = get_xero_data_by_contact(CONTACT_ID)
+        assert len(result["invoices"]) == 1
+
 
 class TestBuildPerContactIndex:
     """Sync-time indexing: group Xero data by contact and write per-contact files."""
