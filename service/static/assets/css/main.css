@@ -781,6 +781,12 @@ a:focus-visible {
   color: #116149;
 }
 
+.tenant-token-chip-danger {
+  background-color: var(--red-100);
+  border-color: #f3b6b6;
+  color: #991b1b;
+}
+
 .tenant-token-balance {
   display: inline-flex;
   align-items: center;

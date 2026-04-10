@@ -68,9 +68,10 @@
       <p class="upload-page-summary mb-2" id="upload-page-summary" aria-live="polite">No PDFs selected yet.</p>
       <p class="upload-preflight-summary mb-3" id="upload-preflight-summary" aria-live="polite" data-preflight-state="idle"></p>
 
-      <div class="d-flex flex-wrap gap-2">
+      <div class="d-flex flex-wrap align-items-center gap-2">
         <button id="add-row" type="button" class="btn btn-outline-secondary" data-automation="statement-upload-add">Add statement</button>
         <button type="submit" class="btn btn-primary" data-automation="statement-upload-submit">Upload</button>
+        <span class="ms-auto tenant-current-chip {{ 'tenant-token-chip-danger' if available_pages == 0 else 'tenant-token-chip' }}">Available pages: <strong>{{ available_pages }}</strong></span>
       </div>
     </fieldset>
   </form>
