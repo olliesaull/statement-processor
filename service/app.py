@@ -15,6 +15,7 @@ from authlib.integrations.flask_client import OAuth
 from flask import Flask, Response, abort, jsonify, make_response, redirect, render_template, request, session, url_for
 from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
+from src.enums import TokenReservationStatus
 
 from billing_service import LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
 from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, LOCAL_DATA_DIR, S3_BUCKET_NAME, STAGE, redis_client
@@ -870,7 +871,7 @@ def delete_statement(statement_id: str):
             redirect_args[param] = val
 
     record = get_statement_record(tenant_id, statement_id)
-    if record and str(record.get("TokenReservationStatus") or "").strip().lower() == "reserved":
+    if record and str(record.get("TokenReservationStatus") or "").strip().lower() == TokenReservationStatus.RESERVED:
         logger.info("Delete rejected; statement still processing", tenant_id=tenant_id, statement_id=statement_id)
         session["tenant_error"] = "This statement is still processing and cannot be deleted yet."
         return redirect(url_for("statements", **redirect_args))
@@ -1385,7 +1386,7 @@ def statement(statement_id: str):
     except StatementJSONNotFoundError:
         reservation_status = str(record.get("TokenReservationStatus") or "").strip().lower()
         empty_context = {**base_context, "incomplete_count": 0, "completed_count": 0, "all_statement_rows": [], "statement_rows": [], "raw_statement_headers": [], "has_payment_rows": False}
-        if reservation_status == "released":
+        if reservation_status == TokenReservationStatus.RELEASED:
             logger.info("Statement processing failed; JSON missing after release", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
             repair_processing_stage(tenant_id, statement_id)
             return render_template("statement.html", is_processing=False, processing_failed=True, **empty_context)
