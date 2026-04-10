@@ -21,7 +21,7 @@
         <span class="tenant-current-chip">Current tenant: <strong>{{ current_tenant.tenantName or current_tenant.tenantId }}</strong></span>
         <span class="tenant-current-chip {{ 'tenant-token-chip-danger' if ct_token_balance == 0 else 'tenant-token-chip' }}">Available pages: <strong>{{ ct_token_balance }}</strong></span>
       {% endif %}
-      <a class="btn btn-primary ms-auto" href="{{ url_for('login') }}">Add Tenant</a>
+      <a class="btn btn-primary ms-auto" href="{{ url_for('auth.login') }}">Add Tenant</a>
     </div>
   </section>
 
@@ -59,15 +59,15 @@
                 <td class="text-center">
                   <div class="d-flex flex-wrap justify-content-center gap-2">
                     <button class="btn btn-outline-secondary btn-sm sync-btn" type="button" data-tenant-id="{{ tenant.tenantId }}">Sync</button>
-                    <a class="btn btn-outline-success btn-sm" href="{{ url_for('buy_tokens', tenant_id=tenant.tenantId) }}">Buy Pages</a>
+                    <a class="btn btn-outline-success btn-sm" href="{{ url_for('billing.buy_tokens', tenant_id=tenant.tenantId) }}">Buy Pages</a>
                     {% if not is_active %}
-                      <form method="post" action="{{ url_for('select_tenant') }}">
+                      <form method="post" action="{{ url_for('tenants.select_tenant') }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
                         <button class="btn btn-outline-primary btn-sm" type="submit">Switch to Tenant</button>
                       </form>
                     {% endif %}
-                    <form method="post" action="{{ url_for('disconnect_tenant') }}" class="disconnect-form">
+                    <form method="post" action="{{ url_for('tenants.disconnect_tenant') }}" class="disconnect-form">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
                       <input type="hidden" name="erasure_days" value="14">

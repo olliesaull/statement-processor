@@ -15,6 +15,7 @@ from cachelib import FileSystemCache
 from flask_session import Session
 
 import app as app_module
+import routes.statements as statements_module
 import utils.auth
 import utils.statement_detail as statement_detail_module
 
@@ -60,18 +61,17 @@ def client(_app, monkeypatch):
     monkeypatch.setattr(utils.auth, "get_tenant_status", lambda tenant_id: TenantStatus.FREE)
 
     # Stub data layer calls used by the statement route.
-    # Functions imported at the top of app.py are patched in app_module namespace.
-    # Functions now in utils.statement_detail are patched there instead.
-    monkeypatch.setattr(app_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
-    monkeypatch.setattr(app_module, "fetch_json_statement", lambda *a, **kw: SAMPLE_STATEMENT_JSON)
+    # Route handlers now live in routes.statements, so patches target that module.
+    monkeypatch.setattr(statements_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
+    monkeypatch.setattr(statements_module, "fetch_json_statement", lambda *a, **kw: SAMPLE_STATEMENT_JSON)
     monkeypatch.setattr(statement_detail_module, "get_xero_data_by_contact", lambda *a, **kw: {"invoices": [], "credit_notes": [], "payments": []})
     monkeypatch.setattr(statement_detail_module, "get_statement_item_status_map", lambda *a, **kw: {})
     monkeypatch.setattr(statement_detail_module, "persist_classification_updates", lambda **kw: None)
 
     # Stub statement view cache — always miss so the pipeline runs.
-    monkeypatch.setattr(app_module, "get_cached_statement_view", lambda *a, **kw: None)
-    monkeypatch.setattr(app_module, "cache_statement_view", lambda *a, **kw: None)
-    monkeypatch.setattr(app_module, "invalidate_statement_view_cache", lambda *a, **kw: None)
+    monkeypatch.setattr(statements_module, "get_cached_statement_view", lambda *a, **kw: None)
+    monkeypatch.setattr(statements_module, "cache_statement_view", lambda *a, **kw: None)
+    monkeypatch.setattr(statements_module, "invalidate_statement_view_cache", lambda *a, **kw: None)
 
     with _app.test_client() as c:
         with c.session_transaction() as sess:
@@ -106,13 +106,13 @@ class TestStatementPostHtmxResponse:
 
     def test_normal_post_complete_item_redirects(self, client, monkeypatch):
         """A standard POST complete_item (no HX-Request) must redirect (302)."""
-        monkeypatch.setattr(app_module, "set_statement_item_completed", lambda *a, **kw: None)
+        monkeypatch.setattr(statements_module, "set_statement_item_completed", lambda *a, **kw: None)
         response = client.post(f"/statement/{STATEMENT_ID}", data={"action": "complete_item", "statement_item_id": "item-1", "items_view": "incomplete", "show_payments": "true", "page": "1"})
         assert response.status_code == 302
 
     def test_htmx_post_complete_item_returns_partial(self, client, monkeypatch):
         """A POST complete_item with HX-Request: true must return the partial (200, no DOCTYPE)."""
-        monkeypatch.setattr(app_module, "set_statement_item_completed", lambda *a, **kw: None)
+        monkeypatch.setattr(statements_module, "set_statement_item_completed", lambda *a, **kw: None)
         response = client.post(
             f"/statement/{STATEMENT_ID}",
             data={"action": "complete_item", "statement_item_id": "item-1", "items_view": "incomplete", "show_payments": "true", "page": "1"},
@@ -129,8 +129,8 @@ class TestStatementsListHtmxPartialResponse:
 
     def test_normal_get_returns_full_page(self, client, monkeypatch):
         """A standard GET (no HX-Request) must render the full HTML page with DOCTYPE."""
-        monkeypatch.setattr(app_module, "get_incomplete_statements", lambda *a, **kw: [])
-        monkeypatch.setattr(app_module, "get_completed_statements", lambda *a, **kw: [])
+        monkeypatch.setattr(statements_module, "get_incomplete_statements", lambda *a, **kw: [])
+        monkeypatch.setattr(statements_module, "get_completed_statements", lambda *a, **kw: [])
         response = client.get("/statements")
         assert response.status_code == 200
         html = response.data.decode()
@@ -139,8 +139,8 @@ class TestStatementsListHtmxPartialResponse:
 
     def test_htmx_get_returns_partial_only(self, client, monkeypatch):
         """A GET with HX-Request: true must render only the partial, without DOCTYPE."""
-        monkeypatch.setattr(app_module, "get_incomplete_statements", lambda *a, **kw: [])
-        monkeypatch.setattr(app_module, "get_completed_statements", lambda *a, **kw: [])
+        monkeypatch.setattr(statements_module, "get_incomplete_statements", lambda *a, **kw: [])
+        monkeypatch.setattr(statements_module, "get_completed_statements", lambda *a, **kw: [])
         response = client.get("/statements", headers={"HX-Request": "true"})
         assert response.status_code == 200
         html = response.data.decode()
@@ -153,15 +153,15 @@ class TestDeleteStatementHtmxResponse:
 
     def test_normal_delete_redirects(self, client, monkeypatch):
         """A standard POST delete (no HX-Request) must redirect (302)."""
-        monkeypatch.setattr(app_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
-        monkeypatch.setattr(app_module, "delete_statement_data", lambda *a, **kw: None)
+        monkeypatch.setattr(statements_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
+        monkeypatch.setattr(statements_module, "delete_statement_data", lambda *a, **kw: None)
         response = client.post(f"/statement/{STATEMENT_ID}/delete")
         assert response.status_code == 302
 
     def test_htmx_delete_returns_empty_200_with_trigger(self, client, monkeypatch):
         """A POST delete with HX-Request: true must return empty 200 with HX-Trigger header."""
-        monkeypatch.setattr(app_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
-        monkeypatch.setattr(app_module, "delete_statement_data", lambda *a, **kw: None)
+        monkeypatch.setattr(statements_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
+        monkeypatch.setattr(statements_module, "delete_statement_data", lambda *a, **kw: None)
         response = client.post(f"/statement/{STATEMENT_ID}/delete", headers={"HX-Request": "true"})
         assert response.status_code == 200
         assert response.headers.get("HX-Trigger") == "listUpdated"
@@ -174,8 +174,8 @@ class TestStatementsCountEndpoint:
     def test_returns_count_html(self, client, monkeypatch):
         """The endpoint must return an HTML fragment with the statement count."""
         sample_statements = [{"StatementID": "s1", "ContactName": "A", "Completed": "false"}, {"StatementID": "s2", "ContactName": "B", "Completed": "false"}]
-        monkeypatch.setattr(app_module, "get_incomplete_statements", lambda *a, **kw: sample_statements)
-        monkeypatch.setattr(app_module, "get_completed_statements", lambda *a, **kw: [])
+        monkeypatch.setattr(statements_module, "get_incomplete_statements", lambda *a, **kw: sample_statements)
+        monkeypatch.setattr(statements_module, "get_completed_statements", lambda *a, **kw: [])
         response = client.get("/statements/count")
         assert response.status_code == 200
         html = response.data.decode()

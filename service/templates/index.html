@@ -16,8 +16,8 @@
             Upload supplier statement PDFs, compare each line against Xero, resolve differences, and export a clear record in one place.
           </p>
           <div class="hero-actions reveal reveal-delay-3">
-            <a href="{{ url_for('tenant_management') }}" class="btn btn-primary btn-lg">Get Started</a>
-            <a href="{{ url_for('instructions') }}" class="btn btn-secondary btn-lg">View Step-By-Step Guide</a>
+            <a href="{{ url_for('tenants.tenant_management') }}" class="btn btn-primary btn-lg">Get Started</a>
+            <a href="{{ url_for('public.instructions') }}" class="btn btn-secondary btn-lg">View Step-By-Step Guide</a>
           </div>
         </div>
 
@@ -191,7 +191,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
           </svg>
-          New here? Start with the <a href="{{ url_for('instructions') }}">step-by-step instructions</a> or browse the <a href="{{ url_for('faq') }}">FAQ</a>.
+          New here? Start with the <a href="{{ url_for('public.instructions') }}">step-by-step instructions</a> or browse the <a href="{{ url_for('public.faq') }}">FAQ</a>.
         </div>
       </div>
     </div>
@@ -206,8 +206,8 @@
           <p>Open Tenant Management to begin, or use the step-by-step guide first.</p>
         </div>
         <div class="cta-actions">
-          <a href="{{ url_for('tenant_management') }}" class="btn btn-primary">Open Tenant Management</a>
-          <a href="{{ url_for('instructions') }}" class="btn btn-secondary">View Step-By-Step Guide</a>
+          <a href="{{ url_for('tenants.tenant_management') }}" class="btn btn-primary">Open Tenant Management</a>
+          <a href="{{ url_for('public.instructions') }}" class="btn btn-secondary">View Step-By-Step Guide</a>
         </div>
       </div>
     </div>

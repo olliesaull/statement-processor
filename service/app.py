@@ -1,67 +1,39 @@
-"""Flask application for the statement processor service."""
+"""Flask application for the statement processor service.
+
+Creates the Flask app, configures session/CSRF/OAuth, registers Blueprints,
+and defines error handlers and context processors.  Route handlers live in
+the ``routes/`` package.
+"""
 
 import os
-import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, date, datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
-import stripe
-from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
-from flask import Flask, Response, abort, jsonify, make_response, redirect, render_template, request, session, url_for
+from flask import Flask, jsonify, request, session
 from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
-from src.enums import TokenReservationStatus
 
-from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, LOCAL_DATA_DIR, S3_BUCKET_NAME, STAGE, redis_client
+from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, STAGE, redis_client
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
-from pricing_config import MAX_TOKENS, MIN_TOKENS, PricingConfig
-from statement_view_cache import cache_statement_view, get_cached_statement_view, invalidate_statement_view_cache
-from stripe_repository import StripeRepository
-from stripe_service import StripeService
+from routes.api import api_bp
+from routes.auth import auth_bp
+from routes.billing import billing_bp
+from routes.public import public_bp
+from routes.seo import seo_bp
+from routes.statements import statements_bp
+from routes.tenants import tenants_bp
 from sync import check_load_required, sync_data
-from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from ui.banner_service import get_banners
-from utils.auth import (
-    active_tenant_required,
-    block_when_loading,
-    clear_session_is_set_cookie,
-    has_cookie_consent,
-    route_handler_logging,
-    save_xero_oauth2_token,
-    scope_str,
-    set_session_is_set_cookie,
-    xero_token_required,
-)
-from utils.checkout import create_checkout_session, credit_tokens_from_checkout, generate_checkout_failure_ref, resolve_or_create_stripe_customer, validate_billing_fields
-from utils.content import load_faqs, load_legal_page, load_llms_txt
-from utils.dynamo import (
-    delete_statement_data,
-    get_completed_statements,
-    get_incomplete_statements,
-    get_statement_record,
-    mark_statement_completed,
-    repair_processing_stage,
-    set_all_statement_items_completed,
-    set_statement_item_completed,
-)
-from utils.email import send_login_notification_email
-from utils.pagination import paginate
-from utils.statement_detail import build_statement_view_data
-from utils.statement_upload import get_active_contacts_for_upload, handle_upload_statements_post
-from utils.statement_upload_validation import build_statement_upload_preflight
-from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key
-from utils.tenant_status import get_tenant_status
+from utils.auth import scope_str
 
 # python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app
 
 # region App configuration and helpers
-
-STATEMENT_ITEMS_PER_PAGE = 50
 
 
 def _is_htmx_request() -> bool:
@@ -79,7 +51,7 @@ app.secret_key = FLASK_SECRET_KEY
 
 
 # Extract CSRF tokens from JSON bodies BEFORE CSRFProtect registers its
-# before_request handler — Flask runs hooks in registration order, so this
+# before_request handler -- Flask runs hooks in registration order, so this
 # must be first.  CloudFront strips custom headers (X-CSRFToken), so
 # JavaScript POSTs include the token in the JSON body instead.
 @app.before_request
@@ -91,7 +63,7 @@ def _extract_csrf_from_json_body():
             request.environ["HTTP_X_CSRFTOKEN"] = data["csrf_token"]
 
 
-# Enable CSRF protection globally — must be AFTER the JSON body hook above.
+# Enable CSRF protection globally -- must be AFTER the JSON body hook above.
 csrf = CSRFProtect(app)
 
 
@@ -132,87 +104,10 @@ oauth.register(
 
 _executor = ThreadPoolExecutor(max_workers=5)
 
-# Stripe service instance — used by checkout routes.
-stripe_service = StripeService()
 
+# endregion
 
-@app.context_processor
-def inject_banners():
-    """Make active banners available to all templates.
-
-    Reads the tenant's dismissed banner keys from DynamoDB (cached in the
-    session for 60 seconds) and collects banners from all registered
-    providers.
-    """
-    tenant_id = session.get("xero_tenant_id")
-    if not tenant_id:
-        return {"banners": []}
-
-    # Cache dismissed keys in the session to avoid a DynamoDB read on every page load.
-    cache_key = "_dismissed_banners"
-    cache_ts_key = "_dismissed_banners_ts"
-    now = time.time()
-
-    cached_ts = session.get(cache_ts_key, 0)
-    if now - cached_ts < 60:
-        # Stored as a list for JSON-safe session serialization.
-        dismissed_keys = set(session.get(cache_key, []))
-    else:
-        try:
-            dismissed_keys = TenantDataRepository.get_dismissed_banners(tenant_id)
-        except Exception:
-            dismissed_keys = set()
-        session[cache_key] = list(dismissed_keys)
-        session[cache_ts_key] = now
-
-    return {"banners": get_banners(tenant_id, dismissed_keys)}
-
-
-@app.errorhandler(CSRFError)
-def handle_csrf_error(error: CSRFError):
-    """Log CSRF failures with request context and return API-safe JSON.
-
-    The upload preflight and tenant sync flows both use JavaScript ``fetch``
-    requests. When Flask-WTF rejects those requests, its default HTML 400
-    response gives the frontend very little to work with. This handler keeps
-    browser routes simple while making API failures explicit and diagnosable.
-    """
-    session_cookie_name = app.config.get("SESSION_COOKIE_NAME", "session")
-    logger.warning(
-        "CSRF validation failed",
-        path=request.path,
-        method=request.method,
-        host=request.host,
-        origin=request.headers.get("Origin"),
-        referer=request.headers.get("Referer"),
-        content_type=request.content_type,
-        content_length=request.content_length,
-        csrf_error=error.description,
-        csrf_header_present=bool(request.headers.get("X-CSRFToken")),
-        csrf_form_token_present=bool(request.form.get("csrf_token")),
-        cookie_header_present=bool(request.headers.get("Cookie")),
-        session_cookie_present=session_cookie_name in request.cookies,
-    )
-
-    if request.path.startswith("/api/"):
-        return jsonify({"error": "csrf_validation_failed", "message": "Security validation failed. Refresh the page and try again."}), 400
-
-    return "Security validation failed. Refresh the page and try again.", 400
-
-
-@app.context_processor
-def _inject_statement_row_palette_css() -> dict[str, Any]:
-    """Expose statement row CSS variables to every template.
-
-    Args:
-        None.
-
-    Returns:
-        Template variables containing the statement row CSS variable map.
-    """
-    # We render CSS variables from one shared Python palette so table colors stay consistent between web UI and the Excel export.
-    # Payload is tiny so performance impact of injecting on every page is negligible
-    return {"statement_row_css_variables": STATEMENT_ROW_CSS_VARIABLES}
+# region Helpers shared with Blueprint modules (imported via `from app import ...`)
 
 
 def _trigger_initial_sync_if_required(tenant_id: str | None) -> None:
@@ -256,1293 +151,108 @@ def _absolute_app_url(path: str) -> str:
 
 # endregion
 
-# region Tenant API routes
+# region Blueprint registration
 
-
-@app.route("/api/tenant-statuses", methods=["GET"])
-@xero_token_required
-def tenant_status():
-    """Return tenant sync statuses from DynamoDB."""
-    tenant_records = session.get("xero_tenants", []) or []
-    tenant_ids = [t.get("tenantId") for t in tenant_records if isinstance(t, dict)]
-    try:
-        tenant_statuses = TenantDataRepository.get_tenant_statuses(tenant_ids)
-    except Exception as exc:
-        logger.exception("Failed to load tenant sync status", tenant_ids=tenant_ids, error=exc)
-        return jsonify({"error": "Unable to determine sync status"}), 500
-
-    return jsonify(tenant_statuses), 200
-
-
-@app.route("/api/tenants/<tenant_id>/sync", methods=["POST"])
-@xero_token_required
-def trigger_tenant_sync(tenant_id: str):
-    """Trigger a background sync for the specified tenant."""
-    tenant_id = (tenant_id or "").strip()
-    if not tenant_id:
-        return jsonify({"error": "TenantID is required"}), 400
-
-    # Only allow syncs for tenants already connected in this session.
-    tenant_records = session.get("xero_tenants", []) or []
-    tenant_ids = {t.get("tenantId") for t in tenant_records if isinstance(t, dict)}
-    if tenant_id not in tenant_ids:
-        logger.info("Manual sync denied; tenant not authorized", tenant_id=tenant_id)
-        return jsonify({"error": "Tenant not authorized"}), 403
-
-    oauth_token = session.get("xero_oauth2_token")
-    if not oauth_token:
-        logger.warning("Manual sync denied; missing OAuth token", tenant_id=tenant_id)
-        return jsonify({"error": "Missing OAuth token"}), 400
-
-    try:
-        # Fire-and-forget: sync runs in the background.
-        _executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token)  # TODO: Perhaps worth checking if there is row in DDB/files in S3
-        logger.info("Manual tenant sync triggered", tenant_id=tenant_id)
-        return jsonify({"started": True}), 202
-    except Exception as exc:
-        logger.exception("Failed to trigger manual sync", tenant_id=tenant_id, error=exc)
-        return jsonify({"error": "Failed to trigger sync"}), 500
-
+app.register_blueprint(public_bp)
+app.register_blueprint(seo_bp)
+app.register_blueprint(auth_bp)
+app.register_blueprint(tenants_bp)
+app.register_blueprint(statements_bp)
+app.register_blueprint(billing_bp)
+app.register_blueprint(api_bp)
 
 # endregion
 
-# region Public pages
+# region Context processors
 
 
-@app.route("/")
-@route_handler_logging
-def index():
-    """Render the landing page."""
-    logger.info("Rendering index")
-    return render_template("index.html")
+@app.context_processor
+def inject_banners():
+    """Make active banners available to all templates.
 
-
-@app.route("/healthz")
-def healthz():
-    """Return a minimal unauthenticated liveness response for App Runner."""
-    return "", 200
-
-
-# endregion
-
-# region Tenant management routes
-
-
-@app.route("/tenant_management")
-@route_handler_logging
-@xero_token_required
-def tenant_management():
-    """Render tenant management, consuming one-time messages from session."""
-    tenants = session.get("xero_tenants") or []
-    current_tenant_id = session.get("xero_tenant_id")
-    current_tenant = None
-    tenant_ids: list[str] = []
-    for tenant in tenants:
-        if not isinstance(tenant, dict):
-            continue
-        tenant_id = tenant.get("tenantId")
-        if not tenant_id:
-            continue
-        tenant_ids.append(tenant_id)
-        if tenant_id == current_tenant_id:
-            current_tenant = tenant
-    # Messages are popped so they only display once.
-    message = session.pop("tenant_message", None)
-    error = session.pop("tenant_error", None)
-
-    tenant_token_balances: dict[str, int] = {}
-    try:
-        tenant_token_balances = TenantBillingRepository.get_tenant_token_balances(tenant_ids)
-    except Exception as exc:
-        logger.exception("Failed to load tenant token balances", tenant_ids=tenant_ids, error=exc)
-
-    ct_token_balance = tenant_token_balances.get(current_tenant_id, 0) if current_tenant_id else 0
-    logger.info("Rendering tenant_management page", current_tenant_id=current_tenant_id, tenant_ids=tenant_ids, current_tenant_token_balance=ct_token_balance)
-
-    return render_template(
-        "tenant_management.html", tenants=tenants, current_tenant=current_tenant, ct_token_balance=ct_token_balance, tenant_token_balances=tenant_token_balances, message=message, error=error
-    )
-
-
-@app.route("/favicon.ico")
-def ignore_favicon():
-    """Return empty 204 for favicon requests."""
-    return "", 204
-
-
-# endregion
-
-# region Statement upload routes
-
-
-@app.route("/api/upload-statements/preflight", methods=["POST"])
-@xero_token_required
-@route_handler_logging
-def upload_statements_preflight():
-    """Count uploaded PDF pages on the server before the real upload is submitted."""
-    tenant_id = (session.get("xero_tenant_id") or "").strip()
-    if not tenant_id:
-        logger.info("Upload preflight rejected; tenant missing")
-        return jsonify({"error": "TenantID is required"}), 400
-
-    files = [uploaded_file for uploaded_file in request.files.getlist("statements") if uploaded_file and uploaded_file.filename]
-    if not files:
-        logger.info("Upload preflight rejected; no files supplied", tenant_id=tenant_id)
-        return jsonify({"error": "At least one statement PDF is required"}), 400
-
-    preflight_result = build_statement_upload_preflight(tenant_id, files)
-    logger.info(
-        "Upload preflight evaluated",
-        tenant_id=tenant_id,
-        files=len(preflight_result.files),
-        total_pages=preflight_result.total_pages,
-        available_tokens=preflight_result.available_tokens,
-        sufficient=preflight_result.is_sufficient,
-        can_submit=preflight_result.can_submit,
-        shortfall=preflight_result.shortfall,
-    )
-    payload = preflight_result.to_response_payload()
-    # When the user can't afford the upload, surface a direct link to the token
-    # purchase page. Injected here (not in to_response_payload) to keep the
-    # validation model free of Flask URL-routing knowledge.
-    if preflight_result.shortfall > 0:
-        payload["buy_tokens_url"] = url_for("buy_tokens")
-    return jsonify(payload), 200
-
-
-@app.route("/upload-statements", methods=["GET", "POST"])
-@active_tenant_required("Please select a tenant before uploading statements.")
-@xero_token_required
-@route_handler_logging
-@block_when_loading
-def upload_statements():
-    """Upload one or more PDF statements and register them for processing."""
-    tenant_id = session.get("xero_tenant_id")
-
-    contacts_list, contact_lookup = get_active_contacts_for_upload()
-    available_pages = TenantBillingRepository.get_tenant_token_balance(tenant_id)
-    success_count: int | None = None
-    error_messages: list[str] = []
-    logger.info("Rendering upload statements", tenant_id=tenant_id, available_contacts=len(contacts_list), available_pages=available_pages)
-
-    if request.method == "POST":
-        uploads_ok = handle_upload_statements_post(tenant_id, contact_lookup=contact_lookup, error_messages=error_messages)
-
-        if uploads_ok:
-            success_count = uploads_ok
-        logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=list(error_messages))
-
-    return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages, available_pages=available_pages)
-
-
-# endregion
-
-# region Content pages
-
-
-@app.route("/instructions")
-@route_handler_logging
-def instructions():
-    """Render the user instructions page."""
-    return render_template("instructions.html")
-
-
-@app.route("/about")
-@route_handler_logging
-def about():
-    """Render the about page."""
-    return render_template("about.html")
-
-
-@app.route("/cookies")
-@route_handler_logging
-def cookies():
-    """Render the cookie policy and consent page."""
-    return render_template("cookies.html")
-
-
-@app.route("/faq")
-@route_handler_logging
-def faq():
-    """Render the FAQ page with collapsible sections loaded from YAML+markdown."""
-    faqs = load_faqs()
-    return render_template("faq.html", faqs=faqs)
-
-
-@app.route("/privacy")
-@route_handler_logging
-def privacy():
-    """Render the privacy policy page from markdown content."""
-    content = load_legal_page("privacy.md")
-    return render_template("privacy.html", content=content)
-
-
-@app.route("/terms")
-@route_handler_logging
-def terms():
-    """Render the terms and conditions page from markdown content."""
-    content = load_legal_page("terms.md")
-    return render_template("terms.html", content=content)
-
-
-# endregion
-
-# region SEO and crawling
-
-
-def _get_authenticated_routes() -> list[str]:
-    """Return sorted list of authenticated route paths for the robots.txt disallow block.
-
-    Inspects each route's view function for the ``_requires_auth`` attribute
-    set by ``xero_token_required`` and ``active_tenant_required``.
-    """
-    authenticated = set()
-    for rule in app.url_map.iter_rules():
-        view_func = app.view_functions.get(rule.endpoint)
-        if view_func and getattr(view_func, "_requires_auth", False):
-            # Use the base path (strip dynamic segments) so /statement/<id> becomes /statement/
-            path = rule.rule.split("<")[0]
-            authenticated.add(path)
-    return sorted(authenticated)
-
-
-# Routes excluded from the sitemap even though they are public (system/utility routes).
-_SITEMAP_EXCLUDE = {"/healthz", "/login", "/logout", "/callback", "/robots.txt", "/sitemap.xml", "/llms.txt", "/favicon.ico", "/test-login"}
-
-
-def _get_sitemap_routes() -> list[str]:
-    """Return sorted list of public page paths suitable for the sitemap.
-
-    A route is included when it is unauthenticated, accepts GET, has no
-    dynamic segments, and is not in the system-route exclusion set.
-    """
-    pages = []
-    for rule in app.url_map.iter_rules():
-        if "<" in rule.rule:
-            continue
-        if rule.rule in _SITEMAP_EXCLUDE:
-            continue
-        if "GET" not in rule.methods:
-            continue
-        view_func = app.view_functions.get(rule.endpoint)
-        if view_func and getattr(view_func, "_requires_auth", False):
-            continue
-        pages.append(rule.rule)
-    return sorted(pages)
-
-
-def _build_crawl_policy(header_comment: str) -> str:
-    """Build a robots.txt body from the detected authenticated routes."""
-    disallow_lines = "\n".join(f"Disallow: {path}" for path in _get_authenticated_routes())
-    return f"""# {header_comment} for {DOMAIN_NAME}
-# Public pages are allowed. Private/system routes are disallowed.
-
-User-agent: *
-Allow: /
-
-{disallow_lines}
-
-Sitemap: https://{DOMAIN_NAME}/sitemap.xml
-"""
-
-
-@app.route("/robots.txt")
-def robots_txt():
-    """Serve robots.txt with crawling policy for search engines."""
-    return Response(_build_crawl_policy("Crawling policy"), mimetype="text/plain")
-
-
-@app.route("/sitemap.xml")
-def sitemap_xml():
-    """Serve sitemap.xml listing all public pages."""
-    lines = ["<?xml version='1.0' encoding='UTF-8'?>", "<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>"]
-    for path in _get_sitemap_routes():
-        lines.append(f"<url><loc>https://{DOMAIN_NAME}{path}</loc></url>")
-    lines.append("</urlset>")
-    return Response("\n".join(lines), mimetype="text/xml")
-
-
-@app.route("/llms.txt")
-def llms_txt():
-    """Serve llms.txt — product overview for LLM consumption (llmstxt.org spec)."""
-    return Response(load_llms_txt(), mimetype="text/plain")
-
-
-# endregion
-
-# region Statement list and detail routes
-
-
-@app.route("/statements")
-@active_tenant_required("Please select a tenant to view statements.")
-@xero_token_required
-@route_handler_logging
-@block_when_loading
-def statements():
-    """Render the statement list with filtering and sorting."""
-    tenant_id = session.get("xero_tenant_id")
-
-    # Read query params and normalize sort direction.
-    view = request.args.get("view", "incomplete").lower()
-    show_completed = view == "completed"
-    statement_rows = get_completed_statements() if show_completed else get_incomplete_statements()
-    sort_key = request.args.get("sort", "uploaded").lower()
-    dir_param = (request.args.get("dir") or "").strip().lower()
-    ALLOWED_DIR = {"asc", "desc"}
-    default_dir_map = {"contact": "asc", "date_range": "desc", "uploaded": "desc"}
-    if sort_key not in {"contact", "date_range", "uploaded"}:
-        sort_key = "uploaded"
-    current_dir = dir_param if dir_param in ALLOWED_DIR else default_dir_map.get(sort_key, "desc")
-    reverse = current_dir == "desc"
-    message = session.pop("statements_message", None)
-
-    def _parse_iso_date(value: object) -> date | None:
-        if not isinstance(value, str):
-            return None
-        stripped = value.strip()
-        if not stripped:
-            return None
-        try:
-            return date.fromisoformat(stripped)
-        except ValueError:
-            return None
-
-    def _parse_iso_datetime(value: object) -> datetime | None:
-        if not isinstance(value, str):
-            return None
-        text = value.strip()
-        if not text:
-            return None
-        try:
-            # Support both "+00:00" and trailing "Z"
-            return datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-
-    # Add derived fields for display and sorting.
-    for row in statement_rows:
-        earliest = _parse_iso_date(row.get("EarliestItemDate"))
-        latest = _parse_iso_date(row.get("LatestItemDate"))
-        row["_earliest_item_date"] = earliest
-        row["_latest_item_date"] = latest
-        row["_uploaded_at"] = _parse_iso_datetime(row.get("UploadedAt"))
-        if earliest and latest:
-            row["ItemDateRangeDisplay"] = earliest.isoformat() if earliest == latest else f"{earliest.isoformat()} - {latest.isoformat()}"
-        elif latest:
-            row["ItemDateRangeDisplay"] = latest.isoformat()
-        elif earliest:
-            row["ItemDateRangeDisplay"] = earliest.isoformat()
-        else:
-            row["ItemDateRangeDisplay"] = "—"
-
-    if sort_key == "date_range":
-        statement_rows.sort(key=lambda r: r.get("_latest_item_date") or date.min, reverse=reverse)
-    elif sort_key == "uploaded":
-        statement_rows.sort(key=lambda r: r.get("_uploaded_at") or datetime.min.replace(tzinfo=UTC), reverse=reverse)
-    else:
-        # Contact: alphabetical or reverse, always keep missing/blank names last
-        sort_key = "contact"
-        nonempty = [r for r in statement_rows if isinstance(r.get("ContactName"), str) and r.get("ContactName").strip()]
-        empty = [r for r in statement_rows if r not in nonempty]
-        nonempty.sort(key=lambda r: str(r.get("ContactName")).strip().casefold(), reverse=reverse)
-        statement_rows = nonempty + empty
-
-    # Pagination: slice sorted rows to the current page.
-    STATEMENTS_PER_PAGE_OPTIONS = [25, 50, 100]
-    raw_page = request.args.get("page", "1")
-    raw_per_page = request.args.get("per_page", "25")
-    try:
-        req_page = int(raw_page)
-    except (ValueError, TypeError):
-        req_page = 1
-    try:
-        req_per_page = int(raw_per_page)
-    except (ValueError, TypeError):
-        req_per_page = 25
-
-    pagination = paginate(total_items=len(statement_rows), page=req_page, per_page=req_per_page, per_page_options=STATEMENTS_PER_PAGE_OPTIONS)
-
-    # Remove helper fields before rendering.
-    for row in statement_rows:
-        row.pop("_earliest_item_date", None)
-        row.pop("_latest_item_date", None)
-        row.pop("_uploaded_at", None)
-
-    # Total count before slicing for the item count chip.
-    statement_count = len(statement_rows)
-    statement_rows = statement_rows[pagination.start_index : pagination.end_index]
-
-    # Preserve filters and pagination when building sort URLs.
-    # Page is intentionally omitted — sort changes reset to page 1.
-    base_args: dict[str, Any] = {"per_page": pagination.per_page}
-    if show_completed:
-        base_args["view"] = "completed"
-
-    # For each sort key, clicking its button toggles the direction if already active,
-    # otherwise applies the default direction for that key.
-    def next_dir_for(key: str) -> str:
-        if key == sort_key:
-            return "asc" if current_dir == "desc" else "desc"
-        return default_dir_map.get(key, "desc")
-
-    sort_links = {
-        "contact": url_for("statements", **dict(base_args, sort="contact", dir=next_dir_for("contact"))),
-        "date_range": url_for("statements", **dict(base_args, sort="date_range", dir=next_dir_for("date_range"))),
-        "uploaded": url_for("statements", **dict(base_args, sort="uploaded", dir=next_dir_for("uploaded"))),
-    }
-
-    logger.info(
-        "Rendering statements",
-        tenant_id=tenant_id,
-        view=view,
-        sort=sort_key,
-        direction=current_dir,
-        page=pagination.page,
-        per_page=pagination.per_page,
-        total_pages=pagination.total_pages,
-        statements=len(statement_rows),
-    )
-
-    # HTMX requests receive only the content partial; normal requests get the full page.
-    template = "partials/statements_content.html" if _is_htmx_request() else "statements.html"
-    return render_template(
-        template,
-        statements=statement_rows,
-        show_completed=show_completed,
-        message=message,
-        current_sort=sort_key,
-        current_dir=current_dir,
-        sort_links=sort_links,
-        page=pagination.page,
-        per_page=pagination.per_page,
-        total_pages=pagination.total_pages,
-        statement_count=statement_count,
-    )
-
-
-@app.route("/statements/count")
-@active_tenant_required("Please select a tenant.")
-@xero_token_required
-@route_handler_logging
-def statements_count():
-    """Return the current statement count as an HTML fragment for HTMX count refresh.
-
-    Reads the same view param as the statements list so the count reflects the
-    currently visible tab (incomplete vs. completed).  Returns two out-of-band
-    span elements that HTMX can swap into the page without a full reload.
-    """
-    view = request.args.get("view", "incomplete").lower()
-    show_completed = view == "completed"
-    rows = get_completed_statements() if show_completed else get_incomplete_statements()
-    count = len(rows)
-    label = f"{count} statement{'s' if count != 1 else ''}"
-    # Two OOB spans: one for the main action bar, one for the sticky dock.
-    return (
-        f'<span class="action-count-chip" id="statements-count-chip" hx-swap-oob="true">{label}</span>\n'
-        f'<span class="action-count-chip" id="statements-count-chip-sticky" hx-swap-oob="true">{label}</span>'
-    )
-
-
-@app.route("/statement/<statement_id>/delete", methods=["POST"])
-@active_tenant_required("Please select a tenant before deleting statements.")
-@xero_token_required
-@route_handler_logging
-@block_when_loading
-def delete_statement(statement_id: str):
-    """Delete the statement and redirect back to the list view.
-
-    Pagination and sort state (page, per_page, sort, dir, view) are forwarded
-    via query params on the form action URL so the user lands back on the same
-    page they were on rather than the default first page.
-    """
-    tenant_id = session.get("xero_tenant_id")
-
-    # Preserve the caller's pagination and sort state for the redirect.
-    redirect_args: dict[str, str] = {}
-    for param in ("page", "per_page", "sort", "dir", "view"):
-        val = request.args.get(param)
-        if val:
-            redirect_args[param] = val
-
-    record = get_statement_record(tenant_id, statement_id)
-    if record and str(record.get("TokenReservationStatus") or "").strip().lower() == TokenReservationStatus.RESERVED:
-        logger.info("Delete rejected; statement still processing", tenant_id=tenant_id, statement_id=statement_id)
-        session["tenant_error"] = "This statement is still processing and cannot be deleted yet."
-        return redirect(url_for("statements", **redirect_args))
-
-    try:
-        delete_statement_data(tenant_id, statement_id)
-        session["statements_message"] = "Statement deleted."
-    except Exception as exc:
-        logger.exception("Failed to delete statement", tenant_id=tenant_id, statement_id=statement_id, error=exc)
-        session["tenant_error"] = "Unable to delete the statement. Please try again."
-
-    # HTMX deletions: return an empty 200 with a trigger so the client can
-    # refresh the list without a full page reload.
-    if _is_htmx_request():
-        response = make_response("", 200)
-        response.headers["HX-Trigger"] = "listUpdated"
-        return response
-    return redirect(url_for("statements", **redirect_args))
-
-
-def _parse_items_view(raw_value: str | None) -> str:
-    """Normalize the statement item filter."""
-    items_view = (raw_value or "incomplete").strip().lower()
-    if items_view not in {"incomplete", "completed", "all"}:
-        return "incomplete"
-    return items_view
-
-
-def _parse_show_payments(raw_value: str | None) -> bool:
-    """Normalize the show payments flag."""
-    value = (raw_value or "true").strip().lower()
-    return value in {"true", "1", "yes", "on"}
-
-
-def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: Any, items_view: str, show_payments: bool, page: int) -> Any:
-    """Handle POST actions for statement detail views, returning a redirect when applicable."""
-    action = form.get("action")
-    if action in {"mark_complete", "mark_incomplete"}:
-        completed_flag = action == "mark_complete"
-        try:
-            mark_statement_completed(tenant_id, statement_id, completed_flag)
-            try:
-                set_all_statement_items_completed(tenant_id, statement_id, completed_flag)
-            except Exception as exc:
-                logger.exception("Failed to toggle all statement items", statement_id=statement_id, tenant_id=tenant_id, desired_state=completed_flag, error=exc)
-
-            session["statements_message"] = "Statement marked as complete." if completed_flag else "Statement marked as incomplete."
-            logger.info("Statement completion updated", tenant_id=tenant_id, statement_id=statement_id, completed=completed_flag)
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.exception("Failed to toggle statement completion", statement_id=statement_id, tenant_id=tenant_id, desired_state=completed_flag, error=exc)
-            abort(500)
-        return redirect(url_for("statements"))
-
-    if action in {"complete_item", "incomplete_item"}:
-        statement_item_id = (form.get("statement_item_id") or "").strip()
-        if statement_item_id:
-            desired_state = action == "complete_item"
-            try:
-                set_statement_item_completed(tenant_id, statement_item_id, desired_state)
-                logger.info("Statement item updated", tenant_id=tenant_id, statement_id=statement_id, statement_item_id=statement_item_id, completed=desired_state)
-            except Exception as exc:
-                logger.exception(
-                    "Failed to toggle statement item completion", statement_id=statement_id, statement_item_id=statement_item_id, tenant_id=tenant_id, desired_state=desired_state, error=exc
-                )
-        # For HTMX requests, fall through to re-render the partial with updated data
-        # so the browser can swap the content without a full redirect/reload.
-        if _is_htmx_request():
-            return None
-        return redirect(url_for("statement", statement_id=statement_id, items_view=items_view, show_payments="true" if show_payments else "false", page=page))
-
-    return None
-
-
-@app.route("/statement/<statement_id>", methods=["GET", "POST"])
-@active_tenant_required("Please select a tenant to view statements.")
-@xero_token_required
-@route_handler_logging
-@block_when_loading
-def statement(statement_id: str):
-    """Render the statement detail view, handling actions and exports."""
-    tenant_id = session.get("xero_tenant_id")
-
-    record = get_statement_record(tenant_id, statement_id)
-    if not record:
-        logger.info("Statement record not found", tenant_id=tenant_id, statement_id=statement_id)
-        abort(404)
-
-    items_view = _parse_items_view(request.values.get("items_view"))
-    show_payments = _parse_show_payments(request.values.get("show_payments"))
-
-    # Parse page from request.values so it works for both GET params and POST form data.
-    # This must happen before the POST check so the value is available in both branches.
-    raw_page_param = request.values.get("page", "1")
-    try:
-        page_param = int(raw_page_param)
-    except (ValueError, TypeError):
-        page_param = 1
-
-    logger.info("Statement detail requested", tenant_id=tenant_id, statement_id=statement_id, items_view=items_view, show_payments=show_payments, method=request.method)
-
-    raw_contact_name = record.get("ContactName")
-    contact_name = str(raw_contact_name).strip() if raw_contact_name is not None else ""
-    page_heading = contact_name or f"Statement {statement_id}"  # TODO: Could page heading include statement filename instead of statement_id? StatementID is useless for customer
-
-    if request.method == "POST":
-        # Invalidate cached view data so the fall-through re-render picks up
-        # the new item status from DynamoDB.
-        invalidate_statement_view_cache(tenant_id, statement_id)
-        response = _handle_statement_post_actions(tenant_id=tenant_id, statement_id=statement_id, form=request.form, items_view=items_view, show_payments=show_payments, page=page_param)
-        if response is not None:
-            return response
-
-    contact_id = record.get("ContactID")
-    is_completed = str(record.get("Completed", "")).lower() == "true"
-    base_context: dict[str, Any] = {
-        "statement_id": statement_id,
-        "contact_name": contact_name,
-        "page_heading": page_heading,
-        "items_view": items_view,
-        "show_payments": show_payments,
-        "is_completed": is_completed,
-    }
-
-    # --- Early-exit: statement not yet ready (processing or failed). ---
-    # Check this before the cache/pipeline so processing states are never cached.
-    json_statement_key = statement_json_s3_key(tenant_id, statement_id)
-    try:
-        statement_json_data = fetch_json_statement(tenant_id=tenant_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
-    except StatementJSONNotFoundError:
-        reservation_status = str(record.get("TokenReservationStatus") or "").strip().lower()
-        empty_context = {**base_context, "incomplete_count": 0, "completed_count": 0, "all_statement_rows": [], "statement_rows": [], "raw_statement_headers": [], "has_payment_rows": False}
-        if reservation_status == TokenReservationStatus.RELEASED:
-            logger.info("Statement processing failed; JSON missing after release", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
-            repair_processing_stage(tenant_id, statement_id)
-            return render_template("statement.html", is_processing=False, processing_failed=True, **empty_context)
-        logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
-        return render_template(
-            "statement.html",
-            is_processing=True,
-            processing_failed=False,
-            processing_stage=str(record.get("ProcessingStage") or "").strip().lower(),
-            processing_progress=record.get("ProcessingProgress"),
-            processing_total_sections=record.get("ProcessingTotalSections"),
-            **empty_context,
-        )
-
-    # --- Excel download: bypass cache, needs full pipeline data. ---
-    if request.args.get("download") == "xlsx":
-        result = build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, data=statement_json_data, record=record)
-        # build_statement_view_data returns a Response for xlsx requests.
-        return result
-
-    # --- Normal path: check Redis cache, fall back to full pipeline. ---
-    cached_view = get_cached_statement_view(tenant_id, statement_id)
-
-    if cached_view is not None:
-        # Cache hit: skip the full pipeline, go straight to filtering.
-        statement_rows = cached_view["statement_rows"]
-        display_headers = cached_view["display_headers"]
-    else:
-        # Cache miss: run the full build pipeline.
-        result = build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, data=statement_json_data, record=record)
-        statement_rows = result["statement_rows"]
-        display_headers = result["display_headers"]
-        cache_statement_view(tenant_id, statement_id, result)
-
-    completed_count = sum(1 for row in statement_rows if row["is_completed"])
-    incomplete_count = len(statement_rows) - completed_count
-    has_payment_rows = any(row.get("item_type") == "payment" for row in statement_rows)
-
-    if items_view == "completed":
-        visible_rows = [row for row in statement_rows if row["is_completed"]]
-    elif items_view == "incomplete":
-        visible_rows = [row for row in statement_rows if not row["is_completed"]]
-    else:
-        visible_rows = statement_rows
-
-    if not show_payments:
-        visible_rows = [row for row in visible_rows if row.get("item_type") != "payment"]
-
-    # Pagination: slice filtered rows to the current page.
-    total_visible_count = len(visible_rows)
-    pagination = paginate(total_items=total_visible_count, page=page_param, per_page=STATEMENT_ITEMS_PER_PAGE)
-    visible_rows = visible_rows[pagination.start_index : pagination.end_index]
-
-    logger.info(
-        "Statement detail rendered",
-        tenant_id=tenant_id,
-        statement_id=statement_id,
-        visible=len(visible_rows),
-        total=len(statement_rows),
-        completed=completed_count,
-        incomplete=incomplete_count,
-        items_view=items_view,
-        show_payments=show_payments,
-    )
-
-    context: dict[str, Any] = {
-        **base_context,
-        "is_processing": False,
-        "processing_failed": False,
-        "raw_statement_headers": display_headers,
-        "statement_rows": visible_rows,
-        "all_statement_rows": statement_rows,
-        "completed_count": completed_count,
-        "incomplete_count": incomplete_count,
-        "has_payment_rows": has_payment_rows,
-        "page": pagination.page,
-        "total_pages": pagination.total_pages,
-        "total_visible_count": total_visible_count,
-    }
-    # Return the content partial for HTMX requests so the browser swaps only
-    # the #statement-content region without a full page reload.
-    template = "partials/statement_content.html" if _is_htmx_request() else "statement.html"
-    return render_template(template, **context)
-
-
-# endregion
-
-# region Tenant selection and disconnect routes
-
-
-@app.route("/tenants/select", methods=["POST"])
-@xero_token_required
-@route_handler_logging
-def select_tenant():
-    """Persist the selected tenant in session and return to management view."""
-    tenant_id = (request.form.get("tenant_id") or "").strip()
-    tenants = session.get("xero_tenants") or []
-    logger.info("Tenant selection submitted", tenant_id=tenant_id, available=len(tenants))
-
-    if tenant_id and any(t.get("tenantId") == tenant_id for t in tenants):
-        # Update the active tenant and display a success message.
-        _set_active_tenant(tenant_id)
-        tenant_name = session.get("xero_tenant_name") or tenant_id
-        session["tenant_message"] = f"Switched to tenant: {tenant_name}."
-        logger.info("Tenant switched", tenant_id=tenant_id, tenant_name=tenant_name)
-    else:
-        session["tenant_error"] = "Unable to select tenant. Please try again."
-        logger.info("Tenant selection failed", tenant_id=tenant_id)
-
-    return redirect(url_for("tenant_management"))
-
-
-@app.route("/tenants/disconnect", methods=["POST"])
-@xero_token_required
-@route_handler_logging
-def disconnect_tenant():
-    """Disconnect a tenant from Xero, schedule data erasure, and update session state."""
-    tenant_id = (request.form.get("tenant_id") or "").strip()
-    tenants = session.get("xero_tenants") or []
-    tenant = next((t for t in tenants if t.get("tenantId") == tenant_id), None)
-    management_url = url_for("tenant_management")
-
-    if not tenant:
-        session["tenant_error"] = "Tenant not found in session."
-        return redirect(management_url)
-
-    # Validate erasure_days: default to 14 (progressive enhancement fallback).
-    allowed_erasure_days = {0, 14, 365}
-    raw_erasure = request.form.get("erasure_days")
-    if raw_erasure is None:
-        erasure_days = 14
-    else:
-        try:
-            erasure_days = int(raw_erasure)
-        except (ValueError, TypeError):
-            erasure_days = -1
-        if erasure_days not in allowed_erasure_days:
-            session["tenant_error"] = "Invalid data deletion option. Please try again."
-            return redirect(management_url)
-
-    connection_id = tenant.get("connectionId")
-    oauth_token = session.get("xero_oauth2_token")
-    access_token = oauth_token.get("access_token") if isinstance(oauth_token, dict) else None
-    logger.info("Tenant disconnect submitted", tenant_id=tenant_id, has_connection=bool(connection_id), erasure_days=erasure_days)
-
-    if connection_id and access_token:
-        import requests as http_requests  # pylint: disable=import-outside-toplevel
-
-        try:
-            resp = http_requests.delete(f"https://api.xero.com/connections/{connection_id}", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
-            if resp.status_code not in (200, 204):
-                logger.error("Failed to disconnect tenant", tenant_id=tenant_id, status_code=resp.status_code, body=resp.text)
-                session["tenant_error"] = "Unable to disconnect tenant from Xero."
-                return redirect(management_url)
-        except Exception as exc:
-            logger.exception("Exception disconnecting tenant", tenant_id=tenant_id, error=exc)
-            session["tenant_error"] = "An error occurred while disconnecting the tenant."
-            return redirect(management_url)
-
-    # Schedule data erasure in DynamoDB.
-    erasure_epoch_ms = int(time.time() * 1000) + (erasure_days * 86_400 * 1000)
-    current_status = get_tenant_status(tenant_id)
-    try:
-        TenantDataRepository.schedule_erasure(tenant_id, erasure_epoch_ms, current_status or TenantStatus.FREE)
-        logger.info("Scheduled tenant data erasure", tenant_id=tenant_id, erasure_days=erasure_days)
-    except Exception:
-        logger.exception("Failed to schedule erasure — disconnect continues", tenant_id=tenant_id)
-
-    # Delete local cache.
-    import shutil  # pylint: disable=import-outside-toplevel
-
-    local_cache_path = os.path.join(LOCAL_DATA_DIR, tenant_id)
-    shutil.rmtree(local_cache_path, ignore_errors=True)
-
-    # Remove tenant from session.
-    updated = [t for t in tenants if t.get("tenantId") != tenant_id]
-    session["xero_tenants"] = updated
-
-    if session.get("xero_tenant_id") == tenant_id:
-        next_tenant_id = updated[0]["tenantId"] if updated else None
-        _set_active_tenant(next_tenant_id)
-
-    logger.info("Tenant disconnected", tenant_id=tenant_id, remaining=len(updated), erasure_days=erasure_days)
-
-    if not updated:
-        # Last tenant disconnected — log the user out.
-        session.clear()
-        response = redirect(url_for("index", logged_out=1))
-        return clear_session_is_set_cookie(response)
-
-    session["tenant_message"] = "Tenant disconnected."
-    return redirect(management_url)
-
-
-# endregion
-
-# region Banner API
-
-
-@app.route("/api/banner/dismiss", methods=["POST"])
-def api_dismiss_banner():
-    """Permanently dismiss a banner for the active tenant.
-
-    Expects JSON: {"dismiss_key": "<key>"}. Writes to the
-    DismissedBanners string set on TenantData and updates
-    the session cache so the banner disappears immediately.
+    Reads the tenant's dismissed banner keys from DynamoDB (cached in the
+    session for 60 seconds) and collects banners from all registered
+    providers.
     """
     tenant_id = session.get("xero_tenant_id")
     if not tenant_id:
-        return jsonify({"error": "not_authenticated"}), 401
+        return {"banners": []}
 
-    data = request.get_json(silent=True) or {}
-    dismiss_key = data.get("dismiss_key", "")
-    if not isinstance(dismiss_key, str) or not dismiss_key.strip():
-        return jsonify({"error": "dismiss_key is required"}), 400
+    # Cache dismissed keys in the session to avoid a DynamoDB read on every page load.
+    cache_key = "_dismissed_banners"
+    cache_ts_key = "_dismissed_banners_ts"
+    now = time.time()
 
-    dismiss_key = dismiss_key.strip()
-
-    try:
-        TenantDataRepository.dismiss_banner(tenant_id, dismiss_key)
-    except Exception:
-        logger.exception("Failed to dismiss banner", tenant_id=tenant_id, dismiss_key=dismiss_key)
-        return jsonify({"error": "internal_error"}), 500
-
-    # Update the session cache so the banner disappears immediately
-    # without waiting for the 60s cache expiry.
-    cached: list[str] = session.get("_dismissed_banners", [])
-    if dismiss_key not in cached:
-        cached.append(dismiss_key)
-    session["_dismissed_banners"] = cached
-
-    return "", 204
-
-
-# endregion
-
-# region Authentication routes
-
-
-@app.route("/login")
-@route_handler_logging
-def login():
-    """Start the Xero OAuth flow and redirect to the authorize URL."""
-    logger.info("Login initiated")
-    if not has_cookie_consent():
-        logger.info("Login blocked; cookie consent missing")
-        return redirect(url_for("cookies"))
-
-    # OIDC nonce ties the auth response to this browser session.
-    nonce = secrets.token_urlsafe(24)
-    session["oauth_nonce"] = nonce
-
-    callback_url = _absolute_app_url(url_for("callback"))
-    logger.info("Redirecting to Xero authorization", scope_count=len(scope_str().split()))
-    # Authlib stores state/nonce in session and builds the authorize URL.
-    # Building the callback from DOMAIN_NAME keeps the OAuth flow aligned with
-    # the canonical public host without adding Flask-side host redirects.
-    return oauth.xero.authorize_redirect(redirect_uri=callback_url, nonce=nonce)
-
-
-@app.route("/callback")
-@route_handler_logging
-def callback():  # pylint: disable=too-many-return-statements
-    """Handle the OAuth callback, validate tokens, and load tenant context."""
-    if not has_cookie_consent():
-        logger.info("OAuth callback blocked; cookie consent missing")
-        return redirect(url_for("cookies"))
-
-    # Handle user-denied or error cases
-    error = request.args.get("error")
-    if error is not None:
-        error_description = request.args.get("error_description") or error
-        logger.error("OAuth error", error_code=400, error_description=error_description, error=error)
-        return f"OAuth error: {error_description}", 400
-
-    try:
-        tokens = oauth.xero.authorize_access_token()
-    except OAuthError as exc:
-        error_description = exc.description or exc.error
-        logger.error("OAuth error", error_code=400, error_description=error_description, error=exc.error)
-        return f"OAuth error: {error_description}", 400
-
-    if not isinstance(tokens, dict):
-        logger.error("Invalid token response from Xero", error_code=400)
-        return "Invalid token response from Xero", 400
-
-    # id_token is required for OIDC claim + nonce validation.
-    if not tokens.get("id_token"):
-        logger.error("Missing id_token in OAuth response", error_code=400)
-        return "Missing id_token in OAuth response", 400
-
-    nonce = session.pop("oauth_nonce", None)
-    # Require the original nonce so we can validate the id_token against it.
-    if not nonce:
-        logger.error("Missing OAuth nonce in session", error_code=400)
-        return "Missing OAuth nonce in session", 400
-
-    try:
-        # Validates signature + standard claims and checks nonce matches session.
-        # Capture claims so we can extract the user email for Stripe customer creation.
-        claims = oauth.xero.parse_id_token(tokens, nonce=nonce)
-    except Exception as exc:
-        logger.exception("Failed to validate id_token", error=str(exc))
-        return "Invalid id_token", 400
-
-    # Store the authenticated user's email and name for Stripe Customer
-    # creation and login notifications. The "profile" OIDC scope provides
-    # given_name/family_name claims. Authlib has already validated the
-    # token above so claims are trustworthy.
-    if claims is not None:
-        session["xero_user_email"] = claims.get("email", "")
-        given = claims.get("given_name", "")
-        family = claims.get("family_name", "")
-        session["xero_user_name"] = f"{given} {family}".strip() or ""
-
-    save_xero_oauth2_token(tokens)
-    access_token = tokens.get("access_token")
-
-    import requests  # pylint: disable=import-outside-toplevel
-
-    conn_res = requests.get("https://api.xero.com/connections", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
-
-    conn_res.raise_for_status()
-    connections = conn_res.json()
-    if not connections:
-        logger.error("No Xero connections found for this user.", error_code=400)
-        return "No Xero connections found for this user.", 400
-
-    tenants = [{"tenantId": conn.get("tenantId"), "tenantName": conn.get("tenantName"), "connectionId": conn.get("id")} for conn in connections if conn.get("tenantId")]
-
-    current = session.get("xero_tenant_id")
-    tenant_ids = [t["tenantId"] for t in tenants]
-
-    # Store the latest tenant list before updating the active tenant.
-    session["xero_tenants"] = tenants
-
-    for tid in tenant_ids:
-        _trigger_initial_sync_if_required(tid)
-
-    if current in tenant_ids:
-        _set_active_tenant(current)
-    elif tenant_ids:
-        first_tenant = tenant_ids[0]
-        _set_active_tenant(first_tenant)
+    cached_ts = session.get(cache_ts_key, 0)
+    if now - cached_ts < 60:
+        # Stored as a list for JSON-safe session serialization.
+        dismissed_keys = set(session.get(cache_key, []))
     else:
-        _set_active_tenant(None)
+        try:
+            dismissed_keys = TenantDataRepository.get_dismissed_banners(tenant_id)
+        except Exception:
+            dismissed_keys = set()
+        session[cache_key] = list(dismissed_keys)
+        session[cache_ts_key] = now
 
-    logger.info("OAuth callback processed", tenants=len(tenants))
-
-    # Fire-and-forget login notification — never blocks the login flow.
-    active_tenant = next((t for t in tenants if t["tenantId"] == session.get("xero_tenant_id")), None)
-    send_login_notification_email(
-        tenant_name=active_tenant["tenantName"] if active_tenant else "Unknown",
-        user_name=session.get("xero_user_name") or session.get("xero_user_email", "Unknown"),
-        user_email=session.get("xero_user_email", ""),
-    )
-
-    response = redirect(url_for("tenant_management"))
-    return set_session_is_set_cookie(response)
+    return {"banners": get_banners(tenant_id, dismissed_keys)}
 
 
-@app.route("/logout")
-@route_handler_logging
-def logout():
-    """Clear the session and return to the landing page."""
-    logger.info("Logout requested", had_tenant=bool(session.get("xero_tenant_id")))
-    session.clear()
-    response = redirect(url_for("index"))
-    return clear_session_is_set_cookie(response)
+@app.context_processor
+def _inject_statement_row_palette_css() -> dict[str, Any]:
+    """Expose statement row CSS variables to every template.
+
+    Args:
+        None.
+
+    Returns:
+        Template variables containing the statement row CSS variable map.
+    """
+    # We render CSS variables from one shared Python palette so table colors stay consistent between web UI and the Excel export.
+    # Payload is tiny so performance impact of injecting on every page is negligible
+    return {"statement_row_css_variables": STATEMENT_ROW_CSS_VARIABLES}
 
 
 # endregion
 
-# region Pricing and checkout routes
+# region Error handlers
 
 
-@app.route("/pricing")
-@route_handler_logging
-def pricing():
-    """Render the public-facing pricing explanation page (no login required).
+@app.errorhandler(CSRFError)
+def handle_csrf_error(error: CSRFError):
+    """Log CSRF failures with request context and return API-safe JSON.
 
-    Intentionally has no ``@xero_token_required`` so prospective customers
-    can see pricing before signing up.
+    The upload preflight and tenant sync flows both use JavaScript ``fetch``
+    requests. When Flask-WTF rejects those requests, its default HTML 400
+    response gives the frontend very little to work with. This handler keeps
+    browser routes simple while making API failures explicit and diagnosable.
     """
-    return render_template("pricing.html")
-
-
-@app.route("/buy-pages")
-@xero_token_required
-@route_handler_logging
-def buy_tokens():
-    """Render the token purchase form with current balance and graduated pricing info."""
-    tenant_id = session.get("xero_tenant_id")
-    tenants = session.get("xero_tenants", [])
-    # Pre-select tenant from query param if provided (does NOT switch session tenant).
-    preselected_tenant_id = request.args.get("tenant_id", tenant_id)
-    # Show balance for the preselected tenant, not necessarily the active one.
-    valid_tenant_ids = {t.get("tenantId") for t in tenants}
-    balance_tenant_id = preselected_tenant_id if preselected_tenant_id in valid_tenant_ids else tenant_id
-    token_balance = TenantBillingRepository.get_tenant_token_balance(balance_tenant_id)
-    return render_template(
-        "buy_tokens.html",
-        token_balance=token_balance,
-        min_tokens=MIN_TOKENS,
-        max_tokens=MAX_TOKENS,
-        pricing_tiers_json=PricingConfig.tiers_as_json(),
-        tenants=tenants,
-        preselected_tenant_id=preselected_tenant_id,
-        current_tenant_id=tenant_id,
-        error=None,
+    session_cookie_name = app.config.get("SESSION_COOKIE_NAME", "session")
+    logger.warning(
+        "CSRF validation failed",
+        path=request.path,
+        method=request.method,
+        host=request.host,
+        origin=request.headers.get("Origin"),
+        referer=request.headers.get("Referer"),
+        content_type=request.content_type,
+        content_length=request.content_length,
+        csrf_error=error.description,
+        csrf_header_present=bool(request.headers.get("X-CSRFToken")),
+        csrf_form_token_present=bool(request.form.get("csrf_token")),
+        cookie_header_present=bool(request.headers.get("Cookie")),
+        session_cookie_present=session_cookie_name in request.cookies,
     )
 
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "csrf_validation_failed", "message": "Security validation failed. Refresh the page and try again."}), 400
 
-@app.route("/buy-pages", methods=["POST"])
-@xero_token_required
-@route_handler_logging
-def buy_tokens_post():
-    """Validate token count and selected tenant, store in session, redirect to billing."""
-    token_count_raw = request.form.get("token_count", "").strip()
-    selected_tenant_id = request.form.get("selected_tenant_id", "").strip()
-
-    # Validate the selected tenant belongs to this user.
-    tenants = session.get("xero_tenants", [])
-    valid_tenant_ids = {t.get("tenantId") for t in tenants}
-    if selected_tenant_id not in valid_tenant_ids:
-        selected_tenant_id = session.get("xero_tenant_id")
-
-    try:
-        token_count = int(token_count_raw)
-    except (ValueError, TypeError):
-        token_balance = TenantBillingRepository.get_tenant_token_balance(selected_tenant_id)
-        return (
-            render_template(
-                "buy_tokens.html",
-                token_balance=token_balance,
-                error="Please enter a valid number of pages.",
-                min_tokens=MIN_TOKENS,
-                max_tokens=MAX_TOKENS,
-                pricing_tiers_json=PricingConfig.tiers_as_json(),
-                tenants=tenants,
-                preselected_tenant_id=selected_tenant_id,
-                current_tenant_id=session.get("xero_tenant_id"),
-            ),
-            400,
-        )
-
-    if not MIN_TOKENS <= token_count <= MAX_TOKENS:
-        token_balance = TenantBillingRepository.get_tenant_token_balance(selected_tenant_id)
-        return (
-            render_template(
-                "buy_tokens.html",
-                token_balance=token_balance,
-                error=f"Please enter between {MIN_TOKENS} and {MAX_TOKENS} pages.",
-                min_tokens=MIN_TOKENS,
-                max_tokens=MAX_TOKENS,
-                pricing_tiers_json=PricingConfig.tiers_as_json(),
-                tenants=tenants,
-                preselected_tenant_id=selected_tenant_id,
-                current_tenant_id=session.get("xero_tenant_id"),
-            ),
-            400,
-        )
-
-    session["pending_token_count"] = token_count
-    session["pending_purchase_tenant_id"] = selected_tenant_id
-
-    # Switch active tenant to the one being purchased for, so billing details
-    # pre-fill correctly and checkout_success can verify the session tenant.
-    if selected_tenant_id != session.get("xero_tenant_id"):
-        selected_tenant = next((t for t in tenants if t.get("tenantId") == selected_tenant_id), None)
-        if selected_tenant:
-            session["xero_tenant_id"] = selected_tenant_id
-            session["xero_tenant_name"] = selected_tenant.get("tenantName", "")
-            logger.info("Switched active tenant for purchase", tenant_id=selected_tenant_id)
-
-    return redirect(url_for("billing_details"))
-
-
-@app.route("/billing-details")
-@xero_token_required
-@route_handler_logging
-def billing_details():
-    """Render billing form with graduated pricing total and optional pre-fill from Stripe."""
-    token_count = session.get("pending_token_count")
-    if not token_count:
-        return redirect(url_for("buy_tokens"))
-
-    total_pence = PricingConfig.calculate_total_pence(token_count)
-
-    return render_template("billing_details.html", token_count=token_count, total_pence=total_pence, default_email=session.get("xero_user_email", ""), default_name=session.get("xero_tenant_name", ""))
-
-
-@app.route("/api/checkout/create", methods=["POST"])
-@xero_token_required
-@route_handler_logging
-def checkout_create():
-    """Accept billing details, create/reuse Stripe Customer, and create a Checkout Session.
-
-    Uses graduated pricing (PricingConfig) and persistent Stripe customers.
-    """
-    tenant_id = session.get("xero_tenant_id")
-
-    token_count = session.get("pending_token_count")
-    if not token_count:
-        return redirect(url_for("buy_tokens"))
-
-    # Read billing fields from the billing details form.
-    billing_name = request.form.get("billing_name", "").strip()
-    billing_email = request.form.get("billing_email", "").strip()
-    billing_line1 = request.form.get("billing_line1", "").strip()
-    billing_line2 = request.form.get("billing_line2", "").strip()
-    billing_city = request.form.get("billing_city", "").strip()
-    billing_state = request.form.get("billing_state", "").strip()
-    billing_postal_code = request.form.get("billing_postal_code", "").strip()
-    billing_country = request.form.get("billing_country", "").strip()
-
-    # Validate required fields — re-render billing form on failure.
-    missing = validate_billing_fields(billing_name=billing_name, billing_email=billing_email, billing_line1=billing_line1, billing_postal_code=billing_postal_code, billing_country=billing_country)
-
-    if missing:
-        total_pence = PricingConfig.calculate_total_pence(token_count)
-        return (
-            render_template(
-                "billing_details.html",
-                token_count=token_count,
-                total_pence=total_pence,
-                saved=request.form,
-                default_email=session.get("xero_user_email", ""),
-                default_name=session.get("xero_tenant_name", ""),
-                error=f"The following fields are required: {', '.join(missing)}.",
-            ),
-            400,
-        )
-
-    # Determine which tenant this purchase is for (validated against session).
-    purchase_tenant_id = session.get("pending_purchase_tenant_id", tenant_id)
-    tenants = session.get("xero_tenants", [])
-    valid_tenant_ids = {t.get("tenantId") for t in tenants}
-    if purchase_tenant_id not in valid_tenant_ids:
-        logger.warning("Purchase tenant not in user's tenant list", purchase_tenant_id=purchase_tenant_id)
-        return redirect(url_for("buy_tokens"))
-
-    address = {"line1": billing_line1, "line2": billing_line2, "city": billing_city, "state": billing_state, "postal_code": billing_postal_code, "country": billing_country}
-
-    success_url = url_for("checkout_success", _external=True) + "?session_id={CHECKOUT_SESSION_ID}"
-    cancel_url = url_for("checkout_cancel", _external=True)
-
-    try:
-        customer_id = resolve_or_create_stripe_customer(stripe_service, tenant_id=purchase_tenant_id, billing_name=billing_name, billing_email=billing_email, address=address)
-        checkout_url = create_checkout_session(stripe_service, customer_id=customer_id, token_count=token_count, tenant_id=purchase_tenant_id, success_url=success_url, cancel_url=cancel_url)
-    except stripe.StripeError:
-        ref = generate_checkout_failure_ref()
-        return redirect(url_for("checkout_failed", ref=ref))
-
-    if not checkout_url:
-        ref = generate_checkout_failure_ref()
-        return redirect(url_for("checkout_failed", ref=ref))
-
-    session.pop("pending_token_count", None)
-    session.pop("pending_purchase_tenant_id", None)
-
-    return redirect(checkout_url, code=303)
-
-
-@app.route("/checkout/success")
-@xero_token_required
-@route_handler_logging
-def checkout_success():
-    """Verify payment, credit tokens idempotently, and show confirmation.
-
-    Retrieves the Stripe session to verify ``payment_status == "paid"`` and
-    confirm the session belongs to the authenticated tenant before crediting
-    tokens. Idempotency is enforced via ``StripeEventStoreTable`` so a page
-    refresh shows the success screen without re-crediting.
-    """
-    tenant_id = session.get("xero_tenant_id")
-    session_id = request.args.get("session_id", "").strip()
-    if not session_id:
-        return redirect(url_for("checkout_failed"))
-
-    # Idempotency check — already processed? Show success without re-crediting.
-    if StripeRepository.is_session_processed(session_id):
-        record = StripeRepository.get_processed_session(session_id)
-        if record:
-            new_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
-            return render_template("checkout_success.html", tokens_credited=int(record["TokensCredited"]), new_balance=new_balance)
-        # record is None: tiny race window between is_session_processed and
-        # get_processed_session — fall through to normal processing path.
-
-    # Retrieve session from Stripe and verify payment status.
-    try:
-        stripe_session = stripe_service.retrieve_session(session_id)
-    except stripe.StripeError:
-        logger.exception("Failed to retrieve Stripe session", session_id=session_id)
-        return redirect(url_for("checkout_failed"))
-
-    if stripe_session.payment_status != "paid":
-        logger.info("Stripe session not paid", session_id=session_id, payment_status=stripe_session.payment_status)
-        return redirect(url_for("checkout_failed"))
-
-    # Security: verify the session belongs to the authenticated tenant.
-    # Prevents a user who obtains another tenant's session_id from crediting
-    # the wrong account.
-    # Stripe metadata is a StripeObject, not a plain dict — use bracket access.
-    session_tenant_id = stripe_session.metadata["tenant_id"] if "tenant_id" in stripe_session.metadata else None
-    if session_tenant_id != tenant_id:
-        logger.warning("Session tenant_id mismatch", session_id=session_id, session_tenant_id=session_tenant_id, auth_tenant_id=tenant_id)
-        return redirect(url_for("checkout_failed"))
-
-    token_count = int(stripe_session.metadata["token_count"])
-
-    # Credit tokens and record the Stripe session as processed.
-    new_balance = credit_tokens_from_checkout(session_id=session_id, tenant_id=tenant_id, token_count=token_count)
-    return render_template("checkout_success.html", tokens_credited=token_count, new_balance=new_balance)
-
-
-@app.route("/checkout/cancel")
-@xero_token_required
-@route_handler_logging
-def checkout_cancel():
-    """Render the checkout cancellation page.
-
-    Stripe redirects here when the user clicks "Back" on the hosted checkout
-    page. No tokens are credited and no Stripe session is stored.
-    """
-    return render_template("checkout_cancel.html")
-
-
-@app.route("/checkout/failed")
-@xero_token_required
-@route_handler_logging
-def checkout_failed():
-    """Render the checkout failure page with an optional reference ID.
-
-    Shown when Stripe session creation fails or when the success route
-    detects an unexpected payment state. The ``ref`` query param is a hex
-    string generated at the point of failure to help correlate log entries.
-    """
-    ref = request.args.get("ref", "")
-    return render_template("checkout_failed.html", ref=ref)
+    return "Security validation failed. Refresh the page and try again.", 400
 
 
 # endregion
 
-# region Miscellaneous routes
+# region Miscellaneous routes (stay on main app)
 
 
 @app.route("/.well-known/<path:path>")
@@ -1563,6 +273,8 @@ if STAGE == "local":
         Requires PLAYWRIGHT_TENANT_ID and PLAYWRIGHT_TENANT_NAME env vars
         pointing to a previously-synced tenant.
         """
+        from flask import redirect, url_for  # pylint: disable=import-outside-toplevel
+
         tenant_id = os.environ.get("PLAYWRIGHT_TENANT_ID")
         tenant_name = os.environ.get("PLAYWRIGHT_TENANT_NAME")
 
@@ -1576,9 +288,10 @@ if STAGE == "local":
         session["xero_user_email"] = "claude@local-test.dev"
         logger.info("Test login session seeded", tenant_id=tenant_id)
 
-        response = redirect(url_for("tenant_management"))
+        response = redirect(url_for("tenants.tenant_management"))
         response.set_cookie("cookie_consent", "true", max_age=86400, path="/")
         response.set_cookie("session_is_set", "true", max_age=86400, path="/")
         return response
+
 
 # endregion

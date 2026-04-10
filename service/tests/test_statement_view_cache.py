@@ -17,6 +17,7 @@ from cachelib import FileSystemCache
 from flask_session import Session
 
 import app as app_module
+import routes.statements as statements_module
 import statement_view_cache as cache_module
 import utils.auth
 import utils.statement_detail as statement_detail_module
@@ -189,17 +190,17 @@ def client(_app, monkeypatch):
     monkeypatch.setattr(utils.auth, "clear_session_is_set_cookie", lambda r: r)
     monkeypatch.setattr(utils.auth, "get_tenant_status", lambda tenant_id: TenantStatus.FREE)
 
-    # Stub data layer — functions now split between app_module and statement_detail_module.
-    monkeypatch.setattr(app_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
-    monkeypatch.setattr(app_module, "fetch_json_statement", lambda *a, **kw: SAMPLE_STATEMENT_JSON)
+    # Stub data layer — route handlers now live in routes.statements module.
+    monkeypatch.setattr(statements_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)
+    monkeypatch.setattr(statements_module, "fetch_json_statement", lambda *a, **kw: SAMPLE_STATEMENT_JSON)
     monkeypatch.setattr(statement_detail_module, "get_xero_data_by_contact", lambda *a, **kw: {"invoices": [], "credit_notes": [], "payments": []})
     monkeypatch.setattr(statement_detail_module, "get_statement_item_status_map", lambda *a, **kw: {})
     monkeypatch.setattr(statement_detail_module, "persist_classification_updates", lambda **kw: None)
 
     # Default: cache miss (no cached view data).
-    monkeypatch.setattr(app_module, "get_cached_statement_view", lambda *a, **kw: None)
-    monkeypatch.setattr(app_module, "cache_statement_view", lambda *a, **kw: None)
-    monkeypatch.setattr(app_module, "invalidate_statement_view_cache", lambda *a, **kw: None)
+    monkeypatch.setattr(statements_module, "get_cached_statement_view", lambda *a, **kw: None)
+    monkeypatch.setattr(statements_module, "cache_statement_view", lambda *a, **kw: None)
+    monkeypatch.setattr(statements_module, "invalidate_statement_view_cache", lambda *a, **kw: None)
 
     with _app.test_client() as c:
         with c.session_transaction() as sess:
@@ -230,18 +231,18 @@ class TestStatementRouteCacheHit:
             ],
             "display_headers": ["Number", "Date", "Amount"],
         }
-        monkeypatch.setattr(app_module, "get_cached_statement_view", lambda *a, **kw: cached_data)
+        monkeypatch.setattr(statements_module, "get_cached_statement_view", lambda *a, **kw: cached_data)
 
         # Track whether the expensive build pipeline was called.
         pipeline_called = False
-        original_build = app_module.build_statement_view_data
+        original_build = statements_module.build_statement_view_data
 
         def tracking_build(**kwargs):
             nonlocal pipeline_called
             pipeline_called = True
             return original_build(**kwargs)
 
-        monkeypatch.setattr(app_module, "build_statement_view_data", tracking_build)
+        monkeypatch.setattr(statements_module, "build_statement_view_data", tracking_build)
 
         response = client.get(f"/statement/{STATEMENT_ID}", headers={"HX-Request": "true"})
         assert response.status_code == 200
@@ -265,7 +266,7 @@ class TestStatementRouteCacheHit:
             ],
             "display_headers": ["Number", "Date", "Amount"],
         }
-        monkeypatch.setattr(app_module, "get_cached_statement_view", lambda *a, **kw: cached_data)
+        monkeypatch.setattr(statements_module, "get_cached_statement_view", lambda *a, **kw: cached_data)
 
         response = client.get(f"/statement/{STATEMENT_ID}", headers={"HX-Request": "true"})
         assert response.status_code == 200
@@ -279,7 +280,7 @@ class TestStatementRouteCacheMiss:
     def test_cache_miss_stores_view_data(self, client, monkeypatch):
         """Cache miss should call cache_statement_view with the built data."""
         cache_calls = []
-        monkeypatch.setattr(app_module, "cache_statement_view", lambda *a, **kw: cache_calls.append((a, kw)))
+        monkeypatch.setattr(statements_module, "cache_statement_view", lambda *a, **kw: cache_calls.append((a, kw)))
 
         response = client.get(f"/statement/{STATEMENT_ID}")
         assert response.status_code == 200
@@ -298,10 +299,10 @@ class TestStatementRouteCacheInvalidation:
 
     def test_post_complete_item_invalidates_cache(self, client, monkeypatch):
         """POST complete_item should call invalidate_statement_view_cache."""
-        monkeypatch.setattr(app_module, "set_statement_item_completed", lambda *a, **kw: None)
+        monkeypatch.setattr(statements_module, "set_statement_item_completed", lambda *a, **kw: None)
 
         invalidate_calls = []
-        monkeypatch.setattr(app_module, "invalidate_statement_view_cache", lambda *a, **kw: invalidate_calls.append((a, kw)))
+        monkeypatch.setattr(statements_module, "invalidate_statement_view_cache", lambda *a, **kw: invalidate_calls.append((a, kw)))
 
         response = client.post(
             f"/statement/{STATEMENT_ID}",
@@ -324,7 +325,7 @@ class TestStatementRouteCacheExclusions:
             cache_reads.append(a)
             return None
 
-        monkeypatch.setattr(app_module, "get_cached_statement_view", tracking_get)
+        monkeypatch.setattr(statements_module, "get_cached_statement_view", tracking_get)
 
         # The xlsx response itself will fail gracefully in tests (no real
         # Excel data), but the important thing is the cache was not read.
@@ -336,12 +337,12 @@ class TestStatementRouteCacheExclusions:
         from utils.storage import StatementJSONNotFoundError
 
         cache_writes = []
-        monkeypatch.setattr(app_module, "cache_statement_view", lambda *a, **kw: cache_writes.append(a))
-        monkeypatch.setattr(app_module, "fetch_json_statement", lambda **kw: (_ for _ in ()).throw(StatementJSONNotFoundError()))
+        monkeypatch.setattr(statements_module, "cache_statement_view", lambda *a, **kw: cache_writes.append(a))
+        monkeypatch.setattr(statements_module, "fetch_json_statement", lambda **kw: (_ for _ in ()).throw(StatementJSONNotFoundError()))
 
         # TokenReservationStatus != "released" → processing state.
         processing_record = {**SAMPLE_RECORD, "TokenReservationStatus": "pending"}
-        monkeypatch.setattr(app_module, "get_statement_record", lambda *a, **kw: processing_record)
+        monkeypatch.setattr(statements_module, "get_statement_record", lambda *a, **kw: processing_record)
 
         response = client.get(f"/statement/{STATEMENT_ID}")
         assert response.status_code == 200

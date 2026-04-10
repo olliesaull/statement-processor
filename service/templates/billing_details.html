@@ -18,7 +18,7 @@
   {% endif %}
 
   <section class="page-panel" style="max-width: 600px;">
-    <form method="POST" action="{{ url_for('checkout_create') }}">
+    <form method="POST" action="{{ url_for('api.checkout_create') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <h2 class="h5 mb-3">Invoice contact</h2>
@@ -172,7 +172,7 @@
 
       <div class="d-flex gap-3 align-items-center">
         <button type="submit" class="btn btn-primary">Proceed to Payment &rarr;</button>
-        <a href="{{ url_for('buy_tokens') }}" class="btn btn-outline-secondary">&larr; Back</a>
+        <a href="{{ url_for('billing.buy_tokens') }}" class="btn btn-outline-secondary">&larr; Back</a>
       </div>
     </form>
   </section>

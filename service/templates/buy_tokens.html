@@ -16,7 +16,7 @@
   {% endif %}
 
   <section class="page-panel" style="max-width: 520px;">
-    <form method="POST" action="{{ url_for('buy_tokens_post') }}">
+    <form method="POST" action="{{ url_for('billing.buy_tokens_post') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       {# Tenant selector — pre-filled from query param or current tenant #}

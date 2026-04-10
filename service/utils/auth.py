@@ -221,7 +221,7 @@ class RedirectToLogin(HTTPException):
         Returns:
             Redirect response to the login route.
         """
-        return redirect(url_for("login"))
+        return redirect(url_for("auth.login"))
 
 
 def raise_for_unauthorized(error: Exception) -> None:
@@ -280,10 +280,10 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
         if not has_cookie_consent():
             logger.info("Cookie consent missing; blocking protected route", route=request.path, is_api_request=is_api_request)
             if is_api_request:
-                response = jsonify({"error": "cookie_consent_required", "redirect": url_for("cookies")})
+                response = jsonify({"error": "cookie_consent_required", "redirect": url_for("public.cookies")})
                 response.status_code = 401
                 return response
-            return redirect(url_for("cookies"))
+            return redirect(url_for("public.cookies"))
 
         tenant_id = session.get("xero_tenant_id")
         token = get_xero_oauth2_token()
@@ -293,7 +293,7 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
                 response = jsonify({"error": "auth_required"})
                 response.status_code = 401
                 return clear_session_is_set_cookie(response)
-            return clear_session_is_set_cookie(redirect(url_for("login")))
+            return clear_session_is_set_cookie(redirect(url_for("auth.login")))
 
         try:
             expires_at = float(token.get("expires_at", 0))
@@ -307,7 +307,7 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
                 response = jsonify({"error": "auth_required"})
                 response.status_code = 401
                 return clear_session_is_set_cookie(response)
-            return clear_session_is_set_cookie(redirect(url_for("login")))
+            return clear_session_is_set_cookie(redirect(url_for("auth.login")))
 
         result = f(*args, **kwargs)
         if is_api_request:
@@ -324,7 +324,7 @@ def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def active_tenant_required(
-    message: str = "Please select a tenant before continuing.", redirect_endpoint: str = "tenant_management", flash_key: str = "tenant_error"
+    message: str = "Please select a tenant before continuing.", redirect_endpoint: str = "tenants.tenant_management", flash_key: str = "tenant_error"
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Require an active tenant selection before the route handler runs.
     This stores a message in the session before redirecting to the tenant picker.
@@ -342,7 +342,7 @@ def active_tenant_required(
         @wraps(f)
         def wrapped(*args: Any, **kwargs: Any) -> Any:
             if not has_cookie_consent():
-                return redirect(url_for("cookies"))
+                return redirect(url_for("public.cookies"))
             tenant_id = session.get("xero_tenant_id")
             if tenant_id:
                 return f(*args, **kwargs)
@@ -371,7 +371,7 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(f)
     def decorated_function(*args: Any, **kwargs: Any) -> Any:
         if not has_cookie_consent():
-            return redirect(url_for("cookies"))
+            return redirect(url_for("public.cookies"))
         tenant_id = session.get("xero_tenant_id")
         if tenant_id:
             status = get_tenant_status(tenant_id)
@@ -383,7 +383,7 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
             if status in (TenantStatus.LOADING, TenantStatus.LOAD_INCOMPLETE, TenantStatus.ERASED):
                 logger.info("Blocking route during load", route=request.path, tenant_id=tenant_id, status=str(status))
                 session["tenant_error"] = "Please wait for the initial load to finish before navigating away."
-                return redirect(url_for("tenant_management"))
+                return redirect(url_for("tenants.tenant_management"))
 
         return f(*args, **kwargs)
 

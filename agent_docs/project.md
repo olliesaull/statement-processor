@@ -16,10 +16,33 @@ Users upload supplier statement PDFs, the system extracts line items with Bedroc
 ## Runtime Architecture
 
 ### Web application (`service/`)
-- Flask app in [`service/app.py`](service/app.py) serves server-rendered Jinja pages and JSON APIs.
+- Flask app in [`service/app.py`](service/app.py) creates the app, configures session/CSRF/OAuth, registers Blueprints, and defines error handlers and context processors.
+- Route handlers live in the `service/routes/` package, organized by domain into Flask Blueprints (see **Blueprint architecture** below).
 - Deployed on AWS AppRunner (see [`service/Dockerfile`](service/Dockerfile)).
 - Nginx reverse proxy sits in front of Gunicorn inside the container, providing security headers, CSP, rate limiting, and per-route query string / body size validation. Config lives in `service/nginx.conf` and auto-generated `service/nginx-routes.conf`. See the README "Nginx Reverse Proxy" section for maintenance details.
 - **Nginx regeneration required** when adding/removing Flask routes, changing auth decorators (which affects public-page detection), or adding query parameters to routes. Public routes have query strings stripped unless they have an entry in `service/nginx_route_querystring_allow_list.json`. Run the generator from `service/` and review the `nginx-routes.conf` diff.
+
+#### Blueprint architecture (`service/routes/`)
+
+Route handlers are split into 7 Blueprints, each in its own module under `service/routes/`:
+
+| Blueprint | Module | Routes | Notes |
+|-----------|--------|--------|-------|
+| `public` | `routes/public.py` | `/`, `/about`, `/instructions`, `/faq`, `/pricing`, `/privacy`, `/terms`, `/cookies` | Unauthenticated marketing/content pages |
+| `seo` | `routes/seo.py` | `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/healthz`, `/favicon.ico` | Machine-readable endpoints; SEO helpers use `current_app` to introspect routes |
+| `auth` | `routes/auth.py` | `/login`, `/logout`, `/callback` | Xero OAuth flow; imports `oauth` and helpers from `app.py` at request time to avoid circular imports |
+| `tenants` | `routes/tenants.py` | `/tenant_management`, `/tenants/select`, `/tenants/disconnect` | Tenant management; imports `_set_active_tenant` from `app.py` at request time |
+| `statements_bp` | `routes/statements.py` | `/statements`, `/statement/<id>`, `/statement/<id>/delete`, `/upload-statements`, `/statements/count` | Statement list, detail, upload, deletion; Blueprint named `statements_bp` to avoid collision with the `statements` function |
+| `billing` | `routes/billing.py` | `/buy-pages`, `/billing-details`, `/checkout/success`, `/checkout/cancel`, `/checkout/failed` | Token purchase and Stripe checkout result pages |
+| `api` | `routes/api.py` | `/api/tenant-statuses`, `/api/tenants/<id>/sync`, `/api/upload-statements/preflight`, `/api/checkout/create`, `/api/banner/dismiss` | JSON API endpoints |
+
+**Stays in `app.py`**: Flask app creation, config, CSRF, session, OAuth, Blueprint registration, error handlers (`handle_csrf_error`), context processors (`inject_banners`, `_inject_statement_row_palette_css`), `_extract_csrf_from_json_body`, `_is_htmx_request`, `test_login` (dev-only), `chrome_devtools_ping`, and shared helpers (`_set_active_tenant`, `_trigger_initial_sync_if_required`, `_absolute_app_url`).
+
+**`url_for` convention**: All `url_for` calls use Blueprint-prefixed endpoint names (e.g., `url_for("public.index")`, `url_for("statements_bp.statements")`). This applies to both Python code and Jinja templates. When adding new routes or references, always use the full `blueprint_name.function_name` form.
+
+**Circular imports**: Some Blueprints (auth, tenants, api) import from `app.py` at request time using `import-outside-toplevel` to avoid circular dependency at module load. This is intentional and flagged by pylint as R0401 (cyclic-import); the warnings are acceptable.
+
+**`before_request` hooks**: The `tenants`, `statements_bp`, `billing`, and `api` Blueprints each have a `before_request` hook that injects `tenant_id` into the structured logger context via `logger.append_keys()`.
 
 ### Extraction pipeline (`lambda_functions/extraction_lambda/`)
 - Container Lambda entry point: [`lambda_functions/extraction_lambda/main.py`](lambda_functions/extraction_lambda/main.py).

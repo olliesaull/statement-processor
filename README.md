@@ -110,6 +110,15 @@
     │   ├── number_disambiguation.py
     │   ├── statement_detail_types.py
     │   └── statement_row_palette.py
+    ├── routes/
+    │   ├── __init__.py
+    │   ├── api.py
+    │   ├── auth.py
+    │   ├── billing.py
+    │   ├── public.py
+    │   ├── seo.py
+    │   ├── statements.py
+    │   └── tenants.py
     ├── playwright_tests/
     │   ├── helpers/
     │   └── tests/
@@ -274,7 +283,8 @@ The Bedrock Converse API requires model access to be enabled in the AWS console.
 ## Flask Service
 
 - **App structure**
-  - Main application: `service/app.py` (Flask app factory, route handlers, template rendering, orchestration).
+  - Main application: `service/app.py` (Flask app creation, config, CSRF, session, OAuth, Blueprint registration, error handlers, context processors).
+  - Route Blueprints: `service/routes/` (7 Blueprint modules organized by domain -- public, seo, auth, tenants, statements, billing, api). See `agent_docs/project.md` for the full Blueprint table.
   - Templates and UI assets: `service/templates/` (Jinja2 views) and `service/static/` (static assets). See **Frontend Design System** below for details on the CSS architecture.
   - Frontend design reference: static mockups in `new-design/` (index.html, about.html, instructions.html, styles.css) served as the design source of truth during the UI overhaul.
   - Configuration + AWS clients: `service/config.py` (environment-variable loading, boto3 clients/resources).

@@ -45,20 +45,31 @@ def app():
     test_app.config["SESSION_TYPE"] = "filesystem"
     test_app.config["SESSION_COOKIE_SECURE"] = False
 
-    # Register a login route so url_for("login") resolves.
-    @test_app.route("/login")
+    # Register stub routes so url_for resolves the Blueprint-prefixed
+    # endpoint names used by the auth decorators.
+    from flask import Blueprint  # pylint: disable=import-outside-toplevel
+
+    auth_stub = Blueprint("auth", __name__)
+
+    @auth_stub.route("/login")
     def login():
         return "login page"
 
-    # Register a cookies route so url_for("cookies") resolves.
-    @test_app.route("/cookies")
+    public_stub = Blueprint("public", __name__)
+
+    @public_stub.route("/cookies")
     def cookies():
         return "cookies page"
 
-    # Register tenant_management route for redirect targets.
-    @test_app.route("/tenant_management")
+    tenants_stub = Blueprint("tenants", __name__)
+
+    @tenants_stub.route("/tenant_management")
     def tenant_management():
         return "tenant management"
+
+    test_app.register_blueprint(auth_stub)
+    test_app.register_blueprint(public_stub)
+    test_app.register_blueprint(tenants_stub)
 
     return test_app
 
@@ -430,7 +441,7 @@ class TestActiveTenantRequired:
         """Custom message and redirect_endpoint are respected."""
 
         @app.route("/custom-tenant")
-        @active_tenant_required(message="Pick a tenant!", redirect_endpoint="login", flash_key="custom_flash")
+        @active_tenant_required(message="Pick a tenant!", redirect_endpoint="auth.login", flash_key="custom_flash")
         def custom_tenant():
             return "custom ok"
 

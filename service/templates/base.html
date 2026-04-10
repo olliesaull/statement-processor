@@ -28,7 +28,7 @@
     <!-- Navbar -->
     <nav class="navbar navbar-expand-lg sticky-top">
         <div class="container-fluid">
-            <a class="navbar-brand" href="{{ url_for('index') }}">
+            <a class="navbar-brand" href="{{ url_for('public.index') }}">
               <span class="nav-brand-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -46,43 +46,43 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}"
-                            href="{{ url_for('index') }}">Home</a>
+                        <a class="nav-link {% if request.endpoint == 'public.index' %}active{% endif %}"
+                            href="{{ url_for('public.index') }}">Home</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'about' %}active{% endif %}"
-                            href="{{ url_for('about') }}">About</a>
+                        <a class="nav-link {% if request.endpoint == 'public.about' %}active{% endif %}"
+                            href="{{ url_for('public.about') }}">About</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'pricing' %}active{% endif %}"
-                            href="{{ url_for('pricing') }}">Pricing</a>
+                        <a class="nav-link {% if request.endpoint == 'public.pricing' %}active{% endif %}"
+                            href="{{ url_for('public.pricing') }}">Pricing</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'instructions' %}active{% endif %}"
-                            href="{{ url_for('instructions') }}">Instructions</a>
+                        <a class="nav-link {% if request.endpoint == 'public.instructions' %}active{% endif %}"
+                            href="{{ url_for('public.instructions') }}">Instructions</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'faq' %}active{% endif %}"
-                            href="{{ url_for('faq') }}">FAQ</a>
+                        <a class="nav-link {% if request.endpoint == 'public.faq' %}active{% endif %}"
+                            href="{{ url_for('public.faq') }}">FAQ</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'tenant_management' %}active{% endif %}"
-                            href="{{ url_for('tenant_management') }}">Tenant Management</a>
+                        <a class="nav-link {% if request.endpoint == 'tenants.tenant_management' %}active{% endif %}"
+                            href="{{ url_for('tenants.tenant_management') }}">Tenant Management</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'upload_statements' %}active{% endif %}"
-                            href="{{ url_for('upload_statements') }}">Upload Statements</a>
+                        <a class="nav-link {% if request.endpoint == 'statements_bp.upload_statements' %}active{% endif %}"
+                            href="{{ url_for('statements_bp.upload_statements') }}">Upload Statements</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'statements' %}active{% endif %}"
-                            href="{{ url_for('statements') }}">Statements</a>
+                        <a class="nav-link {% if request.endpoint == 'statements_bp.statements' %}active{% endif %}"
+                            href="{{ url_for('statements_bp.statements') }}">Statements</a>
                     </li>
                     <li class="nav-item">
                         <a id="nav-auth-link"
-                            class="nav-link {% if request.endpoint == 'login' %}active{% endif %}"
-                            href="{{ url_for('login') }}"
-                            data-login-href="{{ url_for('login') }}"
-                            data-logout-href="{{ url_for('logout') }}"
+                            class="nav-link {% if request.endpoint == 'auth.login' %}active{% endif %}"
+                            href="{{ url_for('auth.login') }}"
+                            data-login-href="{{ url_for('auth.login') }}"
+                            data-logout-href="{{ url_for('auth.logout') }}"
                             data-login-label="Login"
                             data-logout-label="Logout">Login</a>
                     </li>
@@ -131,9 +131,9 @@
                 <div>
                     <div class="footer-heading">Legal</div>
                     <div class="footer-links">
-                        <a href="{{ url_for('privacy') }}">Privacy Policy</a>
-                        <a href="{{ url_for('terms') }}">Terms and Conditions</a>
-                        <a href="{{ url_for('cookies') }}">Cookie Policy</a>
+                        <a href="{{ url_for('public.privacy') }}">Privacy Policy</a>
+                        <a href="{{ url_for('public.terms') }}">Terms and Conditions</a>
+                        <a href="{{ url_for('public.cookies') }}">Cookie Policy</a>
                     </div>
                 </div>
             </div>

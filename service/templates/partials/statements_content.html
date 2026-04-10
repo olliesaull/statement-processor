@@ -30,12 +30,12 @@
   {% endif %}
 
   {# Pre-build pagination URLs once so they can be reused by both pagination_nav calls. #}
-  {% set prev_url = url_for('statements', page=page - 1, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
-  {% set next_url = url_for('statements', page=page + 1, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
-  {% set page_url_tpl = url_for('statements', page='__PAGE__', per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
+  {% set prev_url = url_for('statements_bp.statements', page=page - 1, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
+  {% set next_url = url_for('statements_bp.statements', page=page + 1, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
+  {% set page_url_tpl = url_for('statements_bp.statements', page='__PAGE__', per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
 
   {# Base URL used by the per-page select: page resets to 1 when changing page size. #}
-  {% set per_page_base_url = url_for('statements', page=1, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
+  {% set per_page_base_url = url_for('statements_bp.statements', page=1, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') %}
 
   {% if statements %}
     <div class="page-panel page-panel-muted mb-3">
@@ -107,7 +107,7 @@
                 </td>
                 <td class="text-center statements-col-action">
                   <div class="d-flex flex-nowrap justify-content-center gap-2">
-                    <a href="{{ url_for('statement', statement_id=stmt['StatementID']) }}" class="btn btn-sm btn-primary" data-automation="statement-reconcile-link">
+                    <a href="{{ url_for('statements_bp.statement', statement_id=stmt['StatementID']) }}" class="btn btn-sm btn-primary" data-automation="statement-reconcile-link">
                       Reconcile
                     </a>
                     {% if is_reserved %}
@@ -120,10 +120,10 @@
                       #}
                       <form
                         method="post"
-                        action="{{ url_for('delete_statement', statement_id=stmt['StatementID'], page=page, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') }}"
+                        action="{{ url_for('statements_bp.delete_statement', statement_id=stmt['StatementID'], page=page, per_page=per_page, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') }}"
                         class="d-inline"
                         onsubmit="return confirm('Delete this statement? This cannot be undone.');"
-                        hx-post="{{ url_for('delete_statement', statement_id=stmt['StatementID']) }}"
+                        hx-post="{{ url_for('statements_bp.delete_statement', statement_id=stmt['StatementID']) }}"
                         hx-target="#statement-row-{{ stmt['StatementID'] }}"
                         hx-swap="delete"
                         hx-confirm="Delete this statement? This cannot be undone."
@@ -166,7 +166,7 @@
             {% for opt in [25, 50, 100] %}
               <option
                 value="{{ opt }}"
-                data-url="{{ url_for('statements', page=1, per_page=opt, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') }}"
+                data-url="{{ url_for('statements_bp.statements', page=1, per_page=opt, sort=current_sort, dir=current_dir, view='completed' if show_completed else 'incomplete') }}"
                 {% if per_page == opt %}selected{% endif %}
               >{{ opt }}</option>
             {% endfor %}
@@ -186,18 +186,18 @@
     <span class="action-count-chip" id="statements-count-chip">{{ statement_count }} statement{% if statement_count != 1 %}s{% endif %}</span>
     {% if show_completed %}
       <a
-        href="{{ url_for('statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        href="{{ url_for('statements_bp.statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
         class="btn btn-secondary"
-        hx-get="{{ url_for('statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        hx-get="{{ url_for('statements_bp.statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
         hx-target="#statements-content"
         hx-swap="outerHTML scroll:no-scroll"
         hx-push-url="true"
       >View incomplete</a>
     {% else %}
       <a
-        href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        href="{{ url_for('statements_bp.statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
         class="btn btn-outline-secondary"
-        hx-get="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        hx-get="{{ url_for('statements_bp.statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
         hx-target="#statements-content"
         hx-swap="outerHTML scroll:no-scroll"
         hx-push-url="true"
@@ -211,18 +211,18 @@
     {{ pagination_nav(page=page, total_pages=total_pages, prev_url=prev_url, next_url=next_url, compact=true, page_url_template=page_url_tpl, htmx_target="#statements-content") }}
     {% if show_completed %}
       <a
-        href="{{ url_for('statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        href="{{ url_for('statements_bp.statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
         class="btn btn-secondary"
-        hx-get="{{ url_for('statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        hx-get="{{ url_for('statements_bp.statements', sort=current_sort, dir=current_dir, per_page=per_page) }}"
         hx-target="#statements-content"
         hx-swap="outerHTML scroll:no-scroll"
         hx-push-url="true"
       >View incomplete</a>
     {% else %}
       <a
-        href="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        href="{{ url_for('statements_bp.statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
         class="btn btn-outline-secondary"
-        hx-get="{{ url_for('statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
+        hx-get="{{ url_for('statements_bp.statements', view='completed', sort=current_sort, dir=current_dir, per_page=per_page) }}"
         hx-target="#statements-content"
         hx-swap="outerHTML scroll:no-scroll"
         hx-push-url="true"

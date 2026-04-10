@@ -24,9 +24,9 @@
     </div>
   {% endif %}
 
-  <form method="POST" action="{{ url_for('upload_statements') }}" enctype="multipart/form-data" class="content-max-720" id="upload-statements-form"
-    data-preflight-url="{{ url_for('upload_statements_preflight') }}" data-login-url="{{ url_for('login') }}"
-    data-buy-tokens-url="{{ url_for('buy_tokens') }}">
+  <form method="POST" action="{{ url_for('statements_bp.upload_statements') }}" enctype="multipart/form-data" class="content-max-720" id="upload-statements-form"
+    data-preflight-url="{{ url_for('api.upload_statements_preflight') }}" data-login-url="{{ url_for('auth.login') }}"
+    data-buy-tokens-url="{{ url_for('billing.buy_tokens') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset class="page-panel">
       <table class="table table-sm align-middle upload-statements-table mb-3">
