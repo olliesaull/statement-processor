@@ -1,16 +1,48 @@
-"""Statement view helpers for formatting and matching."""
+"""Statement view helpers for formatting and matching.
+
+Provides:
+- Header normalization and display mapping preparation (DisplayMappings).
+- Invoice/credit note matching logic (exact + substring strategies).
+- Row comparison building for the statement detail table.
+"""
 
 import re
+from collections import namedtuple
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from core.date_utils import coerce_datetime_with_template, format_iso_with
 from core.models import CellComparison
-from core.statement_detail_types import MatchedInvoiceMap, StatementItemPayload, XeroDocumentPayload
+from core.statement_detail_types import MatchedInvoiceMap, MatchRecord, StatementItemPayload, XeroDocumentPayload
 from logger import logger
 from utils.formatting import _to_decimal, format_money
 
+# region Constants
+
 _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
+_CANONICAL_FIELD_NAMES = {"date", "number", "due_date", "reference"}
+_DEBIT_AMOUNT_PATTERNS = ("debit", "dr", "invoices", "charges", "amount")
+_CREDIT_AMOUNT_PATTERNS = ("credit", "cr", "credit notes", "payments")
+_TOTAL_AMOUNT_PATTERNS = ("total",)
+_BALANCE_AMOUNT_PATTERNS = ("balance",)
+
+# endregion
+
+# region Named return types
+
+DisplayMappings = namedtuple("DisplayMappings", ["display_headers", "rows_by_header", "header_to_field", "item_number_header"])
+"""Named return type for prepare_display_mappings.
+
+Fields:
+    display_headers: Ordered list of column headers to show.
+    rows_by_header: Statement rows normalized for display, keyed by header name.
+    header_to_field: Mapping from display header to canonical field name.
+    item_number_header: Header name that maps to the invoice/reference number, or None.
+"""
+
+# endregion
+
+# region Numeric helpers
 
 
 def _norm_number(x: Any) -> Decimal | None:
@@ -43,12 +75,24 @@ def _equal(a: Any, b: Any) -> bool:
     return sa.casefold() == sb.casefold()
 
 
+def _norm_id_text(x: Any) -> str:
+    """Normalize an invoice-style ID to uppercase alphanumeric for loose matching.
+
+    Used to compare invoice number columns where the statement and Xero may
+    differ in punctuation (e.g. "INV-001" vs "INV001").
+    """
+    s = "" if x is None else str(x).strip()
+    return "".join(ch for ch in s.upper() if ch.isalnum())
+
+
+# endregion
+
+# region Header filtering and ordering helpers
+
+
 def _normalize_header_name(value: Any) -> str:
     """Normalize a header label for matching."""
     return " ".join(str(value or "").split()).strip().lower()
-
-
-_CANONICAL_FIELD_NAMES = {"date", "number", "due_date", "reference"}
 
 
 def _filter_display_headers(raw_headers: list[str], header_to_field_norm: dict[str, str]) -> tuple[list[str], dict[str, str]]:
@@ -71,12 +115,6 @@ def _filter_display_headers(raw_headers: list[str], header_to_field_norm: dict[s
         header_to_field[header] = canon
         display_headers.append(header)
     return display_headers, header_to_field
-
-
-_DEBIT_AMOUNT_PATTERNS = ("debit", "dr", "invoices", "charges", "amount")
-_CREDIT_AMOUNT_PATTERNS = ("credit", "cr", "credit notes", "payments")
-_TOTAL_AMOUNT_PATTERNS = ("total",)
-_BALANCE_AMOUNT_PATTERNS = ("balance",)
 
 
 def _matches_patterns(norm_name: str, patterns: tuple[str, ...]) -> bool:
@@ -149,6 +187,11 @@ def _order_display_headers(display_headers: list[str], header_to_field: dict[str
     return non_amount + amount
 
 
+# endregion
+
+# region Row building helpers
+
+
 def _format_statement_value(value: Any, canonical_field: str | None, date_fmt: str | None) -> Any:
     """Normalize a statement cell value based on the canonical field.
 
@@ -190,20 +233,25 @@ def _find_item_number_header(display_headers: list[str], header_to_field: dict[s
     return None
 
 
-def _get_separators_from_data(statement_data: dict[str, Any]) -> tuple[str, str]:
-    """Return standard separators (dot-decimal, comma-thousands).
+# endregion
 
-    Kept for call-site compatibility but no longer reads from statement
-    JSON — separators are always standard format.
-    """
-    return (".", ",")
+# region Public API — display mapping preparation
 
 
-def prepare_display_mappings(items: list[StatementItemPayload], statement_data: dict[str, Any]) -> tuple[list[str], list[dict[str, str]], dict[str, str], str | None]:
+def prepare_display_mappings(items: list[StatementItemPayload], statement_data: dict[str, Any]) -> DisplayMappings:
     """Build display headers, filtered rows, header->field map, and item_number_header.
 
-    Reads header_mapping, date_format, and separators from the
-    self-describing statement JSON instead of ContactConfig.
+    Reads header_mapping and date_format from the self-describing statement JSON
+    instead of ContactConfig. Returns a DisplayMappings namedtuple so callers
+    can use either positional unpacking or named field access.
+
+    Args:
+        items: Statement items loaded from S3 JSON.
+        statement_data: The top-level statement JSON object.
+
+    Returns:
+        DisplayMappings namedtuple with fields:
+            display_headers, rows_by_header, header_to_field, item_number_header.
     """
     raw_headers = list(items[0].get("raw", {}).keys()) if items else []
 
@@ -231,7 +279,12 @@ def prepare_display_mappings(items: list[StatementItemPayload], statement_data: 
                 logger.info("Falling back to reference column for item_number_header", header=header)
                 break
 
-    return display_headers, rows_by_header, header_to_field, item_number_header
+    return DisplayMappings(display_headers=display_headers, rows_by_header=rows_by_header, header_to_field=header_to_field, item_number_header=item_number_header)
+
+
+# endregion
+
+# region Invoice matching
 
 
 # TODO: This function does invoices and credit notes, needs renaming for clarity
@@ -309,7 +362,7 @@ def _record_exact_matches(stmt_by_number: dict[str, StatementItemPayload], invoi
             continue
         stmt_item = stmt_by_number.get(key)
         if stmt_item is not None and key not in matched:
-            matched[key] = {"invoice": inv, "statement_item": stmt_item, "match_type": "exact", "match_score": 1.0, "matched_invoice_number": key}
+            matched[key] = MatchRecord(invoice=inv, statement_item=stmt_item, match_type="exact", match_score=1.0, matched_invoice_number=key)
             logger.info("Exact match", statement_number=key, invoice_number=key, statement_item=stmt_item, xero_item=inv)
             inv_id = inv.get("invoice_id") if isinstance(inv, dict) else None
             if inv_id:
@@ -365,13 +418,14 @@ def _candidate_hits(target_norm: str, candidates: list[tuple[str, XeroDocumentPa
 
 def _record_substring_match(matched: MatchedInvoiceMap, statement_number: str, statement_item: StatementItemPayload, invoice_number: str, invoice_obj: XeroDocumentPayload) -> None:
     """Record a substring match and emit logging."""
-    matched[statement_number] = {
-        "invoice": invoice_obj,
-        "statement_item": statement_item,
-        "match_type": "substring" if invoice_number != statement_number else "exact",
-        "match_score": 1.0,
-        "matched_invoice_number": invoice_number,
-    }
+    match_type: str = "substring" if invoice_number != statement_number else "exact"
+    matched[statement_number] = MatchRecord(
+        invoice=invoice_obj,
+        statement_item=statement_item,
+        match_type=match_type,  # type: ignore[arg-type]
+        match_score=1.0,
+        matched_invoice_number=invoice_number,
+    )
     kind = "Exact" if invoice_number == statement_number else "Substring"
     logger.info("Statement match", match_type=kind, statement_number=statement_number, invoice_number=invoice_number, statement_item=statement_item, xero_item=invoice_obj)
 
@@ -382,6 +436,11 @@ def _mark_invoice_used(invoice_obj: XeroDocumentPayload, invoice_number: str, us
     if inv_id:
         used_invoice_ids.add(inv_id)
     used_invoice_numbers.add(invoice_number)
+
+
+# endregion
+
+# region Row comparison building
 
 
 def build_right_rows(
@@ -439,8 +498,17 @@ def build_right_rows(
 
 
 def build_row_comparisons(left_rows: list[dict[str, str]], right_rows: list[dict[str, str]], display_headers: list[str], header_to_field: dict[str, str] | None = None) -> list[list[CellComparison]]:
-    """
-    Build per-cell comparison objects for each row.
+    """Build per-cell comparison objects for each row.
+
+    Args:
+        left_rows: Statement-side rows (one dict per row, keyed by header name).
+        right_rows: Xero-side rows in the same order as left_rows.
+        display_headers: Ordered column headers that appear in both row lists.
+        header_to_field: Optional mapping of header -> canonical field name for
+            special-case comparisons (e.g. invoice number loose matching).
+
+    Returns:
+        A list of per-row CellComparison lists, one per (left_row, right_row) pair.
     """
     comparisons: list[list[CellComparison]] = []
     for left, right in zip(left_rows, right_rows, strict=False):
@@ -451,11 +519,6 @@ def build_row_comparisons(left_rows: list[dict[str, str]], right_rows: list[dict
             # For the canonical invoice number column, treat values as IDs and
             # consider them matching if one normalized string contains the other.
             if header_to_field and header_to_field.get(header) == "number":
-
-                def _norm_id_text(x: Any) -> str:
-                    s = "" if x is None else str(x).strip()
-                    return "".join(ch for ch in s.upper() if ch.isalnum())
-
                 a, b = _norm_id_text(left_val), _norm_id_text(right_val)
                 matches = bool(a and b and (a == b or a in b or b in a))
             else:
@@ -468,3 +531,6 @@ def build_row_comparisons(left_rows: list[dict[str, str]], right_rows: list[dict
             )
         comparisons.append(row_cells)
     return comparisons
+
+
+# endregion

@@ -1,4 +1,10 @@
-"""Formatting and numeric helpers."""
+"""Formatting and numeric helpers.
+
+Provides:
+- Separator-agnostic numeric parsing (_normalize_separators, _to_decimal).
+- Money formatting (format_money).
+- Date and invoice dict formatting utilities (fmt_date, fmt_invoice_data).
+"""
 
 import re
 from datetime import date, datetime
@@ -7,7 +13,13 @@ from typing import Any
 
 from logger import logger
 
+# region Constants
+
 _NON_NUMERIC_RE = re.compile(r"[^\d\-\.,]")
+
+# endregion
+
+# region Numeric parsing
 
 
 def _normalize_separators(value: Any) -> str | None:
@@ -63,6 +75,11 @@ def _normalize_separators(value: Any) -> str | None:
     return cleaned
 
 
+# endregion
+
+# region Public formatting helpers
+
+
 def _to_decimal(x: Any, **_kwargs: Any) -> Decimal | None:
     """Normalize and parse a value into a Decimal.
 
@@ -101,8 +118,19 @@ def fmt_date(d: Any) -> str | None:
     return None
 
 
-def fmt_invoice_data(inv):
-    """Return a normalized dict of invoice fields for rendering."""
+def fmt_invoice_data(inv: Any) -> dict[str, Any]:
+    """Return a normalized dict of invoice fields for rendering.
+
+    Accepts a Xero SDK Invoice object and extracts the fields used by the
+    statement detail view. Uses getattr so this is safe to call on mocked objects.
+
+    Args:
+        inv: Xero SDK Invoice or credit note object.
+
+    Returns:
+        Dict with keys: invoice_id, number, type, status, date, due_date,
+        reference, total, contact_id, contact_name.
+    """
     contact = getattr(inv, "contact", None)
 
     return {
@@ -117,3 +145,6 @@ def fmt_invoice_data(inv):
         "contact_id": getattr(contact, "contact_id", None),
         "contact_name": getattr(contact, "name", None),
     }
+
+
+# endregion

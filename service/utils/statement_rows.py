@@ -8,7 +8,13 @@ from typing import Any
 
 from core.statement_detail_types import MatchedInvoiceMap
 
+# region Constants
+
 _ITEM_TYPE_LABELS: dict[str, str] = {"credit_note": "CRN", "invoice": "INV", "payment": "PMT"}
+
+# endregion
+
+# region Row label helpers
 
 
 def format_item_type_label(item_type: str | None) -> str:
@@ -26,6 +32,11 @@ def format_item_type_label(item_type: str | None) -> str:
     if normalized in _ITEM_TYPE_LABELS:
         return _ITEM_TYPE_LABELS[normalized]
     return normalized.replace("_", " ").upper()
+
+
+# endregion
+
+# region Xero ID lookups
 
 
 def xero_ids_for_row(item_number_header: str | None, left_row: dict[str, Any], matched_invoice_to_statement_item: MatchedInvoiceMap) -> tuple[str | None, str | None]:
@@ -55,3 +66,6 @@ def xero_ids_for_row(item_number_header: str | None, left_row: dict[str, Any], m
     invoice_id = invoice_payload.get("invoice_id")
     xero_invoice_id = invoice_id.strip() if isinstance(invoice_id, str) and invoice_id.strip() else None
     return xero_invoice_id, xero_credit_note_id
+
+
+# endregion

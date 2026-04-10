@@ -1,11 +1,18 @@
-"""DynamoDB helpers for statement records."""
+"""DynamoDB helpers for statement records.
+
+Provides CRUD operations over the tenant statements DynamoDB table, including:
+- Querying statements by completion status.
+- Updating processing stage, item types, and completion flags.
+- Deleting statement records and associated S3 objects.
+- Best-effort read-repair for stale processing stage values.
+"""
 
 import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from boto3.dynamodb.conditions import Attr, Key
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from flask import session
 from src.enums import ProcessingStage
 
@@ -13,7 +20,13 @@ from config import S3_BUCKET_NAME, s3_client, tenant_statements_table
 from logger import logger
 from utils.storage import statement_json_s3_key, statement_pdf_s3_key
 
+# region Constants
+
 _DDB_UPDATE_MAX_WORKERS = max(4, min(16, (os.cpu_count() or 4)))
+
+# endregion
+
+# region Statement queries
 
 
 def _query_statements_by_completed(tenant_id: str | None, completed_value: str) -> list[dict[str, Any]]:
@@ -44,6 +57,11 @@ def _query_statements_by_completed(tenant_id: str | None, completed_value: str) 
     return items
 
 
+# endregion
+
+# region Statement record operations
+
+
 def get_statement_record(tenant_id: str, statement_id: str) -> dict[str, Any] | None:
     """Return the full DynamoDB record for a tenant/statement pair."""
     logger.info("Fetching statement record", tenant_id=tenant_id, statement_id=statement_id)
@@ -51,6 +69,11 @@ def get_statement_record(tenant_id: str, statement_id: str) -> dict[str, Any] | 
     item = response.get("Item")
     logger.debug("Statement record fetched", tenant_id=tenant_id, statement_id=statement_id, found=bool(item))
     return item
+
+
+# endregion
+
+# region Item type updates
 
 
 def persist_item_types_to_dynamo(tenant_id: str | None, classification_updates: dict[str, str], *, max_workers: int | None = None) -> None:
@@ -75,18 +98,34 @@ def persist_item_types_to_dynamo(tenant_id: str | None, classification_updates: 
         executor.map(_update, items)
 
 
+# endregion
+
+# region Statement queries (session-based)
+
+
 def get_incomplete_statements() -> list[dict[str, Any]]:
-    """Return statements for the active tenant that are not completed."""
+    """Return statements for the active tenant that are not completed.
+
+    Reads tenant_id from the Flask session.
+    """
     tenant_id = session.get("xero_tenant_id")
     logger.info("Fetching incomplete statements", tenant_id=tenant_id)
     return _query_statements_by_completed(tenant_id, "false")
 
 
 def get_completed_statements() -> list[dict[str, Any]]:
-    """Return statements for the active tenant that are marked completed."""
+    """Return statements for the active tenant that are marked completed.
+
+    Reads tenant_id from the Flask session.
+    """
     tenant_id = session.get("xero_tenant_id")
     logger.info("Fetching completed statements", tenant_id=tenant_id)
     return _query_statements_by_completed(tenant_id, "true")
+
+
+# endregion
+
+# region Completion flag updates
 
 
 def mark_statement_completed(tenant_id: str, statement_id: str, completed: bool) -> None:
@@ -155,6 +194,11 @@ def set_all_statement_items_completed(tenant_id: str, statement_id: str, complet
         set_statement_item_completed(tenant_id, statement_item_id, completed)
 
 
+# endregion
+
+# region Processing stage repair
+
+
 def repair_processing_stage(tenant_id: str, statement_id: str) -> None:
     """Best-effort read-repair: set ProcessingStage to failed.
 
@@ -172,8 +216,15 @@ def repair_processing_stage(tenant_id: str, statement_id: str) -> None:
         )
         logger.info("Read-repaired ProcessingStage to failed", tenant_id=tenant_id, statement_id=statement_id)
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        # Best-effort — do not fail the page render.
+        # Intentionally broad: swallows ClientError (ConditionalCheckFailedException,
+        # stage already = failed), BotoCoreError, and any unexpected SDK exceptions.
+        # Best-effort — do not fail the page render over a repair step.
         logger.debug("Read-repair skipped or failed", tenant_id=tenant_id, statement_id=statement_id, error=str(exc))
+
+
+# endregion
+
+# region Statement deletion
 
 
 def delete_statement_data(tenant_id: str, statement_id: str) -> None:
@@ -217,8 +268,11 @@ def delete_statement_data(tenant_id: str, statement_id: str) -> None:
             logger.info("Deleted statement S3 object", tenant_id=tenant_id, statement_id=statement_id, s3_key=key)
         except s3_client.exceptions.NoSuchKey:
             logger.info("Statement S3 object already missing", tenant_id=tenant_id, statement_id=statement_id, s3_key=key)
-        except Exception as exc:
+        except (ClientError, BotoCoreError) as exc:
             logger.exception("Failed to delete statement S3 object", tenant_id=tenant_id, statement_id=statement_id, s3_key=key, error=exc)
             raise
 
     logger.info("Statement deletion complete", tenant_id=tenant_id, statement_id=statement_id, items_deleted=deleted_items, s3_objects=len(s3_keys))
+
+
+# endregion

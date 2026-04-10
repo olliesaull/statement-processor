@@ -1,4 +1,11 @@
-"""Storage helpers for statement files and assets."""
+"""Storage helpers for statement files and assets.
+
+Provides:
+- PDF upload validation (extension, MIME type, magic bytes).
+- S3 key construction for statement PDFs and JSON payloads.
+- Local disk caching for statement JSON with a configurable TTL.
+- Fetching statement JSON from S3 with transparent cache usage.
+"""
 
 import json
 import os
@@ -11,14 +18,19 @@ from botocore.exceptions import BotoCoreError, ClientError
 from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, s3_client
 from logger import logger
 
+# region Constants
+
 # MIME/extension guards for uploads
 ALLOWED_EXTENSIONS = {".pdf", ".PDF"}
-
 
 PDF_MAGIC = b"%PDF-"
 
 # TTL for cached statement JSON files (seconds).
 STATEMENT_CACHE_TTL_SECONDS = 900  # 15 minutes
+
+# endregion
+
+# region Upload validation
 
 
 def is_allowed_pdf(filename: str, mimetype: str, stream: Any = None) -> bool:
@@ -45,6 +57,11 @@ def is_allowed_pdf(filename: str, mimetype: str, stream: Any = None) -> bool:
             return False
 
     return True
+
+
+# endregion
+
+# region S3 key construction
 
 
 def _clean_key_segment(value: str | None, label: str) -> str:
@@ -74,6 +91,11 @@ def statement_json_s3_key(tenant_id: str, statement_id: str) -> str:
     return _statement_s3_key(tenant_id, statement_id, ".json")
 
 
+# endregion
+
+# region S3 upload
+
+
 def upload_statement_to_s3(fs_like: Any, key: str) -> bool:
     """Upload a file-like object (PDF or JSON stream) to S3.
 
@@ -93,6 +115,11 @@ def upload_statement_to_s3(fs_like: Any, key: str) -> bool:
     except (BotoCoreError, ClientError) as e:
         logger.exception("Failed to upload to S3", key=key, error=e)
         return False
+
+
+# endregion
+
+# region Statement JSON cache
 
 
 class StatementJSONNotFoundError(Exception):
@@ -191,3 +218,6 @@ def fetch_json_statement(tenant_id: str, bucket: str, json_key: str) -> dict[str
     _write_statement_cache(cache_path, data)
 
     return data
+
+
+# endregion

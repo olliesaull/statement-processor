@@ -1,4 +1,14 @@
-"""Auth and session helpers for the statement processor service."""
+"""Auth and session helpers for the statement processor service.
+
+Provides:
+- Xero OAuth token management (get/save, client factory).
+- Cookie consent and session helpers.
+- Decorator stack for protecting Flask routes:
+    xero_token_required  — validates token expiry; redirects or 401s.
+    active_tenant_required — ensures a tenant is selected.
+    block_when_loading   — blocks routes while the tenant is loading.
+    route_handler_logging — structured audit-trail log entry.
+"""
 
 import time
 from collections.abc import Callable
@@ -16,6 +26,8 @@ from config import CLIENT_ID, CLIENT_SECRET
 from logger import logger
 from tenant_data_repository import TenantStatus
 from utils.tenant_status import get_tenant_status
+
+# region Constants
 
 SCOPES = [
     "offline_access",
@@ -36,6 +48,10 @@ _XERO_TOKEN_FIELDS = {"access_token", "refresh_token", "expires_in", "expires_at
 COOKIE_CONSENT_COOKIE_NAME = "cookie_consent"
 SESSION_IS_SET_COOKIE_NAME = "session_is_set"
 SESSION_IS_SET_COOKIE_MAX_AGE_SECONDS = 31 * 60
+
+# endregion
+
+# region Token helpers
 
 
 def _sanitize_xero_token(token: dict | None) -> dict | None:
@@ -109,6 +125,11 @@ def get_xero_api_client(oauth_token: dict | None = None) -> AccountingApi:
     return AccountingApi(api_client)
 
 
+# endregion
+
+# region Cookie and session helpers
+
+
 def scope_str() -> str:
     """Build the Xero OAuth scope string.
 
@@ -159,6 +180,11 @@ def clear_session_is_set_cookie(response: Response) -> Response:
     """
     response.delete_cookie(key=SESSION_IS_SET_COOKIE_NAME, path="/")
     return response
+
+
+# endregion
+
+# region Auth exceptions
 
 
 class RedirectToLogin(HTTPException):
@@ -229,6 +255,11 @@ def raise_for_unauthorized(error: Exception) -> None:
         if status_code in {401, 403}:
             logger.info("Xero API returned unauthorized/forbidden; redirecting to login", status_code=status_code)
             raise RedirectToLogin()
+
+
+# endregion
+
+# region Route decorators
 
 
 def xero_token_required(f: Callable[..., Any]) -> Callable[..., Any]:
@@ -378,3 +409,6 @@ def route_handler_logging(function: Callable[..., Any]) -> Callable[..., Any]:
         return function(*args, **kwargs)
 
     return decorator
+
+
+# endregion

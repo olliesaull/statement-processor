@@ -20,7 +20,6 @@ from utils.statement_view import (
     _filter_display_headers,
     _find_item_number_header,
     _format_statement_value,
-    _get_separators_from_data,
     _is_payment_reference,
     _mark_invoice_used,
     _matches_patterns,
@@ -417,19 +416,6 @@ class TestFindItemNumberHeader:
         headers = ["Date", "Amount"]
         h2f = {"Date": "date", "Amount": "total"}
         assert _find_item_number_header(headers, h2f) is None
-
-
-# ---------------------------------------------------------------------------
-# _get_separators_from_data
-# ---------------------------------------------------------------------------
-class TestGetSeparatorsFromData:
-    """Always returns standard dot-decimal, comma-thousands."""
-
-    def test_returns_standard_separators(self) -> None:
-        assert _get_separators_from_data({}) == (".", ",")
-
-    def test_ignores_data_contents(self) -> None:
-        assert _get_separators_from_data({"decimal": ",", "thousands": "."}) == (".", ",")
 
 
 # ---------------------------------------------------------------------------
