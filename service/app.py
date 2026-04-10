@@ -24,6 +24,7 @@ from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, Paymen
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
 from pricing_config import MAX_TOKENS, MIN_TOKENS, PricingConfig
+from statement_view_cache import cache_statement_view, get_cached_statement_view, invalidate_statement_view_cache
 from stripe_repository import StripeRepository
 from stripe_service import StripeService
 from sync import check_load_required, sync_data
@@ -538,9 +539,10 @@ def upload_statements():
     tenant_id = session.get("xero_tenant_id")
 
     contacts_list, contact_lookup = _get_active_contacts_for_upload()
+    available_pages = TenantBillingRepository.get_tenant_token_balance(tenant_id)
     success_count: int | None = None
     error_messages: list[str] = []
-    logger.info("Rendering upload statements", tenant_id=tenant_id, available_contacts=len(contacts_list))
+    logger.info("Rendering upload statements", tenant_id=tenant_id, available_contacts=len(contacts_list), available_pages=available_pages)
 
     if request.method == "POST":
         uploads_ok = _handle_upload_statements_post(tenant_id, contact_lookup=contact_lookup, error_messages=error_messages)
@@ -549,7 +551,7 @@ def upload_statements():
             success_count = uploads_ok
         logger.info("Upload statements processed", tenant_id=tenant_id, succeeded=uploads_ok, errors=list(error_messages))
 
-    return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages)
+    return render_template("upload_statements.html", contacts=contacts_list, success_count=success_count, error_messages=error_messages, available_pages=available_pages)
 
 
 @app.route("/instructions")
@@ -1250,12 +1252,12 @@ def statement(statement_id: str):
     page_heading = contact_name or f"Statement {statement_id}"  # TODO: Could page heading include statement filename instead of statement_id? StatementID is useless for customer
 
     if request.method == "POST":
-        # TODO: This function forces the entire page to re-render when an event occurs (hide/show payments, mark complete/incomplete, etc) - that is slow for large statements
+        # Invalidate cached view data so the fall-through re-render picks up
+        # the new item status from DynamoDB.
+        invalidate_statement_view_cache(tenant_id, statement_id)
         response = _handle_statement_post_actions(tenant_id=tenant_id, statement_id=statement_id, form=request.form, items_view=items_view, show_payments=show_payments, page=page_param)
         if response is not None:
             return response
-
-    json_statement_key = statement_json_s3_key(tenant_id, statement_id)
 
     contact_id = record.get("ContactID")
     is_completed = str(record.get("Completed", "")).lower() == "true"
@@ -1267,18 +1269,55 @@ def statement(statement_id: str):
         "show_payments": show_payments,
         "is_completed": is_completed,
     }
-    try:
-        data = fetch_json_statement(tenant_id=tenant_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
-    except StatementJSONNotFoundError:
-        reservation_status = str(record.get("TokenReservationStatus") or "").strip().lower()
-        if reservation_status == "released":
-            logger.info("Statement processing failed; JSON missing after release", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
-            # Best-effort read-repair: ensure ProcessingStage reflects failure.
-            repair_processing_stage(tenant_id, statement_id)
+
+    # Check Redis cache — HTMX swaps (filter/pagination) can skip the entire
+    # build pipeline if the view data was cached on the initial page load.
+    # Excel downloads need intermediate pipeline data, so skip the cache.
+    cached_view = get_cached_statement_view(tenant_id, statement_id) if request.args.get("download") != "xlsx" else None
+
+    if cached_view is not None:
+        # Cache hit: skip S3 fetch, Xero data load, matching, classification,
+        # and row building. Go straight to filtering + pagination.
+        statement_rows = cached_view["statement_rows"]
+        display_headers = cached_view["display_headers"]
+    else:
+        # Cache miss: run the full build pipeline.
+        json_statement_key = statement_json_s3_key(tenant_id, statement_id)
+
+        try:
+            data = fetch_json_statement(tenant_id=tenant_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
+        except StatementJSONNotFoundError:
+            reservation_status = str(record.get("TokenReservationStatus") or "").strip().lower()
+            if reservation_status == "released":
+                logger.info("Statement processing failed; JSON missing after release", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
+                # Best-effort read-repair: ensure ProcessingStage reflects failure.
+                repair_processing_stage(tenant_id, statement_id)
+                return render_template(
+                    "statement.html",
+                    is_processing=False,
+                    processing_failed=True,
+                    incomplete_count=0,
+                    completed_count=0,
+                    all_statement_rows=[],
+                    statement_rows=[],
+                    raw_statement_headers=[],
+                    has_payment_rows=False,
+                    **base_context,
+                )
+            # S3 JSON existence is the source of truth for "done vs not done".
+            # ProcessingStage/ProcessingProgress enrich the processing UI only.
+            # See plans/2026-04-08-extraction-progress-tracking-design.md for rationale.
+            logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
+            processing_stage = str(record.get("ProcessingStage") or "").strip().lower()
+            processing_progress = record.get("ProcessingProgress")  # e.g. "3/10" or None
+            processing_total_sections = record.get("ProcessingTotalSections")  # e.g. 10 or None
             return render_template(
                 "statement.html",
-                is_processing=False,
-                processing_failed=True,
+                is_processing=True,
+                processing_failed=False,
+                processing_stage=processing_stage,
+                processing_progress=processing_progress,
+                processing_total_sections=processing_total_sections,
                 incomplete_count=0,
                 completed_count=0,
                 all_statement_rows=[],
@@ -1287,109 +1326,90 @@ def statement(statement_id: str):
                 has_payment_rows=False,
                 **base_context,
             )
-        # S3 JSON existence is the source of truth for "done vs not done".
-        # ProcessingStage/ProcessingProgress enrich the processing UI only.
-        # See plans/2026-04-08-extraction-progress-tracking-design.md for rationale.
-        logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
-        processing_stage = str(record.get("ProcessingStage") or "").strip().lower()
-        processing_progress = record.get("ProcessingProgress")  # e.g. "3/10" or None
-        processing_total_sections = record.get("ProcessingTotalSections")  # e.g. 10 or None
-        return render_template(
-            "statement.html",
-            is_processing=True,
-            processing_failed=False,
-            processing_stage=processing_stage,
-            processing_progress=processing_progress,
-            processing_total_sections=processing_total_sections,
-            incomplete_count=0,
-            completed_count=0,
-            all_statement_rows=[],
-            statement_rows=[],
-            raw_statement_headers=[],
-            has_payment_rows=False,
-            **base_context,
+
+        # 1) Parse display configuration and left-side rows.
+        #    Header mapping, date format, and number separators are now embedded
+        #    in the S3 JSON by the Bedrock extraction pipeline (no DynamoDB config lookup).
+        items: list[StatementItemPayload] = data.get("statement_items", []) or []
+        display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, statement_data=data)
+
+        # 2) Fetch Xero documents and classify each statement item
+        invoices: list[XeroDocumentPayload] = get_invoices_by_contact(contact_id) or []
+        credit_notes: list[XeroDocumentPayload] = get_credit_notes_by_contact(contact_id) or []
+        payments: list[XeroDocumentPayload] = get_payments_by_contact(contact_id) or []
+        logger.info("Fetched Xero documents", statement_id=statement_id, contact_id=contact_id, invoices=len(invoices), credit_notes=len(credit_notes), payments=len(payments))
+
+        docs_for_matching = invoices + credit_notes
+        matched_invoice_to_statement_item: MatchedInvoiceMap = match_invoices_to_statement_items(
+            items=items, rows_by_header=rows_by_header, item_number_header=item_number_header, invoices=docs_for_matching
         )
 
-    # 1) Parse display configuration and left-side rows.
-    #    Header mapping, date format, and number separators are now embedded
-    #    in the S3 JSON by the Bedrock extraction pipeline (no DynamoDB config lookup).
-    items: list[StatementItemPayload] = data.get("statement_items", []) or []
-    display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, statement_data=data)
+        matched_numbers: set[str] = {key for key in matched_invoice_to_statement_item if isinstance(key, str)}
+        match_by_item_id = _build_match_by_item_id(matched_invoice_to_statement_item)
+        payment_number_map = _build_payment_number_map(invoices, payments)
 
-    # 2) Fetch Xero documents and classify each statement item
-    invoices: list[XeroDocumentPayload] = get_invoices_by_contact(contact_id) or []
-    credit_notes: list[XeroDocumentPayload] = get_credit_notes_by_contact(contact_id) or []
-    payments: list[XeroDocumentPayload] = get_payments_by_contact(contact_id) or []
-    logger.info("Fetched Xero documents", statement_id=statement_id, contact_id=contact_id, invoices=len(invoices), credit_notes=len(credit_notes), payments=len(payments))
-
-    docs_for_matching = invoices + credit_notes
-    matched_invoice_to_statement_item: MatchedInvoiceMap = match_invoices_to_statement_items(
-        items=items, rows_by_header=rows_by_header, item_number_header=item_number_header, invoices=docs_for_matching
-    )
-
-    matched_numbers: set[str] = {key for key in matched_invoice_to_statement_item if isinstance(key, str)}
-    match_by_item_id = _build_match_by_item_id(matched_invoice_to_statement_item)
-    payment_number_map = _build_payment_number_map(invoices, payments)
-
-    item_types, classification_updates = _classify_statement_items(
-        items=items,
-        rows_by_header=rows_by_header,
-        item_number_header=item_number_header,
-        header_mapping=data.get("header_mapping", {}),
-        matched_invoice_to_statement_item=matched_invoice_to_statement_item,
-        matched_numbers=matched_numbers,
-        match_by_item_id=match_by_item_id,
-        payment_number_map=payment_number_map,
-        statement_id=statement_id,
-    )
-
-    _persist_classification_updates(data=data, statement_id=statement_id, tenant_id=tenant_id, json_statement_key=json_statement_key, classification_updates=classification_updates)
-
-    # 3) Build right-hand rows from the matched invoices
-    right_rows_by_header = build_right_rows(
-        rows_by_header=rows_by_header,
-        display_headers=display_headers,
-        header_to_field=header_to_field,
-        matched_map=matched_invoice_to_statement_item,
-        item_number_header=item_number_header,
-        date_format=data.get("date_format"),
-    )
-
-    # 4) Compare LEFT (statement) vs RIGHT (Xero) for per-cell indicators
-    row_comparisons = build_row_comparisons(left_rows=rows_by_header, right_rows=right_rows_by_header, display_headers=display_headers, header_to_field=header_to_field)
-    # Row highlight: if this row is linked to a Xero document (exact or substring),
-    # consider the row a "match" for coloring purposes even if some cells differ.
-    row_matches = _build_row_matches(rows_by_header, item_number_header, matched_invoice_to_statement_item, row_comparisons)
-
-    item_status_map = get_statement_item_status_map(tenant_id, statement_id)
-
-    if request.args.get("download") == "xlsx":
-        return _build_statement_excel_response(
-            display_headers=display_headers,
+        item_types, classification_updates = _classify_statement_items(
+            items=items,
             rows_by_header=rows_by_header,
-            right_rows_by_header=right_rows_by_header,
+            item_number_header=item_number_header,
+            header_mapping=data.get("header_mapping", {}),
+            matched_invoice_to_statement_item=matched_invoice_to_statement_item,
+            matched_numbers=matched_numbers,
+            match_by_item_id=match_by_item_id,
+            payment_number_map=payment_number_map,
+            statement_id=statement_id,
+        )
+
+        _persist_classification_updates(data=data, statement_id=statement_id, tenant_id=tenant_id, json_statement_key=json_statement_key, classification_updates=classification_updates)
+
+        # 3) Build right-hand rows from the matched invoices
+        right_rows_by_header = build_right_rows(
+            rows_by_header=rows_by_header,
+            display_headers=display_headers,
+            header_to_field=header_to_field,
+            matched_map=matched_invoice_to_statement_item,
+            item_number_header=item_number_header,
+            date_format=data.get("date_format"),
+        )
+
+        # 4) Compare LEFT (statement) vs RIGHT (Xero) for per-cell indicators
+        row_comparisons = build_row_comparisons(left_rows=rows_by_header, right_rows=right_rows_by_header, display_headers=display_headers, header_to_field=header_to_field)
+        # Row highlight: if this row is linked to a Xero document (exact or substring),
+        # consider the row a "match" for coloring purposes even if some cells differ.
+        row_matches = _build_row_matches(rows_by_header, item_number_header, matched_invoice_to_statement_item, row_comparisons)
+
+        item_status_map = get_statement_item_status_map(tenant_id, statement_id)
+
+        if request.args.get("download") == "xlsx":
+            return _build_statement_excel_response(
+                display_headers=display_headers,
+                rows_by_header=rows_by_header,
+                right_rows_by_header=right_rows_by_header,
+                row_comparisons=row_comparisons,
+                row_matches=row_matches,
+                item_types=item_types,
+                items=items,
+                item_number_header=item_number_header,
+                matched_invoice_to_statement_item=matched_invoice_to_statement_item,
+                item_status_map=item_status_map,
+                record=record,
+                statement_id=statement_id,
+                tenant_id=tenant_id,
+            )
+
+        statement_rows = _build_statement_rows(
+            rows_by_header=rows_by_header,
             row_comparisons=row_comparisons,
             row_matches=row_matches,
-            item_types=item_types,
             items=items,
+            item_types=item_types,
+            item_status_map=item_status_map,
             item_number_header=item_number_header,
             matched_invoice_to_statement_item=matched_invoice_to_statement_item,
-            item_status_map=item_status_map,
-            record=record,
-            statement_id=statement_id,
-            tenant_id=tenant_id,
         )
 
-    statement_rows = _build_statement_rows(
-        rows_by_header=rows_by_header,
-        row_comparisons=row_comparisons,
-        row_matches=row_matches,
-        items=items,
-        item_types=item_types,
-        item_status_map=item_status_map,
-        item_number_header=item_number_header,
-        matched_invoice_to_statement_item=matched_invoice_to_statement_item,
-    )
+        # Store in Redis so subsequent HTMX swaps skip the pipeline.
+        cache_statement_view(tenant_id, statement_id, {"statement_rows": statement_rows, "display_headers": display_headers})
 
     completed_count = sum(1 for row in statement_rows if row["is_completed"])
     incomplete_count = len(statement_rows) - completed_count
@@ -1433,7 +1453,6 @@ def statement(statement_id: str):
         "raw_statement_headers": display_headers,
         "statement_rows": visible_rows,
         "all_statement_rows": statement_rows,
-        "row_comparisons": row_comparisons,
         "completed_count": completed_count,
         "incomplete_count": incomplete_count,
         "has_payment_rows": has_payment_rows,

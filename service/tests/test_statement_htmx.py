@@ -69,6 +69,11 @@ def client(_app, monkeypatch):
     monkeypatch.setattr(app_module, "get_statement_item_status_map", lambda *a, **kw: {})
     monkeypatch.setattr(app_module, "_persist_classification_updates", lambda **kw: None)
 
+    # Stub statement view cache — always miss so the pipeline runs.
+    monkeypatch.setattr(app_module, "get_cached_statement_view", lambda *a, **kw: None)
+    monkeypatch.setattr(app_module, "cache_statement_view", lambda *a, **kw: None)
+    monkeypatch.setattr(app_module, "invalidate_statement_view_cache", lambda *a, **kw: None)
+
     with _app.test_client() as c:
         with c.session_transaction() as sess:
             sess["xero_tenant_id"] = TENANT_ID
