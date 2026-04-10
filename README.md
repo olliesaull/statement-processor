@@ -1,28 +1,53 @@
 # Statement Processor
 
 ## Repository Structure
-- Major domains (top‑level directories):
-  - `cdk/`: Infrastructure‑as‑code for provisioning AWS resources (CDK app and stacks).
-  - `lambda_functions/`: Lambda/container workloads; hosts the Extraction Lambda and the Tenant Erasure Lambda.
-  - `service/`: Flask service, web assets, and service‑level tests.
-  - `scripts/`: One‑off utilities and operational scripts (e.g. data maintenance, sample artefacts).
+
+- Major domains (top-level directories):
+  - `cdk/`: Infrastructure-as-code for provisioning AWS resources (CDK app and stacks).
+  - `common/`: Shared Python package (`statement_processor_common`) with models, types, and enums. Installed locally as editable (`pip install -e common/`) during development; copied into Docker images for Lambda and service deployments.
+  - `lambda_functions/`: Lambda/container workloads; hosts the Extraction Lambda and the Tenant Erasure Lambda. Both depend on `common/` for shared models.
+  - `service/`: Flask service, web assets, and service-level tests. Depends on `common/` for shared models.
+  - `scripts/`: One-off utilities and operational scripts (e.g. data maintenance, sample artefacts).
+
 - Shared libraries (internal to this repo):
-  - `service/core` and `service/utils`: shared domain logic and helpers for the Flask service.
-  - `lambda_functions/extraction_lambda/core`: shared extraction, transformation, and validation logic for the Extraction Lambda.
-  - `lambda_functions/tenant_erasure_lambda/`: scheduled Lambda that erases data for disconnected tenants past their erasure deadline.
+  - `common/`: Shared Python package exported as `statement_processor_common`. Contains:
+    - `enums.py` — Production enums (`ProcessingStage`, `TokenReservationStatus`, `TokenMutationType`).
+    - `models.py` — Shared dataclass/TypedDict types used across service and Lambda.
+    - `types.py` — Type aliases and protocol definitions.
+  - `service/core` and `service/utils`: Service-specific domain logic and helpers.
+  - `lambda_functions/extraction_lambda/core`: Extraction Lambda logic.
+  - `lambda_functions/tenant_erasure_lambda/`: Tenant erasure Lambda.
+
 - Directory tree (excluding `.git`, `venv`, `__pycache__`, `node_modules`, and build artefacts):
+
 ```text
 .
 ├── AGENTS.md
+├── CLAUDE.md
 ├── Makefile
 ├── README.md
 ├── update_dependencies.sh
+├── agent_docs/
+│   ├── browser_testing.md
+│   ├── documentation.md
+│   ├── project.md
+│   ├── python_style.md
+│   ├── testing.md
+│   └── security.md
 ├── cdk/
 │   ├── app.py
 │   ├── requirements.txt
 │   └── stacks/
 │       ├── __init__.py
 │       └── statement_processor.py
+├── common/
+│   ├── setup.py
+│   ├── src/
+│   │   ├── __init__.py
+│   │   ├── enums.py
+│   │   ├── models.py
+│   │   └── types.py
+│   └── statement_processor_common.egg-info/
 ├── lambda_functions/
 │   ├── tenant_erasure_lambda/
 │   │   ├── Dockerfile
@@ -45,7 +70,6 @@
 │       ├── pyproject.toml
 │       ├── requirements.txt
 │       ├── requirements-dev.txt
-│       ├── run_static_checks.sh
 │       ├── core/
 │       │   ├── __init__.py
 │       │   ├── billing.py
@@ -77,12 +101,18 @@
 │   │   ├── move_statement_img.sh
 │   │   ├── requirements.txt
 │   │   └── sample_statement.png
+│   ├── manual_token_adjustment/
+│   │   ├── manual_token_adjustment.py
+│   │   └── requirements.txt
 │   ├── populate_xero/
 │   │   ├── populate_xero.py
 │   │   └── requirements.txt
 │   ├── replace_textract_test/
 │   │   ├── run.py
 │   │   ├── system_prompt.md
+│   │   └── requirements.txt
+│   ├── tenant_snapshot/
+│   │   ├── tenant_snapshot.py
 │   │   └── requirements.txt
 │   └── update-vendor-assets.sh
 └── service/
@@ -98,8 +128,11 @@
     ├── requirements-dev.txt
     ├── run_as_container.sh
     ├── statement_view_cache.py
+    ├── stripe_service.py
+    ├── stripe_repository.py
     ├── sync.py
     ├── tenant_data_repository.py
+    ├── tenant_billing_repository.py
     ├── xero_repository.py
     ├── core/
     │   ├── __init__.py
@@ -124,6 +157,8 @@
     │   └── tests/
     ├── static/
     │   └── assets/
+    │       ├── css/
+    │       ├── js/
     │       └── vendor/
     ├── templates/
     ├── tests/
@@ -136,12 +171,15 @@
         ├── statement_detail.py
         ├── statement_upload.py
         ├── statement_view.py
+        ├── statement_excel_export.py
+        ├── statement_rows.py
         ├── storage.py
         ├── tenant_status.py
         └── workflows.py
 ```
 
 ## Major constructs and resources (from `cdk/stacks/statement_processor.py`)
+
 - **DynamoDB tables**
   - `TenantStatementsTable` (`tenant_statements_table`): statement‑level records; GSIs `TenantIDCompletedIndex` and `TenantIDStatementItemIDIndex` support filtering by completion status and per‑item lookups (see inline comments).
   - ~~`TenantContactsConfigTable`~~: **Removed.** Previously stored per-contact column mappings. Now redundant because Bedrock returns self-describing statement JSON with embedded metadata (`header_mapping`, `date_format`, etc.).
@@ -280,130 +318,220 @@ python3.13 scripts/accuracy_test/run_accuracy_test.py
 ### Bedrock model access
 The Bedrock Converse API requires model access to be enabled in the AWS console. The EU cross-region inference profile `eu.anthropic.claude-haiku-4-5-20251001-v1:0` must be enabled in the deployment region. This is a manual console step — CDK only grants the IAM permissions.
 
+## Shared Package (Common)
+
+### Purpose
+The `common/` directory exports a Python package (`statement_processor_common`) containing shared models, enums, and types used across the service and Lambda functions. This ensures consistent data definitions and type safety across runtimes.
+
+### Structure
+- `src/enums.py` — Production enums:
+  - `ProcessingStage` — statement extraction progress (`queued`, `chunking`, `extracting`, `post_processing`, `complete`, `failed`).
+  - `TokenReservationStatus` — billing reservation state (`reserved`, `consumed`, `released`).
+  - `TokenMutationType` — ledger mutation type (`RESERVE`, `CONSUME`, `RELEASE`, `ADJUSTMENT`).
+- `src/models.py` — Dataclass and TypedDict types for statement data, billing models, and internal structures.
+- `src/types.py` — Type aliases and protocol definitions.
+
+### Installation and usage
+
+**Local development** (editable install):
+```bash
+pip install -e common/
+```
+
+**Docker images** (non-editable install):
+- `service/Dockerfile` and `lambda_functions/extraction_lambda/Dockerfile` both include:
+  ```dockerfile
+  COPY common/ /app/common/
+  RUN pip install common/
+  ```
+- The package is copied into the image and installed without the `-e` flag so that the Docker image is self-contained and does not depend on a volume-mounted source tree.
+
+### Why separate?
+1. **Decoupling**: Extraction Lambda and service both depend on common models, but development can happen independently.
+2. **Type safety**: Shared dataclasses and TypedDict ensure consistent field names and types across codebases.
+3. **Single source of truth**: Enums like `ProcessingStage` and `TokenMutationType` are defined once and used everywhere, preventing sync errors.
+4. **Package boundary**: Future billing or reporting services can import `statement_processor_common` without pulling in Flask or extraction dependencies.
+
+### Design decisions
+
+**Dataclass vs Pydantic**
+- **Pydantic** is used for external input validation (e.g., request bodies, API responses). Pydantic's error reporting and type coercion are valuable when accepting untrusted data.
+- **Dataclass** is used for internal value objects and contracts between modules (e.g., extracted statement rows, billing ledger entries). Dataclasses are lighter-weight and serve as clear, immutable value containers without the overhead of validation.
+- **TypedDict** is used for dict-shaped data that flows through JSON serialization (e.g., statement JSON from Bedrock, DynamoDB items). TypedDict provides type hints without runtime overhead.
+
+**No external validation**
+`common/` has no dependencies beyond the Python stdlib. This keeps it lightweight and avoids pulling in validation frameworks into Lambda execution environments.
+
 ## Flask Service
 
-- **App structure**
-  - Main application: `service/app.py` (Flask app creation, config, CSRF, session, OAuth, Blueprint registration, error handlers, context processors).
-  - Route Blueprints: `service/routes/` (7 Blueprint modules organized by domain -- public, seo, auth, tenants, statements, billing, api). See `agent_docs/project.md` for the full Blueprint table.
-  - Templates and UI assets: `service/templates/` (Jinja2 views) and `service/static/` (static assets). See **Frontend Design System** below for details on the CSS architecture.
+### Application structure
+
+- **Main application** (`service/app.py`, ~297 lines)
+  - Flask app creation, configuration (session, CSRF, OAuth, logging).
+  - Blueprint registration and Flask-Session setup with Redis backend.
+  - Error handlers (CSRF, 404, 500) and context processors (banners, CSS variables).
+  - Shared helper functions: `_set_active_tenant`, `_trigger_initial_sync_if_required`, `_absolute_app_url`, `_extract_csrf_from_json_body`, `_is_htmx_request`.
+  - Authentication flow: `/login`, `/logout`, `/callback`, `/test-login` (dev-only).
+  - Tenant management: `/tenant_management`, `/tenants/select`, `/tenants/disconnect`.
+  - Statement flow: `/statements`, `/statement/<id>`, `/upload-statements`, `/statement/<id>/delete`.
+  - Billing flow: `/buy-pages`, `/checkout/success`, `/checkout/cancel`, `/checkout/failed`.
+  - API endpoints: `/api/tenant-statuses`, `/api/tenants/<id>/sync`, `/api/upload-statements/preflight`, `/api/checkout/create`, `/api/banner/dismiss`.
+
+- **Route Blueprints** (`service/routes/`, 7 modules organized by domain)
+  - See **Blueprint architecture** section below for full table and responsibilities.
+
+- **Templates and UI assets**
+  - `service/templates/` (Jinja2 views) and `service/static/` (static assets).
+  - See **Frontend Design System** below for CSS architecture.
   - Frontend design reference: static mockups in `new-design/` (index.html, about.html, instructions.html, styles.css) served as the design source of truth during the UI overhaul.
-  - Configuration + AWS clients: `service/config.py` (environment-variable loading, boto3 clients/resources).
-    - `service/config.py` now uses a local `get_envar(...)` helper that mirrors the Numerint Flask app: required env vars fail fast during import, while a small set of local-development defaults (`DOMAIN_NAME`, `STAGE`, `VALKEY_URL`) remain explicit. AWS clients/resources are now created directly via `boto3.client(...)` / `boto3.resource(...)` rather than a custom `boto3.session.Session(...)`. Rationale: this matches the working Numerint pattern, removes conditional session logic, and makes missing runtime configuration obvious during worker startup.
-  - Container startup: `service/start.sh` (manages Nginx, Gunicorn, and Valkey).
-    - Nginx reverse proxy listens on port 8080 and forwards to Gunicorn via Unix socket (`/tmp/flask.sock`).
-    - When `STAGE=prod`, `start.sh` injects CloudFront protection (`X-Statement-CF` header check) and disables `/static/` serving (CloudFront/S3 handles it).
-    - See **Nginx Reverse Proxy** section below for maintenance details.
-    - Gunicorn now writes both access logs and error logs to stdout (`--access-logfile - --error-logfile -`). Rationale: App Runner deployment failures were previously only visible as generic service rollbacks, so emitting request-path logs gives direct evidence about whether health checks reach Gunicorn and whether Flask ever returns a response.
-  - Logging: `service/logger.py` (structured logger used across modules).
-  - Session/auth wiring: Redis-backed server-side sessions in `service/app.py` using Flask-Session + Valkey/ElastiCache.
-    - Tenant sync-status checks are read directly from DynamoDB via `service/utils/tenant_status.py` for consistent cross-instance behavior.
 
-- **Main modules/packages**
-  - `service/core/`: domain models and logic (e.g. `item_classification.py`, `models.py`). The config-related modules (`contact_config_metadata.py`, `get_contact_config.py`, `config_suggestion.py`, `bedrock_client.py`, `date_disambiguation.py`) have been removed.
-  - `service/utils/`: cross-cutting utilities:
-    - Auth/session helpers: `service/utils/auth.py`
-    - Checkout helpers: `service/utils/checkout.py` — billing validation, Stripe customer resolution, checkout session creation, and token crediting. Extracted from `app.py` to keep checkout routes thin.
-    - DynamoDB access: `service/utils/dynamo.py`
-    - S3 keying + uploads: `service/utils/storage.py`
-    - Step Functions start: `service/utils/workflows.py`
-    - Statement detail helpers: `service/utils/statement_detail.py` — the full statement build pipeline (classification, matching, row building, Excel export). Extracted from `app.py` so the route file only handles request/response flow.
-    - Statement upload helpers: `service/utils/statement_upload.py` — token reservation, S3 upload, and extraction workflow startup. Extracted from `app.py` to separate upload orchestration from route handling.
-    - Statement view/matching logic: `service/utils/statement_view.py`
-    - Statement Excel export assembly: `service/utils/statement_excel_export.py`
-      - Builds XLSX payload bytes, worksheet styling (match/mismatch/anomaly + completed variants), mismatch borders, legend sheet, and download filename metadata.
-      - `service/utils/statement_detail.py` wraps the payload in a Flask response via `build_statement_excel_response`.
-    - Shared statement row helpers: `service/utils/statement_rows.py`
-      - Centralizes row item-type labeling (`invoice` -> `INV`, etc.) and Xero ID lookup from matched row payloads.
-      - Reused by both HTML row-building and Excel export paths to keep link/label behavior aligned.
-    - Formatting/helpers: `service/utils/formatting.py`, `service/utils/tenant_status.py`
-  - Stripe integration: `service/stripe_service.py` and `service/stripe_repository.py`
-    - `service/stripe_service.py` — all Stripe SDK calls (`stripe.Customer.create`, `stripe.checkout.Session.create/retrieve`). Uses dynamic `price_data` (not fixed Price objects) because token count is a free-form integer; the single Stripe Product (`prod_UBMoFkqStKFcjg`) is referenced by `STRIPE_PRODUCT_ID` env var so purchase history is attributed correctly in Stripe reporting. A fresh Stripe Customer is created per checkout with the user-provided billing details so each invoice reflects exactly what was entered for that purchase.
-    - `service/stripe_repository.py` — DynamoDB ops for checkout state: idempotency records on `StripeEventStoreTable` only. Imports pre-constructed table objects from `service/config.py` (consistent with all other repositories) rather than constructing its own `ddb.Table` instances.
-  - Banner system: `service/banner_service.py` (see **Banner system** below)
-  - Xero integration + caching: `service/xero_repository.py`
-  - Background sync job: `service/sync.py`
-  - Tenant metadata: `service/tenant_data_repository.py`
-  - Tests: `service/tests/`, `service/playwright_tests/`
+- **Configuration + AWS clients** (`service/config.py`)
+  - `service/config.py` now uses a local `get_envar(...)` helper that mirrors the Numerint Flask app: required env vars fail fast during import, while a small set of local-development defaults (`DOMAIN_NAME`, `STAGE`, `VALKEY_URL`) remain explicit.
+  - AWS clients/resources are created directly via `boto3.client(...)` / `boto3.resource(...)` rather than a custom `boto3.session.Session(...)`. Rationale: this matches the working Numerint pattern, removes conditional session logic, and makes missing runtime configuration obvious during worker startup.
 
-- **Stage-aware local cache path** (`service/config.py`)
-  - `LOCAL_DATA_DIR` is the base directory for cached Xero datasets (`contacts.json`, `invoices.json`, `payments.json`, `credit_notes.json`) that are written by `service/sync.py` and read by `service/xero_repository.py`.
-  - When `STAGE` is `dev` or `local`, the base path is `./tmp/data` (relative to the current working directory, typically `service/`), so tenant files land under `service/tmp/data/<tenant_id>/...`.
-  - For any other stage (including prod), the base path is `/tmp/data` on the host filesystem.
-  - If a local dataset is missing, `service/xero_repository.py:load_local_dataset` downloads from S3 and stores it under the same base path.
+- **Container startup** (`service/start.sh`)
+  - Manages Nginx, Gunicorn, and Valkey (Redis).
+  - Nginx reverse proxy listens on port 8080 and forwards to Gunicorn via Unix socket (`/tmp/flask.sock`).
+  - When `STAGE=prod`, injects CloudFront protection (`X-Statement-CF` header check) and disables `/static/` serving (CloudFront/S3 handles it).
+  - See **Nginx Reverse Proxy** section below for maintenance details.
+  - Gunicorn now writes both access logs and error logs to stdout (`--access-logfile - --error-logfile -`). Rationale: App Runner deployment failures were previously only visible as generic service rollbacks, so emitting request-path logs gives direct evidence about whether health checks reach Gunicorn and whether Flask ever returns a response.
+  - Valkey readiness is verified with `valkey-cli ping` before starting Gunicorn instead of relying on a fixed sleep. Rationale: App Runner rollbacks have shown intermittent candidate startup failures, and a real readiness probe removes the race between the local session store binding its socket and the Flask worker starting to accept requests.
 
-- **Key routes/endpoints and purpose** (all in `service/app.py`)
-  - **Core UI**
-    - `/` (GET): landing page (`index`).
-    - `/cookies` (GET): cookie policy + consent page for essential cookies.
-    - `/tenant_management` (GET): tenant picker/overview (requires Xero auth via `@xero_token_required`). The page reads each tenant's `TokenBalance` snapshot from `TenantBillingTable` so the current tenant chip and tenant list both show available tokens without recomputing ledger totals in-request.
-    - `/upload-statements` (GET/POST): upload PDFs and trigger extraction (requires tenant + Xero auth, blocks while loading). The page keeps the lightweight client-side page estimate for instant feedback, but the POST handler now reserves tokens atomically before any S3 upload starts. Reservation writes update `TenantBillingTable`, append `RESERVE` rows to `TenantTokenLedgerTable`, and create the statement header rows with `PdfPageCount`, `ReservationLedgerEntryID`, and `TokenReservationStatus=reserved`. If the web app cannot upload the PDF or start Step Functions after reservation, it immediately releases the reservation and cleans up the statement row again.
-    - `/api/upload-statements/preflight` (POST): authoritative upload validation endpoint used by the upload page before submit. It accepts the currently selected PDFs, counts their pages server-side with `pypdf` (while the browser keeps its own lightweight estimate for instant UX), reads `TenantBillingTable.TokenBalance`, and returns per-file counts plus `total_pages`, `available_tokens`, `shortfall`, and `can_submit`. This exists so the UI can warn about insufficient tokens before the final upload request without trusting the browser-only estimate.
-    - `/statements` (GET): list and sort statements (requires tenant + Xero auth, blocks while loading). Supports server-side pagination via `page` and `per_page` query params (`per_page` snaps to nearest of 25/50/100, default 25). All data is fetched and sorted in memory first (DynamoDB doesn't support arbitrary sort-then-offset), then sliced to the current page before rendering. Pagination controls (prev/next + per-page selector) appear below the table and compactly in the sticky dock; hidden entirely when all items fit on one page. Sorting and view toggles preserve `per_page` but reset to page 1. Delete redirects preserve the full pagination/sort state.
-    - `/statement/<statement_id>` (GET/POST): statement detail view, completion toggles, and XLSX export (requires tenant + Xero auth, blocks while loading). Items are paginated at a fixed 50 per page after filtering (incomplete/completed/all, show/hide payments). Pagination controls appear in both the static footer bar and sticky dock. Changing filters resets to page 1. Completing/incompleting individual items preserves the current page via hidden form fields. Excel export always exports all rows regardless of pagination state. Responsive improvements: a sticky horizontal scrollbar proxy (`#scroll-proxy`) floats at the viewport bottom when the comparison table overflows horizontally, syncing scroll position bidirectionally so users can scroll sideways without reaching the table's native scrollbar at the very bottom. The proxy positions itself above the sticky action dock when both are visible. A landscape orientation tip banner (`.landscape-tip`) appears on phones in portrait mode (≤575.98px) suggesting the user rotate for a better view; it hides automatically in landscape via CSS `orientation` media query.
-    - `/statement/<statement_id>/delete` (POST): delete statement + artefacts (requires tenant + Xero auth, blocks while loading).
-    - ~~`/configs`~~: **Removed.** Contact mapping configuration UI is no longer needed — Bedrock returns self-describing JSON.
-    - `/instructions` (GET): instructions page.
-    - `/about` (GET): non-technical overview page covering product purpose, use cases, outcomes, and practical limits.
-    - **Shared statement row colour system (UI + Excel)**:
-      - Canonical source: `service/core/statement_row_palette.py`.
-      - Base states are `match`, `mismatch`, and `anomaly` with existing row colours.
-      - Completed colours are generated (not hard-coded) by blending each base background toward white via `STATEMENT_ROW_COMPLETED_ALPHA` (default `0.65`), so tuning one value updates both UI and XLSX output.
-      - Completed text colours intentionally stay the same as normal text colours so completed rows remain readable (no text fade).
-      - Flask exposes palette-derived CSS custom properties globally via `service/app.py:_inject_statement_row_palette_css`, and `service/templates/base.html` writes them to `:root`.
-      - Statement table CSS (`service/static/assets/css/main.css`) consumes those variables for both normal and completed rows.
-      - Excel export (`service/utils/statement_excel_export.py`) builds fills from the same palette (`_build_excel_state_fills`) and applies normal vs completed variants per row based on statement item completion status.
-  - **Tenant APIs**
-    - `/api/tenant-statuses` (GET): returns tenant sync statuses for polling UI.
-    - `/api/tenants/<tenant_id>/sync` (POST): triggers background Xero sync for a tenant.
-    - `/api/banner/dismiss` (POST): permanently dismiss a banner for the current tenant. Accepts `{"dismiss_key": "<key>"}` and writes the key to the tenant's `DismissedBanners` set in `TenantDataTable` via `TenantDataRepository.dismiss_banner`. Returns `204` on success.
-    - **Auth behavior for API routes**: When `@xero_token_required` protects a `/api/...` endpoint and the session token is missing or expired, the decorator returns `401` JSON (`{"error": "auth_required"}`) instead of redirecting. The frontend polling/sync code (`service/static/assets/js/tenant-sync.js`) treats either a 401 response or a redirected login response as a signal to navigate to `/login`, so passive actions still force a full re-login.
-  - **Stripe / page purchasing**
-    - `/pricing` (GET): public-facing pricing page — no auth required, shows graduated volume pricing (from £0.08/page).
-    - `/buy-pages` (GET): page amount input form with live graduated price calculator and tenant selector dropdown; requires Xero auth. Accepts optional `?tenant_id=` query param to pre-select a tenant. **UI naming convention:** the user-facing UI says "pages" everywhere, but the backend continues to use "tokens" internally (DynamoDB attributes, ledger entries, variable names, function names, routes). This keeps the billing unit decoupled from the display name — the token-to-page ratio could change in the future.
-    - `/api/checkout/create` (POST): validates billing details, creates or reuses a persistent Stripe Customer per tenant (stored in `TenantBillingTable.StripeCustomerID`), creates a Stripe Checkout Session with graduated pricing from `PricingConfig`, and redirects to Stripe. On first purchase a new Customer is created and its ID persisted; on subsequent purchases the existing Customer's billing details are updated via `stripe.Customer.modify`.
-    - `/checkout/success` (GET): called by Stripe on payment completion with `?session_id=cs_xxx`. Retrieves the session from Stripe, verifies `payment_status == "paid"`, checks idempotency via `StripeEventStoreTable`, credits tokens via `BillingService.adjust_token_balance` with `source="stripe-checkout"`, a deterministic `ledger_entry_id`, and the effective `price_per_token_pence` from graduated pricing. Renders the success page with pages credited and updated balance. Safe to refresh — idempotency check prevents double-crediting.
-    - `/checkout/cancel` (GET): renders a cancellation page with a "Try Again" link; no pages are credited.
-    - `/checkout/failed` (GET): renders an error page with a hex reference ID for support lookup.
-    - **Preflight shortfall link**: when `/api/upload-statements/preflight` returns `shortfall > 0`, the response JSON now includes `buy_tokens_url: "/buy-pages"` so the upload page JS can render a "Buy Pages" link in the red shortfall summary.
-  - **Auth**
-    - `/login` (GET): start Xero OAuth flow.
-    - `/callback` (GET): OAuth callback (token validation + tenant load). For first-time tenants, also grants welcome tokens (see **Welcome token grant** below).
-    - `/logout` (GET): clear session.
-    - `/tenants/select` (POST): set active tenant in session.
-    - `/tenants/disconnect` (POST): disconnect tenant from Xero.
-    - `/test-login` (GET): local-only route — only registered when `STAGE=local`. Seeds the Flask session with fake Xero auth data to bypass the real OAuth flow for browser/Playwright testing. Requires `PLAYWRIGHT_TENANT_ID` and `PLAYWRIGHT_TENANT_NAME` environment variables to be set. On success, redirects to `/tenant_management`. This route is never registered in non-local environments, so it cannot be called in staging or production.
-    - **Cookie consent gate**: Protected routes and `/login` require the browser cookie `cookie_consent=true`. If consent is missing, UI routes redirect to `/cookies`; API routes return `401` JSON with `{"error": "cookie_consent_required", "redirect": "/cookies"}`.
-    - **Session-state UI cookie**: Authenticated UI responses set `session_is_set=true` (short-lived helper cookie) so frontend JavaScript can toggle the final navbar item between `Login` and `Logout` without template-time session checks.
-    - **Server-side auth sessions (Valkey/ElastiCache)**:
-      - Backend/session store now uses Flask-Session with Redis (`SESSION_TYPE='redis'`, `SESSION_REDIS=redis.from_url(VALKEY_URL)`), so browser cookies carry only a signed session identifier while OAuth tokens remain server-side.
-      - The app intentionally uses the same explicit session-config style as Numerint (`app.config[...]` assignments followed by `Session(app)`) for consistency and simpler operational debugging.
-      - `VALKEY_URL` (default `redis://127.0.0.1:6379/0`) is loaded from environment in `service/config.py`; production deployments should point it at the ElastiCache/Valkey endpoint.
-      - Cookie controls remain configured in `service/app.py`: `SESSION_COOKIE_SECURE` (conditional — `True` in all environments except `local`, where it is `False` to allow plain HTTP on localhost; without this the browser silently drops the session cookie over HTTP and every request appears unauthenticated), `SESSION_COOKIE_HTTPONLY=True`, `SESSION_COOKIE_SAMESITE='Lax'`, and `SESSION_REFRESH_EACH_REQUEST=True`.
-      - `SESSION_TTL_SECONDS` (default `900`) is still used to set `PERMANENT_SESSION_LIFETIME`.
-      - Required auth/session secrets are now `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET`, and `FLASK_SECRET_KEY` (no `SESSION_FERNET_KEY`).
-      - In AWS, `cdk/deploy_stack.sh` resolves those values from SSM secure parameters at deployment and passes them into CDK for Lambda environment injection. This keeps deployment-time secret sourcing while reducing cold-start latency by removing runtime secret fetches.
-      - The Flask service now mirrors Numerint's Python-side hostname handling: `/login` builds the OAuth callback URL from `DOMAIN_NAME` at request time, using `http://localhost:<port>` when `STAGE=local` and `https://<DOMAIN_NAME>` otherwise. Rationale: this keeps callback URLs on one canonical public host without relying on Flask-side host redirects.
-      - `XERO_REDIRECT_URI` is no longer injected into the Flask service. `DOMAIN_NAME` is now the single public-host input for the Python app, while direct App Runner host blocking will be handled later at the edge/proxy layer.
-      - Browser-side CSRF delivery is now standardized across the app: `templates/base.html` always emits a `csrf-token` meta tag, and JavaScript `POST` requests send `csrf_token` in the request body instead of the `X-CSRFToken` header. Rationale: the CloudFront -> App Runner path was observed dropping the custom header in production, which caused `400` CSRF failures for tenant sync and upload preflight even though the browser had a valid token.
-      - Flask app secret key remains stable across cold starts because it is provided as a fixed environment value rather than generated at runtime.
-      - **Container runtime parity for local development**:
-        - `service/Dockerfile` installs Valkey, Nginx, and curl and uses `service/start.sh` to run Nginx, Gunicorn, and Valkey in one container.
-        - `service/run_as_container.sh` now mirrors the Numerint workflow: it replaces any existing `statement-processor` container, rebuilds, runs on `localhost:8080`, tails logs, and supports `-i/--interactive` shell mode.
-        - `service/start.sh` now waits for Valkey readiness with `valkey-cli ping` before starting Gunicorn instead of relying on a fixed one-second sleep. Rationale: App Runner rollbacks have shown intermittent candidate startup failures, and a real readiness probe removes the race between the local session store binding its socket and the Flask worker starting to accept requests.
-        - Rationale: Flask-Session now depends on a Redis/Valkey backend, so running cache and web process together keeps local execution aligned with App Runner behavior and avoids a second local service to manage.
-  - **Misc**
-    - `/.well-known/<path>` (GET): returns 204 for DevTools probes.
+- **Logging** (`service/logger.py`)
+  - Structured logger used across modules, with context injection via `logger.append_keys()`.
 
-- **Upload processing flow** (from `service/app.py`)
-  - `upload_statements` validates file/contact counts, enforces PDF MIME/extension rules (`service/utils/storage.py:is_allowed_pdf`), and then calls `service/billing_service.py` to reserve tokens atomically before any upload starts. Contact config validation is no longer needed — Bedrock detects column mappings during extraction.
-  - `service/billing_service.py:reserve_statement_uploads`:
-    - Decrements `TenantBillingTable.TokenBalance` conditionally.
-    - Appends one `RESERVE` row per statement to `TenantTokenLedgerTable`.
-    - Creates the initial `TenantStatementsTable` header row with `PdfPageCount`, `ReservationLedgerEntryID`, and `TokenReservationStatus=reserved`.
-  - `_process_statement_upload`:
-    - Uploads PDF to S3 (`upload_statement_to_s3` → `service/utils/storage.py`).
-    - Computes JSON output key (`statement_json_s3_key`) and starts Step Functions (`start_extraction_state_machine` → `service/utils/workflows.py`).
-    - If the upload handoff fails after reservation, `service/billing_service.py:release_statement_reservation` returns the tokens and the service deletes the partially created statement row/S3 artefacts.
+- **Session/auth wiring** (Flask-Session + Valkey/ElastiCache)
+  - Redis-backed server-side sessions configured in `service/app.py`.
+  - Tenant sync-status checks are read directly from DynamoDB via `service/utils/tenant_status.py` for consistent cross-instance behavior.
+
+### Blueprint architecture (`service/routes/`)
+
+Route handlers are split into 7 Blueprints, each in its own module:
+
+| Blueprint | Module | Routes | Purpose |
+|-----------|--------|--------|---------|
+| `public` | `routes/public.py` | `/`, `/about`, `/instructions`, `/faq`, `/pricing`, `/privacy`, `/terms`, `/cookies` | Unauthenticated marketing/content pages |
+| `seo` | `routes/seo.py` | `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/healthz`, `/favicon.ico` | Machine-readable endpoints; SEO helpers use `current_app` to introspect routes |
+| `auth` | `routes/auth.py` | `/login`, `/logout`, `/callback` | Xero OAuth flow; imports `oauth` and helpers from `app.py` at request time to avoid circular imports |
+| `tenants` | `routes/tenants.py` | `/tenant_management`, `/tenants/select`, `/tenants/disconnect` | Tenant management; imports `_set_active_tenant` from `app.py` at request time |
+| `statements_bp` | `routes/statements.py` | `/statements`, `/statement/<id>`, `/statement/<id>/delete`, `/upload-statements`, `/statements/count` | Statement list, detail, upload, deletion; Blueprint named `statements_bp` to avoid collision with the `statements` function |
+| `billing` | `routes/billing.py` | `/buy-pages`, `/billing-details`, `/checkout/success`, `/checkout/cancel`, `/checkout/failed` | Token purchase and Stripe checkout result pages |
+| `api` | `routes/api.py` | `/api/tenant-statuses`, `/api/tenants/<id>/sync`, `/api/upload-statements/preflight`, `/api/checkout/create`, `/api/banner/dismiss` | JSON API endpoints |
+
+**What stays in `app.py`**: Flask app creation, config, CSRF, session, OAuth, Blueprint registration, error handlers (`handle_csrf_error`), context processors (`inject_banners`, `_inject_statement_row_palette_css`), `_extract_csrf_from_json_body`, `_is_htmx_request`, `test_login` (dev-only), `chrome_devtools_ping`, and shared helpers (`_set_active_tenant`, `_trigger_initial_sync_if_required`, `_absolute_app_url`).
+
+**`url_for` convention**: All `url_for` calls use Blueprint-prefixed endpoint names (e.g., `url_for("public.index")`, `url_for("statements_bp.statements")`). This applies to both Python code and Jinja templates. When adding new routes or references, always use the full `blueprint_name.function_name` form.
+
+**Circular imports**: Some Blueprints (auth, tenants, api) import from `app.py` at request time using `import-outside-toplevel` to avoid circular dependency at module load. This is intentional and flagged by pylint as R0401 (cyclic-import); the warnings are acceptable.
+
+**`before_request` hooks**: The `tenants`, `statements_bp`, `billing`, and `api` Blueprints each have a `before_request` hook that injects `tenant_id` into the structured logger context via `logger.append_keys()`.
+
+### How to add a new route
+
+1. **Decide which Blueprint** — if the route is a domain page (e.g. `/about`, `/help`), add it to `public.py`. If it's a statement-related UI, add it to `statements_bp`. If it's a tenant action, add it to `tenants.py`. If it's JSON API, add it to `api.py`.
+
+2. **Write the handler function** in the appropriate Blueprint module:
+   ```python
+   @statements_bp.route("/statement/<statement_id>/preview", methods=["GET"])
+   @xero_token_required
+   def statement_preview(statement_id):
+       # Your code here
+       return render_template(...)
+   ```
+
+3. **Register the Blueprint if new** — in `service/app.py`, add:
+   ```python
+   from service.routes.my_blueprint import my_bp
+   app.register_blueprint(my_bp)
+   ```
+   (Already done for the 7 existing Blueprints.)
+
+4. **Use `url_for` with the Blueprint prefix**:
+   ```jinja
+   <a href="{{ url_for('statements_bp.statement_preview', statement_id=stmt_id) }}">Preview</a>
+   ```
+
+5. **If the route is public** (no `@xero_token_required`), add it to `service/nginx_route_querystring_allow_list.json` if it needs query parameters. Then regenerate Nginx config (see **Nginx Reverse Proxy** section).
+
+6. **If the route accesses tenant data**, add a `before_request` hook to inject `tenant_id` into the logger:
+   ```python
+   @my_bp.before_request
+   def _inject_tenant_id():
+       logger.append_keys(tenant_id=session.get("tenant_id"))
+   ```
+
+### Main modules/packages
+
+- **Extracted utility modules** (extracted from `app.py` to keep routes thin):
+  - `service/utils/statement_detail.py` — the full statement build pipeline (classification, matching, row building, Excel export).
+  - `service/utils/statement_upload.py` — token reservation, S3 upload, and extraction workflow startup.
+  - `service/utils/checkout.py` — billing validation, Stripe customer resolution, checkout session creation, and token crediting.
+  - `service/utils/statement_excel_export.py` — XLSX payload building, worksheet styling.
+  - `service/utils/statement_rows.py` — shared statement row helpers (item-type labeling, Xero ID lookup).
+
+- **Core modules** (`service/core/`):
+  - Domain models and logic (e.g. `item_classification.py`, `models.py`, `statement_row_palette.py`).
+  - The config-related modules (`contact_config_metadata.py`, `get_contact_config.py`, `config_suggestion.py`, `bedrock_client.py`, `date_disambiguation.py`) have been removed.
+
+- **Other utilities** (`service/utils/`):
+  - Auth/session helpers: `service/utils/auth.py`
+  - DynamoDB access: `service/utils/dynamo.py`
+  - S3 keying + uploads: `service/utils/storage.py`
+  - Step Functions start: `service/utils/workflows.py`
+  - Statement view/matching logic: `service/utils/statement_view.py`
+  - Formatting/helpers: `service/utils/formatting.py`, `service/utils/tenant_status.py`
+
+- **Stripe integration**:
+  - `service/stripe_service.py` — all Stripe SDK calls (`stripe.Customer.create`, `stripe.checkout.Session.create/retrieve`).
+  - `service/stripe_repository.py` — DynamoDB ops for checkout state.
+
+- **Banner system** (`service/banner_service.py`):
+  - Reusable provider-registry pattern for site-wide notification banners.
+  - See **Banner system** section below for details.
+
+- **Xero integration + caching** (`service/xero_repository.py`)
+- **Background sync job** (`service/sync.py`)
+- **Tenant metadata** (`service/tenant_data_repository.py`, `service/tenant_billing_repository.py`)
+- **Tests** (`service/tests/`, `service/playwright_tests/`)
+
+### Development workflow
+
+After modifying Python code:
+
+```bash
+cd service/
+make dev
+```
+
+This runs:
+1. `black` — code formatting
+2. `ruff check --fix` — linting and import sorting
+3. `mypy` — type checking
+4. `pytest` — unit tests
+5. `semgrep` — security scanning
+
+From the repo root, run the app locally:
+
+```bash
+make run-app    # Runs Gunicorn directly on port 8080 (no Nginx)
+```
+
+Or test with full Nginx + Valkey stack:
+
+```bash
+service/run_as_container.sh
+```
+
+### Test coverage
+
+Run tests with coverage reports:
+
+```bash
+cd service/
+make test-coverage
+```
+
+Target: **80%+ coverage** across all modules.
 
 ## Nginx Reverse Proxy
 
@@ -819,15 +947,15 @@ Removed components: `service/core/config_suggestion.py`, `service/core/bedrock_c
 - **Rule: Flag invalid dates on extraction**
   - Logic: In `_map_row_to_item(...)`, if a `date` field contains text but parsing with the configured format returns `None`, the item gets an `invalid-date` flag (`lambda_functions/extraction_lambda/core/transform.py`).
   - Why it exists: highlights rows where configured date parsing fails, signalling potentially incorrect mappings or malformed input.
-  - Example: Statement date “32/13/2024” with format `DD/MM/YYYY` yields `invalid-date`.
+  - Example: Statement date "32/13/2024" with format `DD/MM/YYYY` yields `invalid-date`.
 
 - **Rule: Keyword‑based outlier flagging (`ml-outlier`)**
   - Logic: `apply_outlier_flags(...)` flags items when:
     - `number` is missing (`missing-number` issue), or
-    - `number` / `reference` contains balance/summary keywords from `SUSPECT_TOKEN_RULES` (e.g. “brought forward”, “closing balance”, “amount due”).  
+    - `number` / `reference` contains balance/summary keywords from `SUSPECT_TOKEN_RULES` (e.g. "brought forward", "closing balance", "amount due").  
     The single‑token `balance` rule only triggers when the text is short (≤3 tokens) and contains no digits; `summary` only triggers when short (≤3 tokens) (`lambda_functions/extraction_lambda/core/validation/anomaly_detection.py`).
   - Why it exists: it is intended to catch non‑transaction rows like balances and summary lines that often appear in statements.
-  - Example: “Balance brought forward” or “Amount due” in a reference field is flagged; “Balance 2023” is not flagged by the single‑token “balance” rule because it includes digits.
+  - Example: "Balance brought forward" or "Amount due" in a reference field is flagged; "Balance 2023" is not flagged by the single‑token "balance" rule because it includes digits.
 
 - **Rule: Flags are additive and preserved**
   - Logic: Flagged items get `_flags` (list of strings) plus `FlagDetails[FLAG_LABEL]` with structured issues/details; `remove=False` keeps rows and only annotates them. `run_extraction` calls `apply_outlier_flags(..., remove=False)` so items are preserved (`lambda_functions/extraction_lambda/core/validation/anomaly_detection.py`, `lambda_functions/extraction_lambda/core/statement_processor.py`).
@@ -1030,9 +1158,64 @@ This fixture locks the end-to-end statement rendering logic against a known PDF 
    - Run `python3.13 scripts/populate_xero/populate_xero.py`.
    - The script defaults to Demo Company (UK) and the Test Statements Ltd statement/contact IDs; override as needed with `TENANT_ID`, `STATEMENT_ID`, and `CONTACT_ID` env vars.
 6) Capture the Excel baseline:
-   - From the statement detail page, click “Download Excel”.
+   - From the statement detail page, click "Download Excel".
    - Save it as `service/playwright_tests/fixtures/expected/test_statements_ltd.xlsx`.
 
 ### Notes
-- The population script intentionally skips “no match”, “balance forward”, and invalid date rows so the UI shows both matched and unmatched cases.
+- The population script intentionally skips "no match", "balance forward", and invalid date rows so the UI shows both matched and unmatched cases.
 - If the Demo Company tenant resets, repeat the setup steps above to restore the fixture.
+
+## Deployment Configuration
+
+### When deploying new code
+
+Always check these configuration files before deploying to ensure the Docker image includes all necessary components:
+
+#### Dockerfile updates
+
+**Service** (`service/Dockerfile`):
+- **New directories under `service/`**: Add a `COPY <dir>/ ./<dir>/` line. The Dockerfile copies directories explicitly — new ones are silently excluded from the container image.
+- **New config/data files**: If the app reads a new file at runtime, ensure it is copied into the image.
+- **Common package**: Already included via `COPY common/ /app/common/` and `RUN pip install common/`.
+
+**Extraction Lambda** (`lambda_functions/extraction_lambda/Dockerfile`):
+- **New modules under `lambda_functions/extraction_lambda/`**: Add a `COPY` line if needed.
+- **Common package**: Already included via `COPY common/ /app/common/` and `RUN pip install common/`.
+
+#### Nginx query string allowlist
+
+**File**: `service/nginx_route_querystring_allow_list.json`
+- **Adding or renaming query parameters on a route**: Add/update the entry in this JSON file. Public routes have query strings **stripped** by nginx unless explicitly allowed here. This is the most common production-only failure — the app works locally because there is no nginx, but 404s in production because the parameter is blocked.
+
+#### Nginx route regeneration
+
+**File**: `service/nginx-routes.conf` (auto-generated)
+- **Adding/removing Flask routes, changing auth decorators, or changing allowed query params**: Regenerate `nginx-routes.conf` by running the generator from `service/`:
+  ```
+  cd service && python3.13 nginx_route_config_generator.py
+  ```
+  Review the diff before committing.
+
+#### Nginx route overrides
+
+**File**: `service/nginx_route_overrides.json`
+- **Routes needing non-default body size or timeout**: Add an entry here (e.g. `client_max_body_size`, `proxy_read_timeout`).
+
+### Deployment checklist
+
+Before running `cdk deploy`:
+
+1. **Verify Dockerfiles**: All new service/Lambda directories are copied and dependencies are installed.
+2. **Regenerate Nginx routes**: Run the generator from `service/` if any routes or decorators changed.
+3. **Review nginx query string allow list**: Add new public route parameters.
+4. **Test locally**: Run `make run-app` (no Nginx) and `service/run_as_container.sh` (with Nginx) to verify basic functionality.
+5. **Run tests**: `cd service/ && make test-coverage` to ensure 80%+ coverage.
+6. **Commit everything**: Routes, Dockerfiles, and config changes should be committed before deploy.
+7. **Deploy**: Run `cdk deploy` from the repo root.
+
+### Post-deployment checks
+
+1. **Health check**: Call `/healthz` to verify the service is responding.
+2. **Logs**: Check CloudWatch logs for startup errors or missing dependencies.
+3. **OAuth flow**: Test `/login` → OAuth callback → `/tenant_management` to ensure session handling works.
+4. **Upload flow**: Test statement upload to verify Step Functions integration and Bedrock extraction.
