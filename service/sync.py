@@ -13,6 +13,7 @@ import json
 import os
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -23,9 +24,10 @@ from xero_python.accounting import AccountingApi
 from billing_service import LAST_MUTATION_SOURCE_WELCOME_GRANT, WELCOME_GRANT_TOKENS, BillingService
 from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, s3_client, tenant_data_table
 from logger import logger
+from statement_view_cache import bump_tenant_generation
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import get_xero_api_client
-from xero_repository import XeroType, get_contacts_from_xero, get_credit_notes, get_invoices, get_payments
+from xero_repository import CONTACT_DOC_TYPES, XeroType, get_contacts_from_xero, get_credit_notes, get_invoices, get_payments
 
 
 def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., Any], resource: XeroType, start_message: str, done_message: str, modified_since: datetime | None = None) -> bool:
@@ -310,12 +312,17 @@ def build_per_contact_index(tenant_id: str) -> None:
 
     Called after each sync (both full and incremental). Always rebuilds
     all per-contact files from the current flat files — the cost is
-    negligible (in-memory grouping + a few S3 PUTs).
+    negligible (in-memory grouping + parallel S3 PUTs).
+
+    S3 uploads are parallelised with a thread pool because large tenants
+    can have 1,000+ contacts, and sequential uploads at ~50 ms each would
+    block the sync for 50+ seconds.
     """
     local_dir = os.path.join(LOCAL_DATA_DIR, tenant_id)
 
-    def _load_flat(filename: str) -> list[dict[str, Any]]:
-        path = os.path.join(local_dir, filename)
+    def _load_flat(resource: XeroType) -> list[dict[str, Any]]:
+        """Load a flat dataset file, deriving the filename from XeroType."""
+        path = os.path.join(local_dir, f"{resource}.json")
         try:
             with open(path, encoding="utf-8") as handle:
                 data = json.load(handle)
@@ -323,25 +330,26 @@ def build_per_contact_index(tenant_id: str) -> None:
         except (FileNotFoundError, json.JSONDecodeError):
             return []
 
-    invoices = _load_flat("invoices.json")
-    credit_notes = _load_flat("credit_notes.json")
-    payments = _load_flat("payments.json")
+    # Map XeroType → CONTACT_DOC_TYPES key so both sides derive from
+    # the same constants.
+    resource_to_doc_key = {XeroType.INVOICES: "invoices", XeroType.CREDIT_NOTES: "credit_notes", XeroType.PAYMENTS: "payments"}
 
-    # Group by contact_id. Items without a contact_id are intentionally
-    # skipped — they can't be looked up by the statement detail page.
+    datasets = {doc_key: _load_flat(resource) for resource, doc_key in resource_to_doc_key.items()}
+
+    total_records = sum(len(docs) for docs in datasets.values())
+    logger.info("Building per-contact index", tenant_id=tenant_id, total_records=total_records)
+
+    # Group by contact_id.  Items without a contact_id are intentionally
+    # skipped — statements are always contact-scoped, so orphaned items
+    # can never be reached by the per-contact lookup on the detail page.
     by_contact: dict[str, dict[str, list[dict[str, Any]]]] = {}
-    for inv in invoices:
-        cid = inv.get("contact_id")
-        if cid:
-            by_contact.setdefault(cid, {"invoices": [], "credit_notes": [], "payments": []})["invoices"].append(inv)
-    for cn in credit_notes:
-        cid = cn.get("contact_id")
-        if cid:
-            by_contact.setdefault(cid, {"invoices": [], "credit_notes": [], "payments": []})["credit_notes"].append(cn)
-    for pay in payments:
-        cid = pay.get("contact_id")
-        if cid:
-            by_contact.setdefault(cid, {"invoices": [], "credit_notes": [], "payments": []})["payments"].append(pay)
+    for doc_key, docs in datasets.items():
+        for doc in docs:
+            cid = doc.get("contact_id")
+            if cid:
+                if cid not in by_contact:
+                    by_contact[cid] = {k: [] for k in CONTACT_DOC_TYPES}
+                by_contact[cid][doc_key].append(doc)
 
     if not by_contact:
         return
@@ -349,6 +357,8 @@ def build_per_contact_index(tenant_id: str) -> None:
     contact_dir = os.path.join(local_dir, "xero_by_contact")
     os.makedirs(contact_dir, exist_ok=True)
 
+    # Write all per-contact files locally first (fast, sequential I/O).
+    upload_tasks: list[tuple[str, str, str]] = []
     for contact_id, contact_data in by_contact.items():
         filename = f"{contact_id}.json"
         local_path = os.path.join(contact_dir, filename)
@@ -357,12 +367,31 @@ def build_per_contact_index(tenant_id: str) -> None:
         with open(local_path, "w", encoding="utf-8") as handle:
             json.dump(contact_data, handle, ensure_ascii=False, default=str)
 
-        try:
-            s3_client.upload_file(local_path, S3_BUCKET_NAME, s3_key)
-        except Exception:
-            logger.exception("Failed to upload per-contact file to S3", tenant_id=tenant_id, contact_id=contact_id, s3_key=s3_key)
+        upload_tasks.append((local_path, s3_key, contact_id))
 
-    logger.info("Built per-contact index", tenant_id=tenant_id, contacts=len(by_contact))
+    # Upload to S3 in parallel.  10 workers keeps connection count
+    # manageable on App Runner (shared vCPU) while still cutting a
+    # 1,000-contact sync from ~50s sequential to ~5s.
+    s3_upload_workers = 10
+    upload_failures = 0
+
+    def _upload_one(task: tuple[str, str, str]) -> bool:
+        """Upload one per-contact file. Returns True on failure."""
+        path, key, cid = task
+        try:
+            s3_client.upload_file(path, S3_BUCKET_NAME, key)
+            return False
+        except Exception:
+            logger.exception("Failed to upload per-contact file to S3", tenant_id=tenant_id, contact_id=cid, s3_key=key)
+            return True
+
+    with ThreadPoolExecutor(max_workers=s3_upload_workers) as pool:
+        futures = {pool.submit(_upload_one, task): task for task in upload_tasks}
+        for future in as_completed(futures):
+            if future.result():
+                upload_failures += 1
+
+    logger.info("Built per-contact index", tenant_id=tenant_id, contacts=len(by_contact), upload_failures=upload_failures)
 
 
 def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[str, Any] | None = None) -> None:
@@ -386,5 +415,14 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
         build_per_contact_index(tenant_id)
     except Exception:
         logger.exception("Failed to build per-contact index", tenant_id=tenant_id)
+
+    # Bump the tenant cache generation so that any Redis-cached statement
+    # views (which embed Xero reconciliation data) become unreachable.
+    # This ensures a user who syncs and immediately opens a statement
+    # sees fresh data rather than stale cached results.
+    try:
+        bump_tenant_generation(tenant_id)
+    except Exception:
+        logger.exception("Failed to bump tenant cache generation after sync", tenant_id=tenant_id)
 
     update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=start_time_ms if all_ok else None)

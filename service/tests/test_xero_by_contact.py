@@ -6,6 +6,8 @@ Verifies that:
   is missing (backward compatibility for pre-migration tenants).
 - build_per_contact_index groups invoices, credit notes, and payments
   by contact_id and writes individual JSON files.
+- Items without a contact_id are excluded from per-contact files.
+- Malformed per-contact JSON triggers fallback to full datasets.
 """
 
 import json
@@ -23,6 +25,19 @@ from xero_repository import get_xero_data_by_contact
 
 TENANT_ID = "tenant-xbc-test"
 CONTACT_ID = "contact-001"
+
+
+def _mock_s3_with_nosuchkey():
+    """Build a mock S3 client with a NoSuchKey exception class.
+
+    Uses the same class for both the exceptions attribute and raising,
+    so ``except s3_client.exceptions.NoSuchKey`` catches correctly.
+    """
+    no_such_key_cls = type("NoSuchKey", (Exception,), {})
+    mock_s3 = MagicMock()
+    mock_s3.exceptions = MagicMock()
+    mock_s3.exceptions.NoSuchKey = no_such_key_cls
+    return mock_s3, no_such_key_cls
 
 
 @pytest.fixture()
@@ -45,7 +60,7 @@ class TestGetXeroDataByContact:
         per_contact_data = {"invoices": [{"invoice_id": "inv-1", "contact_id": CONTACT_ID}], "credit_notes": [], "payments": [{"payment_id": "pay-1", "contact_id": CONTACT_ID}]}
         (contact_dir / f"{CONTACT_ID}.json").write_text(json.dumps(per_contact_data))
 
-        result = get_xero_data_by_contact(CONTACT_ID)
+        result = get_xero_data_by_contact(CONTACT_ID, tenant_id=TENANT_ID)
         assert result == per_contact_data
 
     def test_falls_back_to_full_datasets_when_per_contact_missing(self, _data_dir, monkeypatch):
@@ -56,18 +71,18 @@ class TestGetXeroDataByContact:
         tenant_dir = _data_dir / TENANT_ID
         tenant_dir.mkdir(parents=True)
         invoices = [{"invoice_id": "inv-1", "contact_id": CONTACT_ID}, {"invoice_id": "inv-2", "contact_id": "other-contact"}]
-        credit_notes = [{"credit_note_id": "cn-1", "contact_id": CONTACT_ID}]
+        credit_notes = [{"credit_note_id": "cn-1", "contact_id": CONTACT_ID}, {"credit_note_id": "cn-2", "contact_id": "other-contact"}]
         payments = [{"payment_id": "pay-1", "contact_id": CONTACT_ID}, {"payment_id": "pay-2", "contact_id": "other-contact"}]
         (tenant_dir / "invoices.json").write_text(json.dumps(invoices))
         (tenant_dir / "credit_notes.json").write_text(json.dumps(credit_notes))
         (tenant_dir / "payments.json").write_text(json.dumps(payments))
 
-        # Mock s3_client to avoid real S3 calls on fallback.
-        mock_s3 = MagicMock()
-        mock_s3.exceptions = type("Exc", (), {"NoSuchKey": type("NoSuchKey", (Exception,), {})})()
+        mock_s3, no_such_key_cls = _mock_s3_with_nosuchkey()
+        # Per-contact file not in S3 either.
+        mock_s3.download_file.side_effect = no_such_key_cls("key not found")
         monkeypatch.setattr(xero_module, "s3_client", mock_s3)
 
-        result = get_xero_data_by_contact(CONTACT_ID)
+        result = get_xero_data_by_contact(CONTACT_ID, tenant_id=TENANT_ID)
 
         # Should only contain data for the requested contact.
         assert len(result["invoices"]) == 1
@@ -89,13 +104,31 @@ class TestGetXeroDataByContact:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(per_contact_data, f)
 
-        mock_s3 = MagicMock()
+        mock_s3, _ = _mock_s3_with_nosuchkey()
         mock_s3.download_file = fake_download
-        mock_s3.exceptions = type("Exc", (), {"NoSuchKey": type("NoSuchKey", (Exception,), {})})()
         monkeypatch.setattr(xero_module, "s3_client", mock_s3)
 
-        result = get_xero_data_by_contact(CONTACT_ID)
+        result = get_xero_data_by_contact(CONTACT_ID, tenant_id=TENANT_ID)
         assert result == per_contact_data
+
+    def test_s3_nosuchkey_triggers_fallback(self, _data_dir, monkeypatch):
+        """S3 NoSuchKey should return None from _load_per_contact_file, triggering fallback."""
+        monkeypatch.setattr(xero_module, "session", {"xero_tenant_id": TENANT_ID})
+
+        # Write full flat files so the fallback has data.
+        tenant_dir = _data_dir / TENANT_ID
+        tenant_dir.mkdir(parents=True)
+        (tenant_dir / "invoices.json").write_text(json.dumps([{"invoice_id": "inv-1", "contact_id": CONTACT_ID}]))
+        (tenant_dir / "credit_notes.json").write_text("[]")
+        (tenant_dir / "payments.json").write_text("[]")
+
+        mock_s3, no_such_key_cls = _mock_s3_with_nosuchkey()
+        mock_s3.download_file.side_effect = no_such_key_cls("key not found")
+        monkeypatch.setattr(xero_module, "s3_client", mock_s3)
+
+        result = get_xero_data_by_contact(CONTACT_ID, tenant_id=TENANT_ID)
+        assert len(result["invoices"]) == 1
+        assert result["invoices"][0]["invoice_id"] == "inv-1"
 
     def test_returns_empty_when_no_tenant(self, monkeypatch):
         """Returns empty data when no tenant is selected."""
@@ -107,6 +140,12 @@ class TestGetXeroDataByContact:
         """Returns empty data when contact_id is empty."""
         monkeypatch.setattr(xero_module, "session", {"xero_tenant_id": TENANT_ID})
         result = get_xero_data_by_contact("")
+        assert result == {"invoices": [], "credit_notes": [], "payments": []}
+
+    def test_returns_empty_when_contact_id_is_none(self, _data_dir, monkeypatch):
+        """Returns empty data when contact_id is None."""
+        monkeypatch.setattr(xero_module, "session", {"xero_tenant_id": TENANT_ID})
+        result = get_xero_data_by_contact(None)
         assert result == {"invoices": [], "credit_notes": [], "payments": []}
 
     def test_falls_back_when_s3_download_raises_generic_error(self, _data_dir, monkeypatch):
@@ -121,13 +160,34 @@ class TestGetXeroDataByContact:
         (tenant_dir / "payments.json").write_text("[]")
 
         # S3 download raises a generic error (network failure, etc.).
-        mock_s3 = MagicMock()
+        mock_s3, _ = _mock_s3_with_nosuchkey()
         mock_s3.download_file.side_effect = OSError("network error")
-        mock_s3.exceptions = type("Exc", (), {"NoSuchKey": type("NoSuchKey", (Exception,), {})})()
         monkeypatch.setattr(xero_module, "s3_client", mock_s3)
 
-        result = get_xero_data_by_contact(CONTACT_ID)
+        result = get_xero_data_by_contact(CONTACT_ID, tenant_id=TENANT_ID)
         assert len(result["invoices"]) == 1
+
+    def test_falls_back_when_per_contact_file_is_corrupt(self, _data_dir, monkeypatch):
+        """Malformed per-contact JSON must fall back to full datasets without raising."""
+        monkeypatch.setattr(xero_module, "session", {"xero_tenant_id": TENANT_ID})
+
+        # Write a corrupt per-contact file.
+        contact_dir = _data_dir / TENANT_ID / "xero_by_contact"
+        contact_dir.mkdir(parents=True)
+        (contact_dir / f"{CONTACT_ID}.json").write_text("{not valid json")
+
+        # Write full flat files so the fallback has data.
+        tenant_dir = _data_dir / TENANT_ID
+        (tenant_dir / "invoices.json").write_text(json.dumps([{"invoice_id": "inv-1", "contact_id": CONTACT_ID}]))
+        (tenant_dir / "credit_notes.json").write_text("[]")
+        (tenant_dir / "payments.json").write_text("[]")
+
+        mock_s3, _ = _mock_s3_with_nosuchkey()
+        monkeypatch.setattr(xero_module, "s3_client", mock_s3)
+
+        result = get_xero_data_by_contact(CONTACT_ID, tenant_id=TENANT_ID)
+        assert len(result["invoices"]) == 1
+        assert result["invoices"][0]["invoice_id"] == "inv-1"
 
 
 class TestBuildPerContactIndex:
@@ -219,3 +279,34 @@ class TestBuildPerContactIndex:
         build_per_contact_index(TENANT_ID)
 
         mock_s3.upload_file.assert_not_called()
+
+    def test_items_without_contact_id_are_excluded(self, tmp_path, monkeypatch):
+        """Items with missing or None contact_id must not appear in any per-contact file."""
+        monkeypatch.setattr(sync_module, "LOCAL_DATA_DIR", str(tmp_path))
+        mock_s3 = MagicMock()
+        monkeypatch.setattr(sync_module, "s3_client", mock_s3)
+        monkeypatch.setattr(sync_module, "S3_BUCKET_NAME", "test-bucket")
+
+        tenant_dir = tmp_path / TENANT_ID
+        tenant_dir.mkdir()
+        invoices = [
+            {"invoice_id": "inv-1", "contact_id": "c1"},
+            {"invoice_id": "inv-2"},  # missing key entirely
+            {"invoice_id": "inv-3", "contact_id": None},  # explicit None
+            {"invoice_id": "inv-4", "contact_id": ""},  # empty string
+        ]
+        (tenant_dir / "invoices.json").write_text(json.dumps(invoices))
+        (tenant_dir / "credit_notes.json").write_text("[]")
+        (tenant_dir / "payments.json").write_text("[]")
+
+        build_per_contact_index(TENANT_ID)
+
+        contact_dir = tenant_dir / "xero_by_contact"
+        created = list(contact_dir.iterdir())
+        assert len(created) == 1, "Only one contact file should be created"
+        assert created[0].name == "c1.json"
+        c1 = json.loads(created[0].read_text())
+        assert len(c1["invoices"]) == 1
+        assert c1["invoices"][0]["invoice_id"] == "inv-1"
+        # Only one S3 upload — not two or three.
+        assert mock_s3.upload_file.call_count == 1

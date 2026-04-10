@@ -9,7 +9,6 @@ from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
 from typing import Any
 
-import redis
 import stripe
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.flask_client import OAuth
@@ -18,7 +17,7 @@ from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
 from billing_service import LAST_MUTATION_SOURCE_STRIPE_CHECKOUT, BillingService, BillingServiceError, InsufficientTokensError, ReservedStatementUpload
-from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, LOCAL_DATA_DIR, S3_BUCKET_NAME, STAGE, VALKEY_URL
+from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, LOCAL_DATA_DIR, S3_BUCKET_NAME, STAGE, redis_client
 from core.item_classification import guess_statement_item_type
 from core.statement_detail_types import MatchByItemId, MatchedInvoiceMap, PaymentNumberMap, StatementItemPayload, StatementRowsByHeader, StatementRowViewModel, XeroDocumentPayload
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
@@ -109,7 +108,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 # Configure Redis-backed server sessions with only required/useful options.
 app.config.update(
     SESSION_TYPE="redis",
-    SESSION_REDIS=redis.from_url(VALKEY_URL),
+    SESSION_REDIS=redis_client,
     SESSION_PERMANENT=False,
     SESSION_COOKIE_SECURE=STAGE != "local",
     SESSION_COOKIE_HTTPONLY=True,
@@ -1168,62 +1167,31 @@ def _item_flags(item: StatementItemPayload) -> list[str]:
     return flags
 
 
-def _build_statement_view_data(*, tenant_id: str, statement_id: str, contact_id: str | None, record: dict[str, Any], base_context: dict[str, Any]) -> dict[str, Any] | Response:
-    """Run the full statement build pipeline and return view data.
+def _build_statement_view_data(*, tenant_id: str, statement_id: str, contact_id: str | None, data: dict[str, Any], record: dict[str, Any]) -> dict[str, Any] | Response:
+    """Run the full statement build pipeline and return cacheable view data.
 
-    Loads S3 JSON, fetches Xero data, matches invoices, classifies items,
-    and builds the statement_rows + display_headers needed for rendering.
+    This is always the uncached path — the caller is responsible for checking
+    the Redis cache first and for handling early-exit states (processing,
+    failed) before calling this function.
 
-    Returns a dict with ``statement_rows`` and ``display_headers`` on success,
-    or a Flask Response for early-exit cases (processing, failed, Excel download).
+    Args:
+        tenant_id: Active tenant.
+        statement_id: Statement being viewed.
+        contact_id: Xero contact linked to this statement (may be None).
+        data: Parsed statement JSON from S3 (the ``fetch_json_statement`` result).
+        record: DynamoDB statement record (used for Excel downloads).
+
+    Returns:
+        Dict with ``statement_rows`` and ``display_headers`` on the normal
+        path.  Returns a Flask ``Response`` for ``?download=xlsx`` requests
+        (the caller must handle this — see the xlsx guard in the route).
     """
-    json_statement_key = statement_json_s3_key(tenant_id, statement_id)
-
-    try:
-        data = fetch_json_statement(tenant_id=tenant_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
-    except StatementJSONNotFoundError:
-        reservation_status = str(record.get("TokenReservationStatus") or "").strip().lower()
-        if reservation_status == "released":
-            logger.info("Statement processing failed; JSON missing after release", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
-            repair_processing_stage(tenant_id, statement_id)
-            return render_template(
-                "statement.html",
-                is_processing=False,
-                processing_failed=True,
-                incomplete_count=0,
-                completed_count=0,
-                all_statement_rows=[],
-                statement_rows=[],
-                raw_statement_headers=[],
-                has_payment_rows=False,
-                **base_context,
-            )
-        logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
-        processing_stage = str(record.get("ProcessingStage") or "").strip().lower()
-        processing_progress = record.get("ProcessingProgress")
-        processing_total_sections = record.get("ProcessingTotalSections")
-        return render_template(
-            "statement.html",
-            is_processing=True,
-            processing_failed=False,
-            processing_stage=processing_stage,
-            processing_progress=processing_progress,
-            processing_total_sections=processing_total_sections,
-            incomplete_count=0,
-            completed_count=0,
-            all_statement_rows=[],
-            statement_rows=[],
-            raw_statement_headers=[],
-            has_payment_rows=False,
-            **base_context,
-        )
-
     # 1) Parse display configuration and left-side rows.
     items: list[StatementItemPayload] = data.get("statement_items", []) or []
     display_headers, rows_by_header, header_to_field, item_number_header = prepare_display_mappings(items, statement_data=data)
 
     # 2) Fetch Xero documents and classify each statement item.
-    xero_data = get_xero_data_by_contact(contact_id)
+    xero_data = get_xero_data_by_contact(contact_id, tenant_id=tenant_id)
     invoices: list[XeroDocumentPayload] = xero_data["invoices"]
     credit_notes: list[XeroDocumentPayload] = xero_data["credit_notes"]
     payments: list[XeroDocumentPayload] = xero_data["payments"]
@@ -1250,7 +1218,9 @@ def _build_statement_view_data(*, tenant_id: str, statement_id: str, contact_id:
         statement_id=statement_id,
     )
 
-    _persist_classification_updates(data=data, statement_id=statement_id, tenant_id=tenant_id, json_statement_key=json_statement_key, classification_updates=classification_updates)
+    _persist_classification_updates(
+        data=data, statement_id=statement_id, tenant_id=tenant_id, json_statement_key=statement_json_s3_key(tenant_id, statement_id), classification_updates=classification_updates
+    )
 
     # 3) Build right-hand rows from matched invoices.
     right_rows_by_header = build_right_rows(
@@ -1268,6 +1238,10 @@ def _build_statement_view_data(*, tenant_id: str, statement_id: str, contact_id:
 
     item_status_map = get_statement_item_status_map(tenant_id, statement_id)
 
+    # Excel downloads need intermediate pipeline data (rows_by_header,
+    # right_rows_by_header, etc.) that is not stored in the cached dict.
+    # The caller bypasses the cache for xlsx requests and handles this
+    # response directly.
     if request.args.get("download") == "xlsx":
         return _build_statement_excel_response(
             display_headers=display_headers,
@@ -1403,10 +1377,37 @@ def statement(statement_id: str):
         "is_completed": is_completed,
     }
 
-    # Check Redis cache — HTMX swaps (filter/pagination) can skip the entire
-    # build pipeline if the view data was cached on the initial page load.
-    # Excel downloads need intermediate pipeline data, so skip the cache.
-    cached_view = get_cached_statement_view(tenant_id, statement_id) if request.args.get("download") != "xlsx" else None
+    # --- Early-exit: statement not yet ready (processing or failed). ---
+    # Check this before the cache/pipeline so processing states are never cached.
+    json_statement_key = statement_json_s3_key(tenant_id, statement_id)
+    try:
+        statement_json_data = fetch_json_statement(tenant_id=tenant_id, bucket=S3_BUCKET_NAME, json_key=json_statement_key)
+    except StatementJSONNotFoundError:
+        reservation_status = str(record.get("TokenReservationStatus") or "").strip().lower()
+        empty_context = {**base_context, "incomplete_count": 0, "completed_count": 0, "all_statement_rows": [], "statement_rows": [], "raw_statement_headers": [], "has_payment_rows": False}
+        if reservation_status == "released":
+            logger.info("Statement processing failed; JSON missing after release", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
+            repair_processing_stage(tenant_id, statement_id)
+            return render_template("statement.html", is_processing=False, processing_failed=True, **empty_context)
+        logger.info("Statement JSON pending", tenant_id=tenant_id, statement_id=statement_id, json_key=json_statement_key)
+        return render_template(
+            "statement.html",
+            is_processing=True,
+            processing_failed=False,
+            processing_stage=str(record.get("ProcessingStage") or "").strip().lower(),
+            processing_progress=record.get("ProcessingProgress"),
+            processing_total_sections=record.get("ProcessingTotalSections"),
+            **empty_context,
+        )
+
+    # --- Excel download: bypass cache, needs full pipeline data. ---
+    if request.args.get("download") == "xlsx":
+        result = _build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, data=statement_json_data, record=record)
+        # _build_statement_view_data returns a Response for xlsx requests.
+        return result
+
+    # --- Normal path: check Redis cache, fall back to full pipeline. ---
+    cached_view = get_cached_statement_view(tenant_id, statement_id)
 
     if cached_view is not None:
         # Cache hit: skip the full pipeline, go straight to filtering.
@@ -1414,10 +1415,7 @@ def statement(statement_id: str):
         display_headers = cached_view["display_headers"]
     else:
         # Cache miss: run the full build pipeline.
-        result = _build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, record=record, base_context=base_context)
-        # Early-exit responses (processing, failed, Excel download).
-        if isinstance(result, Response):
-            return result
+        result = _build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, data=statement_json_data, record=record)
         statement_rows = result["statement_rows"]
         display_headers = result["display_headers"]
         cache_statement_view(tenant_id, statement_id, result)
@@ -1437,10 +1435,8 @@ def statement(statement_id: str):
         visible_rows = [row for row in visible_rows if row.get("item_type") != "payment"]
 
     # Pagination: slice filtered rows to the current page.
-    req_page = page_param
-
     total_visible_count = len(visible_rows)
-    pagination = paginate(total_items=total_visible_count, page=req_page, per_page=STATEMENT_ITEMS_PER_PAGE)
+    pagination = paginate(total_items=total_visible_count, page=page_param, per_page=STATEMENT_ITEMS_PER_PAGE)
     visible_rows = visible_rows[pagination.start_index : pagination.end_index]
 
     logger.info(

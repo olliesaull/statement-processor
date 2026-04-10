@@ -5,6 +5,7 @@ Verifies that:
 - Redis errors are handled gracefully without crashing.
 - The statement route skips the pipeline on cache hit and rebuilds on miss.
 - POST actions invalidate the cache.
+- Processing/failed states and Excel downloads are never cached.
 """
 
 import json
@@ -31,10 +32,22 @@ SAMPLE_RECORD = {"TenantID": TENANT_ID, "StatementID": STATEMENT_ID, "ContactNam
 class TestCacheKey:
     """Verify cache key format follows the spec convention."""
 
-    def test_key_format(self):
-        """Key must be stmt_view:{tenant_id}:{statement_id}."""
-        key = _cache_key(TENANT_ID, STATEMENT_ID)
-        assert key == f"stmt_view:{TENANT_ID}:{STATEMENT_ID}"
+    def test_key_format_includes_generation(self):
+        """Key must be stmt_view:{tenant_id}:{generation}:{statement_id}."""
+        mock_redis = MagicMock()
+        # Generation counter returns 0 when unset.
+        mock_redis.get.return_value = None
+        with patch.object(cache_module, "redis_client", mock_redis):
+            key = _cache_key(TENANT_ID, STATEMENT_ID)
+        assert key == f"stmt_view:{TENANT_ID}:0:{STATEMENT_ID}"
+
+    def test_key_format_with_nonzero_generation(self):
+        """Key includes the current generation counter value."""
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = b"5"
+        with patch.object(cache_module, "redis_client", mock_redis):
+            key = _cache_key(TENANT_ID, STATEMENT_ID)
+        assert key == f"stmt_view:{TENANT_ID}:5:{STATEMENT_ID}"
 
 
 class TestGetCachedStatementView:
@@ -43,16 +56,18 @@ class TestGetCachedStatementView:
     def test_returns_none_on_cache_miss(self):
         """Cache miss returns None so the caller runs the full pipeline."""
         mock_redis = MagicMock()
+        # Generation lookup returns None, then cache GET returns None.
         mock_redis.get.return_value = None
-        with patch.object(cache_module, "_redis", mock_redis):
+        with patch.object(cache_module, "redis_client", mock_redis):
             result = get_cached_statement_view(TENANT_ID, STATEMENT_ID)
         assert result is None
 
     def test_returns_parsed_data_on_cache_hit(self):
         """Cache hit returns the deserialized view data dict."""
         mock_redis = MagicMock()
-        mock_redis.get.return_value = json.dumps(SAMPLE_VIEW_DATA).encode()
-        with patch.object(cache_module, "_redis", mock_redis):
+        # First get() → generation counter, second get() → cached data.
+        mock_redis.get.side_effect = [None, json.dumps(SAMPLE_VIEW_DATA).encode()]
+        with patch.object(cache_module, "redis_client", mock_redis):
             result = get_cached_statement_view(TENANT_ID, STATEMENT_ID)
         assert result == SAMPLE_VIEW_DATA
 
@@ -60,7 +75,7 @@ class TestGetCachedStatementView:
         """Redis errors must not crash — return None and let the pipeline run."""
         mock_redis = MagicMock()
         mock_redis.get.side_effect = ConnectionError("Redis down")
-        with patch.object(cache_module, "_redis", mock_redis):
+        with patch.object(cache_module, "redis_client", mock_redis):
             result = get_cached_statement_view(TENANT_ID, STATEMENT_ID)
         assert result is None
 
@@ -71,21 +86,35 @@ class TestCacheStatementView:
     def test_stores_serialized_data_with_ttl(self):
         """Data must be JSON-serialized and stored with 120s TTL."""
         mock_redis = MagicMock()
-        with patch.object(cache_module, "_redis", mock_redis):
+        # Generation lookup returns None (gen=0).
+        mock_redis.get.return_value = None
+        with patch.object(cache_module, "redis_client", mock_redis):
             cache_statement_view(TENANT_ID, STATEMENT_ID, SAMPLE_VIEW_DATA)
         mock_redis.setex.assert_called_once()
         args = mock_redis.setex.call_args[0]
-        assert args[0] == _cache_key(TENANT_ID, STATEMENT_ID)
+        assert args[0] == f"stmt_view:{TENANT_ID}:0:{STATEMENT_ID}"
         assert args[1] == 120
         assert json.loads(args[2]) == SAMPLE_VIEW_DATA
 
     def test_does_not_raise_on_redis_error(self):
         """Redis errors must not crash — cache write failure is non-fatal."""
         mock_redis = MagicMock()
+        mock_redis.get.return_value = None
         mock_redis.setex.side_effect = ConnectionError("Redis down")
-        with patch.object(cache_module, "_redis", mock_redis):
+        with patch.object(cache_module, "redis_client", mock_redis):
             # Should not raise
             cache_statement_view(TENANT_ID, STATEMENT_ID, SAMPLE_VIEW_DATA)
+
+    def test_skips_cache_for_oversized_entries(self):
+        """Entries exceeding _MAX_CACHE_SIZE_BYTES should not be stored."""
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = None
+        # Create view data that serialises to > 1.5 MB.
+        large_rows = [{"statement_item_id": f"item-{i}", "is_completed": False, "data": "x" * 2000} for i in range(1000)]
+        large_data = {"statement_rows": large_rows, "display_headers": ["A"]}
+        with patch.object(cache_module, "redis_client", mock_redis):
+            cache_statement_view(TENANT_ID, STATEMENT_ID, large_data)
+        mock_redis.setex.assert_not_called()
 
 
 class TestInvalidateStatementViewCache:
@@ -94,17 +123,39 @@ class TestInvalidateStatementViewCache:
     def test_deletes_cache_key(self):
         """Invalidation must delete the exact cache key."""
         mock_redis = MagicMock()
-        with patch.object(cache_module, "_redis", mock_redis):
+        mock_redis.get.return_value = None
+        with patch.object(cache_module, "redis_client", mock_redis):
             invalidate_statement_view_cache(TENANT_ID, STATEMENT_ID)
-        mock_redis.delete.assert_called_once_with(_cache_key(TENANT_ID, STATEMENT_ID))
+        expected_key = f"stmt_view:{TENANT_ID}:0:{STATEMENT_ID}"
+        mock_redis.delete.assert_called_once_with(expected_key)
 
     def test_does_not_raise_on_redis_error(self):
         """Redis errors must not crash — invalidation failure is non-fatal."""
         mock_redis = MagicMock()
+        mock_redis.get.return_value = None
         mock_redis.delete.side_effect = ConnectionError("Redis down")
-        with patch.object(cache_module, "_redis", mock_redis):
+        with patch.object(cache_module, "redis_client", mock_redis):
             # Should not raise
             invalidate_statement_view_cache(TENANT_ID, STATEMENT_ID)
+
+
+class TestBumpTenantGeneration:
+    """Increment the tenant generation counter."""
+
+    def test_increments_counter(self):
+        """bump_tenant_generation should call INCR on the generation key."""
+        mock_redis = MagicMock()
+        with patch.object(cache_module, "redis_client", mock_redis):
+            cache_module.bump_tenant_generation(TENANT_ID)
+        mock_redis.incr.assert_called_once_with(f"tenant_gen:{TENANT_ID}")
+
+    def test_does_not_raise_on_redis_error(self):
+        """Redis errors must not crash."""
+        mock_redis = MagicMock()
+        mock_redis.incr.side_effect = ConnectionError("Redis down")
+        with patch.object(cache_module, "redis_client", mock_redis):
+            # Should not raise
+            cache_module.bump_tenant_generation(TENANT_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +165,12 @@ class TestInvalidateStatementViewCache:
 
 @pytest.fixture(scope="module")
 def _app():
-    """Module-scoped Flask app with file-based sessions (no real Redis)."""
+    """Module-scoped Flask app with file-based sessions (no real Redis).
+
+    This fixture reconfigures the global Flask app for testing. An identical
+    fixture exists in test_statement_htmx.py — if the config values diverge,
+    extract both to conftest.py to avoid ordering-dependent side effects.
+    """
     tmpdir = tempfile.mkdtemp(prefix="flask_test_sessions_cache_")
     app_module.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False, SESSION_TYPE="cachelib", SESSION_CACHELIB=FileSystemCache(tmpdir), SECRET_KEY="test-secret-key-cache")
     Session(app_module.app)
@@ -156,8 +212,7 @@ class TestStatementRouteCacheHit:
     """When the cache returns view data, the pipeline should be skipped."""
 
     def test_htmx_swap_skips_pipeline_on_cache_hit(self, client, monkeypatch):
-        """HTMX GET with warm cache should not call fetch_json_statement."""
-        # Provide cached view data so the pipeline is skipped.
+        """HTMX GET with warm cache should not call _build_statement_view_data."""
         cached_data = {
             "statement_rows": [
                 {
@@ -176,20 +231,20 @@ class TestStatementRouteCacheHit:
         }
         monkeypatch.setattr(app_module, "get_cached_statement_view", lambda *a, **kw: cached_data)
 
-        # Track whether the expensive pipeline function was called.
+        # Track whether the expensive build pipeline was called.
         pipeline_called = False
-        original_fetch = app_module.fetch_json_statement
+        original_build = app_module._build_statement_view_data
 
-        def tracking_fetch(*args, **kwargs):
+        def tracking_build(**kwargs):
             nonlocal pipeline_called
             pipeline_called = True
-            return original_fetch(*args, **kwargs)
+            return original_build(**kwargs)
 
-        monkeypatch.setattr(app_module, "fetch_json_statement", tracking_fetch)
+        monkeypatch.setattr(app_module, "_build_statement_view_data", tracking_build)
 
         response = client.get(f"/statement/{STATEMENT_ID}", headers={"HX-Request": "true"})
         assert response.status_code == 200
-        assert not pipeline_called, "Pipeline should be skipped on cache hit"
+        assert not pipeline_called, "Build pipeline should be skipped on cache hit"
 
     def test_cache_hit_renders_correct_content(self, client, monkeypatch):
         """Cache hit should still render the statement content partial."""
@@ -255,3 +310,38 @@ class TestStatementRouteCacheInvalidation:
         assert response.status_code == 200
         assert len(invalidate_calls) == 1, "Cache should be invalidated on POST"
         assert invalidate_calls[0][0] == (TENANT_ID, STATEMENT_ID)
+
+
+class TestStatementRouteCacheExclusions:
+    """Paths that must bypass the cache entirely."""
+
+    def test_xlsx_download_skips_cache_read(self, client, monkeypatch):
+        """?download=xlsx must not read from cache."""
+        cache_reads = []
+
+        def tracking_get(*a, **kw):
+            cache_reads.append(a)
+            return None
+
+        monkeypatch.setattr(app_module, "get_cached_statement_view", tracking_get)
+
+        # The xlsx response itself will fail gracefully in tests (no real
+        # Excel data), but the important thing is the cache was not read.
+        client.get(f"/statement/{STATEMENT_ID}?download=xlsx")
+        assert len(cache_reads) == 0, "Cache must not be consulted for xlsx downloads"
+
+    def test_processing_state_is_not_cached(self, client, monkeypatch):
+        """When statement JSON is missing (processing), cache_statement_view must not be called."""
+        from utils.storage import StatementJSONNotFoundError
+
+        cache_writes = []
+        monkeypatch.setattr(app_module, "cache_statement_view", lambda *a, **kw: cache_writes.append(a))
+        monkeypatch.setattr(app_module, "fetch_json_statement", lambda **kw: (_ for _ in ()).throw(StatementJSONNotFoundError()))
+
+        # TokenReservationStatus != "released" → processing state.
+        processing_record = {**SAMPLE_RECORD, "TokenReservationStatus": "pending"}
+        monkeypatch.setattr(app_module, "get_statement_record", lambda *a, **kw: processing_record)
+
+        response = client.get(f"/statement/{STATEMENT_ID}")
+        assert response.status_code == 200
+        assert len(cache_writes) == 0, "Processing state must not be cached"

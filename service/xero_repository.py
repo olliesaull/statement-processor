@@ -398,36 +398,61 @@ def get_contacts(tenant_id: str | None = None) -> list[dict[str, Any]]:
 # Per-contact combined Xero data (invoices + credit notes + payments).
 # ---------------------------------------------------------------------------
 
-_EMPTY_CONTACT_DATA: dict[str, list[dict[str, Any]]] = {"invoices": [], "credit_notes": [], "payments": []}
+# Document types stored in per-contact index files.  Shared with
+# sync.build_per_contact_index (the writer) so adding a new type is
+# a single-constant change.
+CONTACT_DOC_TYPES: tuple[str, ...] = ("invoices", "credit_notes", "payments")
 
 
-def get_xero_data_by_contact(contact_id: str) -> dict[str, list[dict[str, Any]]]:
+def _empty_contact_data() -> dict[str, list[dict[str, Any]]]:
+    """Return a fresh empty contact data structure.
+
+    Uses a factory function (not a module-level constant) to avoid the
+    shallow-copy mutation trap — callers get independent list objects.
+    """
+    return {key: [] for key in CONTACT_DOC_TYPES}
+
+
+def _filter_by_contact(docs: list[Any] | None, contact_id: str) -> list[dict[str, Any]]:
+    """Return only the docs belonging to the given contact_id."""
+    return [d for d in (docs or []) if isinstance(d, dict) and d.get("contact_id") == contact_id]
+
+
+def get_xero_data_by_contact(contact_id: str | None, tenant_id: str | None = None) -> dict[str, list[dict[str, Any]]]:
     """Load combined Xero data for a single contact.
 
-    Tries the pre-indexed per-contact file first (xero_by_contact/{contact_id}.json).
+    Tries the pre-indexed per-contact file first
+    (S3 key: ``{tenant_id}/data/xero_by_contact/{contact_id}.json``,
+    written by ``sync.build_per_contact_index``).
     Falls back to loading the full datasets and filtering by contact_id if the
     per-contact file doesn't exist (backward compatibility for tenants that
     synced before per-contact indexing was deployed).
+
+    Args:
+        contact_id: Xero contact ID to load data for.
+        tenant_id: Optional explicit tenant ID; defaults to the active session tenant.
 
     Returns:
         Dict with keys ``invoices``, ``credit_notes``, ``payments`` — each a
         list of dicts for the requested contact.
     """
-    tenant_id = session.get("xero_tenant_id")
+    tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id or not contact_id:
-        return dict(_EMPTY_CONTACT_DATA)
+        return _empty_contact_data()
 
     # Try the per-contact index file first (fast path).
     per_contact_data = _load_per_contact_file(tenant_id, contact_id)
     if per_contact_data is not None:
         return per_contact_data
 
-    # Fallback: load full datasets and filter by contact_id.
-    logger.info("Per-contact file not found, falling back to full datasets", tenant_id=tenant_id, contact_id=contact_id)
+    # Fallback: load full datasets and filter by contact_id.  This path
+    # loads three full tenant files in the request thread (~150-200 ms),
+    # which is significantly slower than the per-contact index (~10-30 ms).
+    logger.warning("Per-contact file not found, falling back to full dataset load", tenant_id=tenant_id, contact_id=contact_id)
     return {
-        "invoices": [inv for inv in (load_local_dataset(XeroType.INVOICES, tenant_id=tenant_id) or []) if isinstance(inv, dict) and inv.get("contact_id") == contact_id],
-        "credit_notes": [cn for cn in (load_local_dataset(XeroType.CREDIT_NOTES, tenant_id=tenant_id) or []) if isinstance(cn, dict) and cn.get("contact_id") == contact_id],
-        "payments": [pay for pay in (load_local_dataset(XeroType.PAYMENTS, tenant_id=tenant_id) or []) if isinstance(pay, dict) and pay.get("contact_id") == contact_id],
+        "invoices": _filter_by_contact(load_local_dataset(XeroType.INVOICES, tenant_id=tenant_id), contact_id),
+        "credit_notes": _filter_by_contact(load_local_dataset(XeroType.CREDIT_NOTES, tenant_id=tenant_id), contact_id),
+        "payments": _filter_by_contact(load_local_dataset(XeroType.PAYMENTS, tenant_id=tenant_id), contact_id),
     }
 
 
@@ -452,8 +477,6 @@ def _load_per_contact_file(tenant_id: str, contact_id: str) -> dict[str, Any] | 
             logger.info("Downloaded per-contact file from S3", tenant_id=tenant_id, contact_id=contact_id)
             with open(local_path, encoding="utf-8") as handle:
                 return json.load(handle)
-        except FileNotFoundError:
-            return None
         except s3_client.exceptions.NoSuchKey:
             return None
         except Exception:

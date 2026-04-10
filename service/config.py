@@ -18,6 +18,7 @@ The SSM parameter paths are themselves stored as environment variables
 import os
 
 import boto3
+import redis as redis_lib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -91,6 +92,11 @@ tenant_data_table = ddb.Table(TENANT_DATA_TABLE_NAME)
 tenant_billing_table = ddb.Table(TENANT_BILLING_TABLE_NAME)
 tenant_token_ledger_table = ddb.Table(TENANT_TOKEN_LEDGER_TABLE_NAME)
 stripe_event_store_table = ddb.Table(STRIPE_EVENT_STORE_TABLE_NAME)
+
+# Shared Redis/Valkey connection pool — used by Flask-Session and the
+# statement view cache.  Creating a single pool avoids redundant connections
+# per Gunicorn worker (each import creates its own idle connection budget).
+redis_client: redis_lib.Redis = redis_lib.from_url(VALKEY_URL)
 
 # Secrets fetched from SSM — paths are configured via *_SSM_PATH env vars.
 CLIENT_ID: str = _secrets[get_envar("XERO_CLIENT_ID_SSM_PATH")]
