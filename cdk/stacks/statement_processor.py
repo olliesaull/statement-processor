@@ -169,6 +169,7 @@ class StatementProcessorStack(Stack):
                 "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
                 "TENANT_BILLING_TABLE_NAME": TENANT_BILLING_TABLE_NAME,
                 "TENANT_TOKEN_LEDGER_TABLE_NAME": TENANT_TOKEN_LEDGER_TABLE_NAME,
+                "POWERTOOLS_SERVICE_NAME": "ExtractionLambda",
             },
         )
 
@@ -220,6 +221,7 @@ class StatementProcessorStack(Stack):
                 "S3_BUCKET_NAME": S3_BUCKET_NAME,
                 "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
                 "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
+                "POWERTOOLS_SERVICE_NAME": "TenantErasureLambda",
             },
         )
 

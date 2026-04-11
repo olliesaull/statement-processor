@@ -1,5 +1,5 @@
-"""Structured logger for the tenant erasure Lambda."""
+"""Re-export the shared logger from sp_common for the tenant erasure lambda."""
 
-from aws_lambda_powertools import Logger
+from sp_common.logger import logger
 
-logger = Logger(service="tenant-erasure-lambda")
+__all__ = ["logger"]
