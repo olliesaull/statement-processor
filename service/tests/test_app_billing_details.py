@@ -1,7 +1,7 @@
 """Tests for the billing details purchase flow.
 
 Covers POST /buy-pages, GET /billing-details, and the billing validation
-guard in POST /api/checkout/create. Auth helpers are monkeypatched so the
+guard in POST /checkout/create. Auth helpers are monkeypatched so the
 xero_token_required decorator passes on all requests. CSRF is disabled.
 Sessions are managed via Flask-Session configured with a filesystem backend
 so no Redis connection is required.
@@ -150,7 +150,7 @@ def test_billing_details_get_renders_form_with_pending_token_count(client, monke
 
 
 # ---------------------------------------------------------------------------
-# POST /api/checkout/create — billing validation
+# POST /checkout/create — billing validation
 # ---------------------------------------------------------------------------
 
 
@@ -161,7 +161,7 @@ def test_checkout_create_missing_required_billing_fields_returns_400(client, mon
 
     # Submit with all required fields missing — validation returns 400 before
     # any Stripe API call is made, so no Stripe patching is needed here.
-    response = client.post("/api/checkout/create", data={})
+    response = client.post("/checkout/create", data={})
 
     assert response.status_code == 400
     assert b"required" in response.data
@@ -172,11 +172,11 @@ def test_checkout_create_missing_required_billing_fields_returns_400(client, mon
 
 
 def test_checkout_create_redirects_to_buy_tokens_when_no_pending_count(client) -> None:
-    """POST /api/checkout/create must redirect to /buy-pages when session key is absent."""
+    """POST /checkout/create must redirect to /buy-pages when session key is absent."""
     with client.session_transaction() as sess:
         sess.pop("pending_token_count", None)
 
-    response = client.post("/api/checkout/create", data={"billing_name": "Acme", "billing_email": "a@b.com", "billing_line1": "1 St", "billing_postal_code": "EC1A", "billing_country": "GB"})
+    response = client.post("/checkout/create", data={"billing_name": "Acme", "billing_email": "a@b.com", "billing_line1": "1 St", "billing_postal_code": "EC1A", "billing_country": "GB"})
 
     assert response.status_code == 302
     assert "/buy-pages" in response.headers["Location"]

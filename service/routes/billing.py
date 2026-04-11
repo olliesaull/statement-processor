@@ -14,7 +14,7 @@ from stripe_repository import StripeRepository
 from stripe_service import StripeService
 from tenant_billing_repository import TenantBillingRepository
 from utils.auth import route_handler_logging, xero_token_required
-from utils.checkout import credit_tokens_from_checkout
+from utils.checkout import create_checkout_session, credit_tokens_from_checkout, generate_checkout_failure_ref, resolve_or_create_stripe_customer, validate_billing_fields
 
 billing_bp = Blueprint("billing", __name__)
 
@@ -125,6 +125,78 @@ def billing_details():
     total_pence = PricingConfig.calculate_total_pence(token_count)
 
     return render_template("billing_details.html", token_count=token_count, total_pence=total_pence, default_email=session.get("xero_user_email", ""), default_name=session.get("xero_tenant_name", ""))
+
+
+@billing_bp.route("/checkout/create", methods=["POST"])
+@xero_token_required
+@route_handler_logging
+def checkout_create():
+    """Accept billing details, create/reuse Stripe Customer, and create a Checkout Session.
+
+    Uses graduated pricing (PricingConfig) and persistent Stripe customers.
+    """
+    tenant_id = session.get("xero_tenant_id")
+
+    token_count = session.get("pending_token_count")
+    if not token_count:
+        return redirect(url_for("billing.buy_tokens"))
+
+    # Read billing fields from the billing details form.
+    billing_name = request.form.get("billing_name", "").strip()
+    billing_email = request.form.get("billing_email", "").strip()
+    billing_line1 = request.form.get("billing_line1", "").strip()
+    billing_line2 = request.form.get("billing_line2", "").strip()
+    billing_city = request.form.get("billing_city", "").strip()
+    billing_state = request.form.get("billing_state", "").strip()
+    billing_postal_code = request.form.get("billing_postal_code", "").strip()
+    billing_country = request.form.get("billing_country", "").strip()
+
+    # Validate required fields -- re-render billing form on failure.
+    missing = validate_billing_fields(billing_name=billing_name, billing_email=billing_email, billing_line1=billing_line1, billing_postal_code=billing_postal_code, billing_country=billing_country)
+
+    if missing:
+        total_pence = PricingConfig.calculate_total_pence(token_count)
+        return (
+            render_template(
+                "billing_details.html",
+                token_count=token_count,
+                total_pence=total_pence,
+                saved=request.form,
+                default_email=session.get("xero_user_email", ""),
+                default_name=session.get("xero_tenant_name", ""),
+                error=f"The following fields are required: {', '.join(missing)}.",
+            ),
+            400,
+        )
+
+    # Determine which tenant this purchase is for (validated against session).
+    purchase_tenant_id = session.get("pending_purchase_tenant_id", tenant_id)
+    tenants = session.get("xero_tenants", [])
+    valid_tenant_ids = {t.get("tenantId") for t in tenants}
+    if purchase_tenant_id not in valid_tenant_ids:
+        logger.warning("Purchase tenant not in user's tenant list", purchase_tenant_id=purchase_tenant_id)
+        return redirect(url_for("billing.buy_tokens"))
+
+    address = {"line1": billing_line1, "line2": billing_line2, "city": billing_city, "state": billing_state, "postal_code": billing_postal_code, "country": billing_country}
+
+    success_url = url_for("billing.checkout_success", _external=True) + "?session_id={CHECKOUT_SESSION_ID}"
+    cancel_url = url_for("billing.checkout_cancel", _external=True)
+
+    try:
+        customer_id = resolve_or_create_stripe_customer(_stripe_service, tenant_id=purchase_tenant_id, billing_name=billing_name, billing_email=billing_email, address=address)
+        checkout_url = create_checkout_session(_stripe_service, customer_id=customer_id, token_count=token_count, tenant_id=purchase_tenant_id, success_url=success_url, cancel_url=cancel_url)
+    except stripe.StripeError:
+        ref = generate_checkout_failure_ref()
+        return redirect(url_for("billing.checkout_failed", ref=ref))
+
+    if not checkout_url:
+        ref = generate_checkout_failure_ref()
+        return redirect(url_for("billing.checkout_failed", ref=ref))
+
+    session.pop("pending_token_count", None)
+    session.pop("pending_purchase_tenant_id", None)
+
+    return redirect(checkout_url, code=303)
 
 
 @billing_bp.route("/checkout/success")

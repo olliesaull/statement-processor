@@ -18,7 +18,7 @@
   {% endif %}
 
   <section class="page-panel" style="max-width: 600px;">
-    <form method="POST" action="{{ url_for('api.checkout_create') }}">
+    <form method="POST" action="{{ url_for('billing.checkout_create') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <h2 class="h5 mb-3">Invoice contact</h2>
