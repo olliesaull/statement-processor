@@ -10,7 +10,7 @@ import json
 from io import BytesIO
 from typing import Any
 
-from flask import Response, current_app, request
+from flask import Response, current_app
 
 from core.item_classification import guess_statement_item_type
 from core.statement_detail_types import (
@@ -369,7 +369,9 @@ def build_statement_excel_response(export_req: ExcelExportRequest) -> Response:
     return response
 
 
-def build_statement_view_data(*, tenant_id: str, statement_id: str, contact_id: str | None, data: dict[str, Any], record: dict[str, Any]) -> StatementViewContext | Response:
+def build_statement_view_data(
+    *, tenant_id: str, statement_id: str, contact_id: str | None, data: dict[str, Any], record: dict[str, Any], download_xlsx: bool = False
+) -> StatementViewContext | Response:
     """Run the full statement build pipeline and return cacheable view data.
 
     This is always the uncached path -- the caller is responsible for checking
@@ -382,11 +384,13 @@ def build_statement_view_data(*, tenant_id: str, statement_id: str, contact_id: 
         contact_id: Xero contact linked to this statement (may be None).
         data: Parsed statement JSON from S3 (the ``fetch_json_statement`` result).
         record: DynamoDB statement record (used for Excel downloads).
+        download_xlsx: Whether to return an Excel file response instead of
+            the normal view dict.  The caller decides this from the request
+            query string so this function stays free of Flask request context.
 
     Returns:
         Dict with ``statement_rows`` and ``display_headers`` on the normal
-        path.  Returns a Flask ``Response`` for ``?download=xlsx`` requests
-        (the caller must handle this -- see the xlsx guard in the route).
+        path.  Returns a Flask ``Response`` when ``download_xlsx=True``.
     """
     # 1) Parse display configuration and left-side rows.
     items: list[StatementItemPayload] = data.get("statement_items", []) or []
@@ -444,7 +448,7 @@ def build_statement_view_data(*, tenant_id: str, statement_id: str, contact_id: 
     # right_rows_by_header, etc.) that is not stored in the cached dict.
     # The caller bypasses the cache for xlsx requests and handles this
     # response directly.
-    if request.args.get("download") == "xlsx":
+    if download_xlsx:
         export_req = ExcelExportRequest(
             display_headers=display_headers,
             rows_by_header=rows_by_header,

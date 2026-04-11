@@ -390,7 +390,7 @@ def statement(statement_id: str):
 
     # --- Excel download: bypass cache, needs full pipeline data. ---
     if request.args.get("download") == "xlsx":
-        result = build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, data=statement_json_data, record=record)
+        result = build_statement_view_data(tenant_id=tenant_id, statement_id=statement_id, contact_id=contact_id, data=statement_json_data, record=record, download_xlsx=True)
         # build_statement_view_data returns a Response for xlsx requests.
         return result
 
