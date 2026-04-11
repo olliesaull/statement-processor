@@ -15,6 +15,7 @@ import stripe
 from flask import Blueprint, redirect, render_template, request, session, url_for
 
 from logger import logger
+from oauth_client import absolute_app_url
 from pricing_config import MAX_TOKENS, MIN_TOKENS, PricingConfig
 from stripe_repository import StripeRepository
 from stripe_service import StripeService
@@ -185,8 +186,10 @@ def checkout_create():
 
     address = {"line1": billing_line1, "line2": billing_line2, "city": billing_city, "state": billing_state, "postal_code": billing_postal_code, "country": billing_country}
 
-    success_url = url_for("billing.checkout_success", _external=True) + "?session_id={CHECKOUT_SESSION_ID}"
-    cancel_url = url_for("billing.checkout_cancel", _external=True)
+    # Build absolute URLs from DOMAIN_NAME config rather than the request
+    # Host header, avoiding Host header injection (semgrep flask-url-for-external-true).
+    success_url = absolute_app_url(url_for("billing.checkout_success")) + "?session_id={CHECKOUT_SESSION_ID}"
+    cancel_url = absolute_app_url(url_for("billing.checkout_cancel"))
 
     try:
         customer_id = resolve_or_create_stripe_customer(_stripe_service, tenant_id=purchase_tenant_id, billing_name=billing_name, billing_email=billing_email, address=address)
