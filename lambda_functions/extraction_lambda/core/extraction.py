@@ -17,14 +17,12 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pypdf import PdfReader, PdfWriter
 
+from core.models import ExtractionResult, StatementItem
 from logger import logger
-
-if TYPE_CHECKING:
-    from core.models import ExtractionResult
 
 # region Constants
 
@@ -437,6 +435,8 @@ def _get_bedrock_client() -> Any:
 
     Separated into a function so integration tests can mock it.
     """
+    # Deferred: creating the boto3 client is expensive (HTTP setup, credential
+    # resolution) so we avoid the cost on cold start until actually needed.
     from config import bedrock_runtime_client  # pylint: disable=import-outside-toplevel
 
     return bedrock_runtime_client
@@ -529,8 +529,6 @@ def extract_statement(pdf_bytes: bytes, page_count: int, on_chunk_complete: Call
             chunks known). Subsequent calls increment ``completed``
             up to ``total``.
     """
-    from core.models import ExtractionResult, StatementItem  # pylint: disable=import-outside-toplevel
-
     client = _get_bedrock_client()
     system_prompt = _load_system_prompt()
     reader = PdfReader(io.BytesIO(pdf_bytes))
