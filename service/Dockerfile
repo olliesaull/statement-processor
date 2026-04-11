@@ -19,6 +19,12 @@ RUN grep -v '^\-e' requirements.txt > requirements-docker.txt \
     && pip install --no-cache-dir --target=/app/packages -r requirements-docker.txt
 
 # Final stage
+#
+# Deliberate: this image runs as root.  Adding a non-root user (USER appuser)
+# would require reworking nginx port binding, file permissions, and the Valkey
+# privilege drop in start.sh.  The security benefit is marginal given the App
+# Runner deployment model, and other project Dockerfiles (numerint, gwd-hub)
+# also run as root.
 FROM python:3.13-slim
 
 WORKDIR /app

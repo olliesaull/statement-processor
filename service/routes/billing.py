@@ -3,6 +3,12 @@
 Handles the buy-pages form, billing detail collection, and Stripe checkout
 result pages (success, cancel, failed).  All routes require Xero
 authentication.
+
+Note: these routes use ``@xero_token_required`` but NOT
+``@active_tenant_required``.  This is intentional --
+``xero_token_required`` already enforces that ``xero_tenant_id`` is
+present in the session (see ``utils/auth.py``), so adding
+``@active_tenant_required`` would be redundant.
 """
 
 import stripe
