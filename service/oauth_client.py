@@ -29,7 +29,7 @@ def init_oauth(app: Flask) -> OAuth:
     Returns:
         The configured OAuth registry.
     """
-    global oauth  # noqa: PLW0603
+    global oauth
     oauth = OAuth(app)
     oauth.register(
         name="xero",

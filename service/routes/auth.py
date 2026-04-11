@@ -9,8 +9,9 @@ import secrets
 from authlib.integrations.base_client.errors import OAuthError
 from flask import Blueprint, redirect, request, session, url_for
 
+import oauth_client
 from logger import logger
-from oauth_client import absolute_app_url, oauth
+from oauth_client import absolute_app_url
 from tenant_activation import set_active_tenant, trigger_initial_sync_if_required
 from utils.auth import clear_session_is_set_cookie, has_cookie_consent, route_handler_logging, save_xero_oauth2_token, scope_str, set_session_is_set_cookie
 from utils.email import send_login_notification_email
@@ -36,7 +37,7 @@ def login():
     # Authlib stores state/nonce in session and builds the authorize URL.
     # Building the callback from DOMAIN_NAME keeps the OAuth flow aligned with
     # the canonical public host without adding Flask-side host redirects.
-    return oauth.xero.authorize_redirect(redirect_uri=callback_url, nonce=nonce)
+    return oauth_client.oauth.xero.authorize_redirect(redirect_uri=callback_url, nonce=nonce)
 
 
 @auth_bp.route("/callback")
@@ -55,7 +56,7 @@ def callback():  # pylint: disable=too-many-return-statements
         return f"OAuth error: {error_description}", 400, {"Content-Type": "text/plain; charset=utf-8"}
 
     try:
-        tokens = oauth.xero.authorize_access_token()
+        tokens = oauth_client.oauth.xero.authorize_access_token()
     except OAuthError as exc:
         error_description = exc.description or exc.error
         logger.error("OAuth error", error_code=400, error_description=error_description, error=exc.error)
@@ -79,7 +80,7 @@ def callback():  # pylint: disable=too-many-return-statements
     try:
         # Validates signature + standard claims and checks nonce matches session.
         # Capture claims so we can extract the user email for Stripe customer creation.
-        claims = oauth.xero.parse_id_token(tokens, nonce=nonce)
+        claims = oauth_client.oauth.xero.parse_id_token(tokens, nonce=nonce)
     except Exception as exc:
         logger.exception("Failed to validate id_token", error=str(exc))
         return "Invalid id_token", 400
