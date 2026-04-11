@@ -7,16 +7,14 @@ the ``routes/`` package.
 
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
 
-from authlib.integrations.flask_client import OAuth
 from flask import Flask, jsonify, request, session
 from flask_session import Session
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
-from config import CLIENT_ID, CLIENT_SECRET, DOMAIN_NAME, FLASK_SECRET_KEY, STAGE, redis_client
+from config import CLIENT_ID, CLIENT_SECRET, FLASK_SECRET_KEY, STAGE, redis_client
 from core.statement_row_palette import STATEMENT_ROW_CSS_VARIABLES
 from logger import logger
 from routes.api import api_bp
@@ -26,10 +24,8 @@ from routes.public import public_bp
 from routes.seo import seo_bp
 from routes.statements import statements_bp
 from routes.tenants import tenants_bp
-from sync import check_load_required, sync_data
-from tenant_data_repository import TenantDataRepository, TenantStatus
+from tenant_data_repository import TenantDataRepository
 from ui.banner_service import get_banners
-from utils.auth import scope_str
 
 # python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app
 
@@ -79,64 +75,12 @@ Session(app)
 app.config["CLIENT_ID"] = CLIENT_ID
 app.config["CLIENT_SECRET"] = CLIENT_SECRET
 
-XERO_OIDC_METADATA_URL = os.getenv("XERO_OIDC_METADATA_URL", "https://identity.xero.com/.well-known/openid-configuration")
+# OAuth client and tenant activation helpers live in dedicated modules
+# (oauth_client.py, tenant_activation.py) to avoid circular imports with
+# route Blueprints that previously had to use deferred `from app import ...`.
+from oauth_client import init_oauth
 
-oauth = OAuth(app)
-oauth.register(
-    name="xero",
-    client_id=CLIENT_ID,
-    client_secret=CLIENT_SECRET,
-    # Load endpoints + JWKS from OIDC metadata so Authlib can validate id_tokens.
-    server_metadata_url=XERO_OIDC_METADATA_URL,
-    # Reuse the existing scope string to keep requested permissions unchanged.
-    client_kwargs={"scope": scope_str()},
-)
-
-_executor = ThreadPoolExecutor(max_workers=5)
-
-
-# endregion
-
-# region Helpers shared with Blueprint modules (imported via `from app import ...`)
-
-
-def _trigger_initial_sync_if_required(tenant_id: str | None) -> None:
-    """Kick off an initial load if the tenant has no cached data yet."""
-    if not tenant_id:
-        return
-
-    if check_load_required(tenant_id):
-        oauth_token = session.get("xero_oauth2_token")
-        if not oauth_token:
-            logger.warning("Skipping background sync; missing OAuth token", tenant_id=tenant_id)
-        else:
-            _executor.submit(sync_data, tenant_id, TenantStatus.LOADING, oauth_token)
-
-
-def _set_active_tenant(tenant_id: str | None) -> None:
-    """Persist the selected tenant in the session."""
-    tenants = session.get("xero_tenants", []) or []
-    tenant_map = {t.get("tenantId"): t for t in tenants if t.get("tenantId")}
-    if tenant_id and tenant_id in tenant_map:
-        session["xero_tenant_id"] = tenant_id
-        session["xero_tenant_name"] = tenant_map[tenant_id].get("tenantName")
-        _trigger_initial_sync_if_required(tenant_id)
-    else:
-        session.pop("xero_tenant_id", None)
-        session.pop("xero_tenant_name", None)
-
-
-def _absolute_app_url(path: str) -> str:
-    """Build an absolute application URL from the configured public hostname.
-
-    This mirrors Numerint's simpler Python-side host handling: local
-    development uses ``http://localhost:<port>``, while non-local stages always
-    generate ``https://<DOMAIN_NAME>`` URLs.
-    """
-    if STAGE == "local":
-        local_port = os.getenv("PORT", "8080")
-        return f"http://{DOMAIN_NAME}:{local_port}{path}"
-    return f"https://{DOMAIN_NAME}{path}"
+init_oauth(app)
 
 
 # endregion

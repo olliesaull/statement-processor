@@ -10,6 +10,8 @@ from authlib.integrations.base_client.errors import OAuthError
 from flask import Blueprint, redirect, request, session, url_for
 
 from logger import logger
+from oauth_client import absolute_app_url, oauth
+from tenant_activation import set_active_tenant, trigger_initial_sync_if_required
 from utils.auth import clear_session_is_set_cookie, has_cookie_consent, route_handler_logging, save_xero_oauth2_token, scope_str, set_session_is_set_cookie
 from utils.email import send_login_notification_email
 
@@ -20,10 +22,6 @@ auth_bp = Blueprint("auth", __name__)
 @route_handler_logging
 def login():
     """Start the Xero OAuth flow and redirect to the authorize URL."""
-    # Import here to avoid circular dependency -- oauth is initialized in app.py
-    # and not available at module level.
-    from app import _absolute_app_url, oauth  # pylint: disable=import-outside-toplevel
-
     logger.info("Login initiated")
     if not has_cookie_consent():
         logger.info("Login blocked; cookie consent missing")
@@ -33,7 +31,7 @@ def login():
     nonce = secrets.token_urlsafe(24)
     session["oauth_nonce"] = nonce
 
-    callback_url = _absolute_app_url(url_for("auth.callback"))
+    callback_url = absolute_app_url(url_for("auth.callback"))
     logger.info("Redirecting to Xero authorization", scope_count=len(scope_str().split()))
     # Authlib stores state/nonce in session and builds the authorize URL.
     # Building the callback from DOMAIN_NAME keeps the OAuth flow aligned with
@@ -45,9 +43,6 @@ def login():
 @route_handler_logging
 def callback():  # pylint: disable=too-many-return-statements
     """Handle the OAuth callback, validate tokens, and load tenant context."""
-    # Import here to avoid circular dependency -- these are initialized in app.py.
-    from app import _set_active_tenant, _trigger_initial_sync_if_required, oauth  # pylint: disable=import-outside-toplevel
-
     if not has_cookie_consent():
         logger.info("OAuth callback blocked; cookie consent missing")
         return redirect(url_for("public.cookies"))
@@ -125,15 +120,15 @@ def callback():  # pylint: disable=too-many-return-statements
     session["xero_tenants"] = tenants
 
     for tid in tenant_ids:
-        _trigger_initial_sync_if_required(tid)
+        trigger_initial_sync_if_required(tid)
 
     if current in tenant_ids:
-        _set_active_tenant(current)
+        set_active_tenant(current)
     elif tenant_ids:
         first_tenant = tenant_ids[0]
-        _set_active_tenant(first_tenant)
+        set_active_tenant(first_tenant)
     else:
-        _set_active_tenant(None)
+        set_active_tenant(None)
 
     logger.info("OAuth callback processed", tenants=len(tenants))
 

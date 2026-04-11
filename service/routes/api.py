@@ -6,7 +6,9 @@ All routes in this Blueprint return JSON responses.
 from flask import Blueprint, jsonify, request, session, url_for
 
 from logger import logger
-from tenant_data_repository import TenantDataRepository
+from sync import sync_data
+from tenant_activation import executor
+from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import route_handler_logging, xero_token_required
 from utils.statement_upload_validation import build_statement_upload_preflight
 
@@ -32,10 +34,6 @@ def tenant_status():
 @xero_token_required
 def trigger_tenant_sync(tenant_id: str):
     """Trigger a background sync for the specified tenant."""
-    from app import _executor  # pylint: disable=import-outside-toplevel
-    from sync import sync_data  # pylint: disable=import-outside-toplevel
-    from tenant_data_repository import TenantStatus  # pylint: disable=import-outside-toplevel
-
     tenant_id = (tenant_id or "").strip()
     if not tenant_id:
         return jsonify({"error": "TenantID is required"}), 400
@@ -54,7 +52,7 @@ def trigger_tenant_sync(tenant_id: str):
 
     try:
         # Fire-and-forget: sync runs in the background.
-        _executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token)  # TODO: Perhaps worth checking if there is row in DDB/files in S3
+        executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token)  # TODO: Perhaps worth checking if there is row in DDB/files in S3
         logger.info("Manual tenant sync triggered", tenant_id=tenant_id)
         return jsonify({"started": True}), 202
     except Exception as exc:

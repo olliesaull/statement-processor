@@ -13,6 +13,7 @@ from flask import Blueprint, redirect, request, session, url_for
 
 from config import LOCAL_DATA_DIR
 from logger import logger
+from tenant_activation import set_active_tenant
 from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import clear_session_is_set_cookie, route_handler_logging, xero_token_required
@@ -64,15 +65,13 @@ def tenant_management():
 @route_handler_logging
 def select_tenant():
     """Persist the selected tenant in session and return to management view."""
-    from app import _set_active_tenant  # pylint: disable=import-outside-toplevel
-
     tenant_id = (request.form.get("tenant_id") or "").strip()
     tenants = session.get("xero_tenants") or []
     logger.info("Tenant selection submitted", tenant_id=tenant_id, available=len(tenants))
 
     if tenant_id and any(t.get("tenantId") == tenant_id for t in tenants):
         # Update the active tenant and display a success message.
-        _set_active_tenant(tenant_id)
+        set_active_tenant(tenant_id)
         tenant_name = session.get("xero_tenant_name") or tenant_id
         session["tenant_message"] = f"Switched to tenant: {tenant_name}."
         logger.info("Tenant switched", tenant_id=tenant_id, tenant_name=tenant_name)
@@ -88,8 +87,6 @@ def select_tenant():
 @route_handler_logging
 def disconnect_tenant():
     """Disconnect a tenant from Xero, schedule data erasure, and update session state."""
-    from app import _set_active_tenant  # pylint: disable=import-outside-toplevel
-
     tenant_id = (request.form.get("tenant_id") or "").strip()
     tenants = session.get("xero_tenants") or []
     tenant = next((t for t in tenants if t.get("tenantId") == tenant_id), None)
@@ -151,7 +148,7 @@ def disconnect_tenant():
 
     if session.get("xero_tenant_id") == tenant_id:
         next_tenant_id = updated[0]["tenantId"] if updated else None
-        _set_active_tenant(next_tenant_id)
+        set_active_tenant(next_tenant_id)
 
     logger.info("Tenant disconnected", tenant_id=tenant_id, remaining=len(updated), erasure_days=erasure_days)
 
