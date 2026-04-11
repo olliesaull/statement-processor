@@ -20,60 +20,6 @@ from logger import logger
 _ACTIVE_STATUSES = {"LOADING", "SYNCING"}
 
 
-def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Scan for and erase tenant data past its scheduled erasure time."""
-    now_ms = int(time.time() * 1000)
-    erased_count = 0
-    skipped_count = 0
-    failed_count = 0
-
-    tenants = _scan_for_erasable_tenants(now_ms)
-    logger.info("Found tenants pending erasure", count=len(tenants))
-
-    for tenant in tenants:
-        tenant_id = tenant["TenantID"]
-        status = tenant.get("TenantStatus", "")
-
-        if status in _ACTIVE_STATUSES:
-            logger.warning("Skipping tenant with active operation", tenant_id=tenant_id, status=status)
-            skipped_count += 1
-            continue
-
-        # Claim the tenant FIRST with a conditional write. This marks it as
-        # ERASED and removes EraseTenantDataTime atomically. If a concurrent
-        # reconnection already cleared EraseTenantDataTime, the condition
-        # fails and we skip — no data is touched.
-        try:
-            _mark_as_erased(tenant_id)
-        except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-                logger.warning("Tenant reconnected during erasure, skipping", tenant_id=tenant_id)
-                skipped_count += 1
-            else:
-                logger.error("tenant_erasure_failed", tenant_id=tenant_id, error=str(exc))
-                failed_count += 1
-            continue
-        except Exception as exc:
-            logger.error("tenant_erasure_failed", tenant_id=tenant_id, error=str(exc))
-            failed_count += 1
-            continue
-
-        # Tenant is now claimed (ERASED). Delete the actual data.
-        # If the Lambda crashes here, the tenant is already ERASED so a
-        # reconnection triggers a fresh LOADING that overwrites orphaned data.
-        try:
-            s3_deleted = _delete_s3_objects(tenant_id)
-            statements_deleted = _delete_statement_rows(tenant_id)
-            logger.info("tenant_data_erased", tenant_id=tenant_id, s3_objects_deleted=s3_deleted, statements_deleted=statements_deleted)
-            erased_count += 1
-        except Exception as exc:
-            logger.error("tenant_erasure_failed", tenant_id=tenant_id, error=str(exc))
-            failed_count += 1
-
-    logger.info("Erasure run complete", erased=erased_count, skipped=skipped_count, failed=failed_count)
-    return {"erased": erased_count, "skipped": skipped_count, "failed": failed_count}
-
-
 def _scan_for_erasable_tenants(now_ms: int) -> list[dict[str, Any]]:
     """Scan TenantDataTable for tenants with EraseTenantDataTime in the past."""
     results: list[dict[str, Any]] = []
@@ -144,3 +90,57 @@ def _mark_as_erased(tenant_id: str) -> None:
         ExpressionAttributeValues={":erased": "ERASED"},
         ConditionExpression="attribute_exists(EraseTenantDataTime)",
     )
+
+
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Scan for and erase tenant data past its scheduled erasure time."""
+    now_ms = int(time.time() * 1000)
+    erased_count = 0
+    skipped_count = 0
+    failed_count = 0
+
+    tenants = _scan_for_erasable_tenants(now_ms)
+    logger.info("Found tenants pending erasure", count=len(tenants))
+
+    for tenant in tenants:
+        tenant_id = tenant["TenantID"]
+        status = tenant.get("TenantStatus", "")
+
+        if status in _ACTIVE_STATUSES:
+            logger.warning("Skipping tenant with active operation", tenant_id=tenant_id, status=status)
+            skipped_count += 1
+            continue
+
+        # Claim the tenant FIRST with a conditional write. This marks it as
+        # ERASED and removes EraseTenantDataTime atomically. If a concurrent
+        # reconnection already cleared EraseTenantDataTime, the condition
+        # fails and we skip — no data is touched.
+        try:
+            _mark_as_erased(tenant_id)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                logger.warning("Tenant reconnected during erasure, skipping", tenant_id=tenant_id)
+                skipped_count += 1
+            else:
+                logger.error("tenant_erasure_failed", tenant_id=tenant_id, error=str(exc))
+                failed_count += 1
+            continue
+        except Exception as exc:
+            logger.error("tenant_erasure_failed", tenant_id=tenant_id, error=str(exc))
+            failed_count += 1
+            continue
+
+        # Tenant is now claimed (ERASED). Delete the actual data.
+        # If the Lambda crashes here, the tenant is already ERASED so a
+        # reconnection triggers a fresh LOADING that overwrites orphaned data.
+        try:
+            s3_deleted = _delete_s3_objects(tenant_id)
+            statements_deleted = _delete_statement_rows(tenant_id)
+            logger.info("tenant_data_erased", tenant_id=tenant_id, s3_objects_deleted=s3_deleted, statements_deleted=statements_deleted)
+            erased_count += 1
+        except Exception as exc:
+            logger.error("tenant_erasure_failed", tenant_id=tenant_id, error=str(exc))
+            failed_count += 1
+
+    logger.info("Erasure run complete", erased=erased_count, skipped=skipped_count, failed=failed_count)
+    return {"erased": erased_count, "skipped": skipped_count, "failed": failed_count}
