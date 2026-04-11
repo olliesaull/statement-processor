@@ -166,12 +166,14 @@ def checkout_success():
     # Security: verify the session belongs to the authenticated tenant.
     # Prevents a user who obtains another tenant's session_id from crediting
     # the wrong account.
-    session_tenant_id = stripe_session.metadata.get("tenant_id")
+    # StripeObject metadata doesn't support .get(); convert to plain dict.
+    metadata = stripe_session.metadata.to_dict() if stripe_session.metadata else {}
+    session_tenant_id = metadata.get("tenant_id")
     if session_tenant_id != tenant_id:
         logger.warning("Session tenant_id mismatch", session_id=session_id, session_tenant_id=session_tenant_id, auth_tenant_id=tenant_id)
         return redirect(url_for("billing.checkout_failed"))
 
-    raw_token_count = stripe_session.metadata.get("token_count")
+    raw_token_count = metadata.get("token_count")
     if not raw_token_count:
         logger.error("Missing token_count in Stripe session metadata", session_id=session_id, tenant_id=tenant_id)
         return redirect(url_for("billing.checkout_failed"))
