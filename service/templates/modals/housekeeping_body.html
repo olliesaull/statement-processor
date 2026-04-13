@@ -1,5 +1,10 @@
 {# Body content for the tenant disconnect housekeeping modal.
    Presents three data deletion timeline options as radio buttons. #}
+<div id="subscription-warning" class="alert alert-warning d-none" role="alert">
+  <strong>This tenant has an active subscription.</strong>
+  Your subscription will remain active during the grace period and will be cancelled when your data is deleted.
+</div>
+
 <p class="mb-3">
   You are about to disconnect this tenant. How would you like us to handle your data?
 </p>

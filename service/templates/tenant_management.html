@@ -123,6 +123,12 @@
         // Reset radio to default (2 weeks).
         const defaultRadio = document.getElementById("erasure-14");
         if (defaultRadio) defaultRadio.checked = true;
+        // Toggle subscription warning based on the disconnect form's data attribute.
+        const hasSubscription = form.dataset.hasSubscription === "true";
+        const warning = document.getElementById("subscription-warning");
+        if (warning) {
+          warning.classList.toggle("d-none", !hasSubscription);
+        }
         appModal.show("housekeeping-modal");
       });
     });
