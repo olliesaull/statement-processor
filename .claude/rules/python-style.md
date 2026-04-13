@@ -1,3 +1,8 @@
+---
+paths:
+  - "**/*.py"
+---
+
 # Python Style Guide (Project Standard)
 
 This document contains Python style and coding standards for this repository.

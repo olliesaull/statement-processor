@@ -1,3 +1,17 @@
+---
+paths:
+  - "service/utils/auth.py"
+  - "service/app.py"
+  - "service/config.py"
+  - "service/oauth_client.py"
+  - "service/routes/**/*.py"
+  - "cdk/**/*.py"
+  - "lambda_functions/**/*.py"
+  - "**/*session*"
+  - "**/*auth*"
+  - "**/*upload*"
+---
+
 # Security Model & Guidelines
 
 This document defines security-critical behavior for this repository.
@@ -5,7 +19,7 @@ Read it before changing auth, session handling, upload flows, API routes, or ext
 
 ## Security Context
 
-- The web app is deployed behind a Lambda Function URL configured with `auth_type=NONE`.
+- The web app is deployed on AWS AppRunner with no built-in request-level authentication.
 - This means perimeter auth is not provided by AWS; route-level controls in Flask are the main defense.
 - Financial data and OAuth tokens are in scope, so fail-closed behavior is required.
 
@@ -26,10 +40,10 @@ Do not change these semantics without updating frontend logic and docs.
 
 ## Session Security Contracts
 
-- Session state is server-side in Valkey/Redis via Flask-Session (`SESSION_TYPE='redis'`, `SESSION_REDIS=redis.from_url(VALKEY_URL)`).
+- Session state is server-side in Valkey/Redis via Flask-Session (`SESSION_TYPE="redis"`, `SESSION_REDIS=redis_client`).
 - Browser cookies only contain the signed session identifier; OAuth tokens and tenant payloads stay in Redis.
 - `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_HTTPONLY`, and `SESSION_COOKIE_SAMESITE='Lax'` must remain enabled.
-- `SESSION_TTL_SECONDS` sets `PERMANENT_SESSION_LIFETIME`; keep this aligned with expected idle session lifetime.
+- `PERMANENT_SESSION_LIFETIME` is set to 1860 seconds (31 minutes); keep this aligned with expected idle session lifetime.
 - `VALKEY_URL` must target a trusted Redis/Valkey endpoint (ElastiCache in AWS). Do not expose Redis publicly.
 
 ## Upload and Extraction Boundaries

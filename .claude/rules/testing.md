@@ -1,3 +1,11 @@
+---
+paths:
+  - "**/test_*.py"
+  - "**/tests/**/*.py"
+  - "**/conftest.py"
+  - "**/playwright_tests/**/*"
+---
+
 # Testing Guide
 
 This repository has three test layers:
@@ -59,4 +67,4 @@ Keep returned payloads realistic so tests validate production-shaped data.
 
 ## Browser Testing
 
-For interactive browser testing with Playwright MCP, see `agent_docs/browser_testing.md`.
+For interactive browser testing with Playwright MCP, see the browser-testing rule (`.claude/rules/browser-testing.md`).

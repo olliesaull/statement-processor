@@ -1,3 +1,14 @@
+---
+paths:
+  - "**/*.py"
+  - "**/*.html"
+  - "**/*.js"
+  - "**/*.css"
+  - "cdk/**/*"
+  - "service/**/*"
+  - "lambda_functions/**/*"
+---
+
 # Project Overview
 
 This repository implements a supplier statement reconciliation system for Xero.
@@ -16,7 +27,9 @@ Users upload supplier statement PDFs, the system extracts line items with Bedroc
 ## Runtime Architecture
 
 ### Web application (`service/`)
-- Flask app in [`service/app.py`](service/app.py) creates the app, configures session/CSRF/OAuth, registers Blueprints, and defines error handlers and context processors.
+- Flask app in [`service/app.py`](service/app.py) creates the app, configures session/CSRF, registers Blueprints, and defines error handlers and context processors.
+- OAuth client setup and helpers live in [`service/oauth_client.py`](service/oauth_client.py).
+- Tenant activation helpers (`set_active_tenant`, `trigger_initial_sync_if_required`) live in [`service/tenant_activation.py`](service/tenant_activation.py).
 - Route handlers live in the `service/routes/` package, organized by domain into Flask Blueprints (see **Blueprint architecture** below).
 - Deployed on AWS AppRunner (see [`service/Dockerfile`](service/Dockerfile)).
 - Nginx reverse proxy sits in front of Gunicorn inside the container, providing security headers, CSP, rate limiting, and per-route query string / body size validation. Config lives in `service/nginx.conf` and auto-generated `service/nginx-routes.conf`. See the README "Nginx Reverse Proxy" section for maintenance details.
@@ -30,17 +43,21 @@ Route handlers are split into 7 Blueprints, each in its own module under `servic
 |-----------|--------|--------|-------|
 | `public` | `routes/public.py` | `/`, `/about`, `/instructions`, `/faq`, `/pricing`, `/privacy`, `/terms`, `/cookies` | Unauthenticated marketing/content pages |
 | `seo` | `routes/seo.py` | `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/healthz`, `/favicon.ico` | Machine-readable endpoints; SEO helpers use `current_app` to introspect routes |
-| `auth` | `routes/auth.py` | `/login`, `/logout`, `/callback` | Xero OAuth flow; imports `oauth` and helpers from `app.py` at request time to avoid circular imports |
-| `tenants` | `routes/tenants.py` | `/tenant_management`, `/tenants/select`, `/tenants/disconnect` | Tenant management; imports `_set_active_tenant` from `app.py` at request time |
+| `auth` | `routes/auth.py` | `/login`, `/logout`, `/callback` | Xero OAuth flow; imports from `oauth_client` and `tenant_activation` |
+| `tenants` | `routes/tenants.py` | `/tenant_management`, `/tenants/select`, `/tenants/disconnect` | Tenant management; imports `set_active_tenant` from `tenant_activation` |
 | `statements_bp` | `routes/statements.py` | `/statements`, `/statement/<id>`, `/statement/<id>/delete`, `/upload-statements`, `/statements/count` | Statement list, detail, upload, deletion; Blueprint named `statements_bp` to avoid collision with the `statements` function |
 | `billing` | `routes/billing.py` | `/buy-pages`, `/billing-details`, `/checkout/success`, `/checkout/cancel`, `/checkout/failed` | Token purchase and Stripe checkout result pages |
 | `api` | `routes/api.py` | `/api/tenant-statuses`, `/api/tenants/<id>/sync`, `/api/upload-statements/preflight`, `/api/checkout/create`, `/api/banner/dismiss` | JSON API endpoints |
 
-**Stays in `app.py`**: Flask app creation, config, CSRF, session, OAuth, Blueprint registration, app-level `before_request` hook (`_inject_tenant_logger_context`), error handlers (`handle_csrf_error`), context processors (`inject_banners`, `_inject_statement_row_palette_css`), `_extract_csrf_from_json_body`, `test_login` (dev-only), `chrome_devtools_ping`, and shared helpers (`_set_active_tenant`, `_trigger_initial_sync_if_required`, `_absolute_app_url`).
+**Stays in `app.py`**: Flask app creation, config, CSRF, session, Blueprint registration, app-level `before_request` hook (`_inject_tenant_logger_context`), error handlers (`handle_csrf_error`), context processors (`inject_banners`, `_inject_statement_row_palette_css`), `_extract_csrf_from_json_body`, `test_login` (dev-only), and `chrome_devtools_ping`.
+
+**Extracted modules**:
+- `oauth_client.py`: OAuth client setup and `absolute_app_url` helper.
+- `tenant_activation.py`: `set_active_tenant`, `trigger_initial_sync_if_required`, and the background executor.
 
 **`url_for` convention**: All `url_for` calls use Blueprint-prefixed endpoint names (e.g., `url_for("public.index")`, `url_for("statements_bp.statements")`). This applies to both Python code and Jinja templates. When adding new routes or references, always use the full `blueprint_name.function_name` form.
 
-**Circular imports**: Some Blueprints (auth, tenants, api) import from `app.py` at request time using `import-outside-toplevel` to avoid circular dependency at module load. This is intentional and flagged by pylint as R0401 (cyclic-import); the warnings are acceptable.
+**Circular imports**: Some Blueprints (auth, tenants, api) import from `oauth_client.py` and `tenant_activation.py` rather than `app.py` to avoid circular dependency at module load. Earlier versions imported directly from `app.py` at request time; those have been extracted into dedicated modules.
 
 **`before_request` hook**: Tenant logger context injection (`tenant_id` via `logger.append_keys()`) is handled by a single app-level `before_request` hook in `app.py`, so it runs for all requests across all Blueprints.
 
@@ -126,7 +143,7 @@ Route handlers are split into 7 Blueprints, each in its own module under `servic
   - active tenant,
   - non-expired Xero token.
 - API auth failures return `401` JSON; UI routes redirect.
-- Session storage is encrypted and chunked into multiple cookies (`EncryptedChunkedSessionInterface`) with TTL enforcement on decrypt.
+- Session state is server-side in Valkey/Redis via Flask-Session (`SESSION_TYPE="redis"`, `SESSION_REDIS=redis_client`). Browser cookies only contain the signed session identifier; OAuth tokens and tenant payloads stay in Redis.
 
 ## Non-Obvious Constraints and Invariants
 

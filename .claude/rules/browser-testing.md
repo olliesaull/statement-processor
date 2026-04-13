@@ -1,3 +1,10 @@
+---
+paths:
+  - "service/playwright_tests/**/*"
+  - "service/app.py"
+  - "service/templates/**/*"
+---
+
 # Browser Testing Guide
 
 This project supports interactive browser testing via the Playwright MCP server. Use this when verifying UI changes, debugging page flows, or running exploratory end-to-end checks against a local app instance.

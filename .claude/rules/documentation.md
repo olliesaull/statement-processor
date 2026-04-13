@@ -1,3 +1,10 @@
+---
+paths:
+  - "**/*.py"
+  - "**/*.md"
+  - "**/*.html"
+---
+
 # Documentation Standards
 
 This document defines documentation expectations for this repository.
@@ -46,13 +53,13 @@ Preferred comment style:
 ## Project-Specific Documentation Requirements
 
 Update docs when behavior changes in:
-- Route/auth/session behavior (`service/app.py`, `service/config.py`, `service/utils/auth.py`)
+- Route/auth/session behavior (`service/app.py`, `service/config.py`, `service/utils/auth.py`, `service/oauth_client.py`, `service/tenant_activation.py`)
 - Extraction contracts (`lambda_functions/extraction_lambda/core/*`)
 - Persistence contracts (DynamoDB item shapes, S3 key layouts, Step Functions payloads)
 - Operator workflows (sync, upload, reconciliation, export)
 
 When these change:
-- Update `agent_docs/project.md` with concrete flow/contract changes.
+- Update the relevant `.claude/rules/` file with concrete flow/contract changes.
 - Update `README.md` if user-facing or operator behavior changed.
 - Explain **why** the design/behavior changed, not only what changed.
 

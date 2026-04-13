@@ -1,7 +1,7 @@
 # Agent Guidelines
 
 This file defines cross-project rules for AI coding agents.
-Project-specific context lives in `agent_docs/`.
+Path-scoped project rules live in `.claude/rules/` and load automatically based on file context.
 
 ## Environment
 - All development is done in Linux (Ubuntu).
@@ -45,7 +45,7 @@ Do not change behaviour solely for style/cleanup.
 
 ### Docstrings
 - Docstrings should explain intent and contracts (not narrate obvious code).
-- Use consistent docstring style across the repo (see `agent_docs/documentation.md`).
+- Use consistent docstring style across the repo (see `.claude/rules/documentation.md`).
 
 ### Comments
 - Prefer “why” comments over “what” comments.
@@ -98,16 +98,15 @@ There is no nginx in the local dev environment, so changes that affect nginx or 
 
 When using the Playwright MCP to test pages in the browser, you **must** authenticate first by navigating to `http://localhost:8080/test-login`. This seeds a fake session so all authenticated pages are accessible. Without this step, navigating to any protected page (e.g. `/statements`) will redirect to the Xero OAuth login, which cannot be completed in Playwright.
 
-Full details (prerequisites, env vars, limitations) are in `agent_docs/browser_testing.md`.
+Full details (prerequisites, env vars, limitations) are in `.claude/rules/browser-testing.md`.
 
-## Progressive Documentation
-Each repo may include `agent_docs/` with deeper context (read only when relevant), e.g.:
-- `agent_docs/project.md` (purpose + architecture + repo-specific workflow)
-- `agent_docs/testing.md`
-- `agent_docs/security.md`
-- `agent_docs/frontend.md`
-- `agent_docs/documentation.md`
-- `agent_docs/python_style.md`
+## Decision Log
+
+A decision log is maintained at `docs/decisions/log.md`. This records significant decisions — architectural choices, design tradeoffs, security decisions, and convention choices.
+
+- **Before flagging something as an issue during review**, check the decision log to see if it was a conscious decision.
+- **When a decision is made** (during planning, execution, review, or any standalone session), append an entry to the log. This includes: choosing between technical approaches, accepting a tradeoff, establishing a new convention, or deciding NOT to do something.
+- **Do not log routine implementation details** — only decisions where there was a genuine choice between alternatives or a deliberate tradeoff.
 
 **Important**:
  - Whenever you update the code, check README.md in the root to see if it needs updating with what you just added.

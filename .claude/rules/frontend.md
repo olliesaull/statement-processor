@@ -1,3 +1,12 @@
+---
+paths:
+  - "**/*.html"
+  - "**/*.css"
+  - "**/*.js"
+  - "service/templates/**/*"
+  - "service/static/**/*"
+---
+
 # Frontend Guidelines (HTML / CSS / JS)
 
 This project uses a server-rendered Flask frontend with Jinja templates, Bootstrap 5, a single shared stylesheet, and small vanilla JS modules.
@@ -49,7 +58,7 @@ When creating or modifying pages:
 
 - Include a meaningful `<title>`.
 - Include a descriptive `<meta name="description">`.
-- Maintain correct heading hierarchy (`h1 → h2 → h3`).
+- Maintain correct heading hierarchy (`h1 -> h2 -> h3`).
 - Only one `<h1>` per page.
 - Use descriptive link text.
 - Add alt text to images that describes content meaningfully
