@@ -9,7 +9,7 @@
     <div class="container">
       <p class="section-kicker reveal">Pricing</p>
       <h1 class="reveal reveal-delay-1">Simple, pay-as-you-go pricing.</h1>
-      <p class="page-subtitle reveal reveal-delay-2">No subscription required. Volume discounts on larger purchases. Buy pages when you need them.</p>
+      <p class="page-subtitle reveal reveal-delay-2">Pay as you go or subscribe monthly. Volume discounts on larger purchases.</p>
     </div>
   </header>
 
@@ -99,6 +99,52 @@
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Monthly Subscriptions -->
+  <section class="section">
+    <div class="container">
+      <div class="page-panel reveal">
+        <h2>Monthly Subscriptions</h2>
+        <p>Save more with a monthly plan. Pages are credited automatically each month.</p>
+
+        <div class="table-responsive">
+          <table class="table table-bordered align-middle" style="max-width: 600px;">
+            <thead class="table-light">
+              <tr>
+                <th scope="col">Plan</th>
+                <th scope="col" class="text-center">Pages/month</th>
+                <th scope="col" class="text-center">Price/page</th>
+                <th scope="col" class="text-center">Monthly price</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>50 Pages/mo</td>
+                <td class="text-center">50</td>
+                <td class="text-center">£0.09</td>
+                <td class="text-center">£4.50</td>
+              </tr>
+              <tr>
+                <td>200 Pages/mo</td>
+                <td class="text-center">200</td>
+                <td class="text-center">£0.08</td>
+                <td class="text-center">£16.00</td>
+              </tr>
+              <tr>
+                <td>500 Pages/mo</td>
+                <td class="text-center">500</td>
+                <td class="text-center">£0.07</td>
+                <td class="text-center">£35.00</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="text-muted mt-2">Need more than 500 pages per month? <a href="mailto:support@dexero.co.uk">Contact us</a>.</p>
+        <a href="{{ url_for('billing.subscribe') }}" class="btn btn-primary">View subscription options</a>
       </div>
     </div>
   </section>
