@@ -140,7 +140,7 @@ def callback():  # pylint: disable=too-many-return-statements
 
     # Fire-and-forget login notification -- runs in background thread so it
     # never blocks the login response.
-    active_tenant = next((t for t in tenants if t["tenantId"] == session.get("xero_tenant_id")), None)
+    active_tenant = next((t for t in tenants if t["tenantId"] == active_tid), None)
     executor.submit(
         send_login_notification_email,
         tenant_name=active_tenant["tenantName"] if active_tenant else "Unknown",
