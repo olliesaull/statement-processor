@@ -24,6 +24,7 @@ from routes.public import public_bp
 from routes.seo import seo_bp
 from routes.statements import statements_bp
 from routes.tenants import tenants_bp
+from routes.webhook import webhook_bp
 from tenant_data_repository import TenantDataRepository
 from ui.banner_service import get_banners
 
@@ -103,6 +104,8 @@ app.register_blueprint(tenants_bp)
 app.register_blueprint(statements_bp)
 app.register_blueprint(billing_bp)
 app.register_blueprint(api_bp)
+app.register_blueprint(webhook_bp)
+csrf.exempt(webhook_bp)
 
 # endregion
 
