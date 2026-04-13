@@ -83,18 +83,21 @@ def test_invoice_paid_skips_already_processed() -> None:
 
 
 def test_invoice_paid_credits_difference_on_upgrade() -> None:
-    """Upgrade: credits new_tier_tokens - already_credited."""
+    """Upgrade (same period): credits new_tier_tokens - already_credited."""
+    from datetime import UTC, datetime
+
     billing_service = MagicMock()
     billing_repo = MagicMock()
     stripe_repo = MagicMock()
     stripe_repo.is_invoice_processed.return_value = False
-    # Already credited 50 tokens from previous tier.
+    # Already credited 50 tokens from previous tier, same billing period.
     existing_state = MagicMock()
     existing_state.tokens_credited_this_period = 50
+    existing_state.current_period_end = datetime.fromtimestamp(1747094400, tz=UTC).isoformat()
     billing_repo.get_subscription_state.return_value = existing_state
 
     handler = _make_handler(billing_service=billing_service, billing_repo=billing_repo, stripe_repo=stripe_repo)
-    # Upgrading to tier_200 (200 tokens).
+    # Upgrading to tier_200 (200 tokens) within the same period.
     handler.handle_event(_invoice_paid_event(tier_id="tier_200", token_count="200"))
 
     call_kwargs = billing_service.adjust_token_balance.call_args.kwargs
@@ -102,23 +105,62 @@ def test_invoice_paid_credits_difference_on_upgrade() -> None:
 
 
 def test_invoice_paid_skips_credit_on_downgrade() -> None:
-    """Downgrade: already got more tokens than new tier, credit 0."""
+    """Downgrade (same period): already got more tokens than new tier, credit 0."""
+    from datetime import UTC, datetime
+
     billing_service = MagicMock()
     billing_repo = MagicMock()
     stripe_repo = MagicMock()
     stripe_repo.is_invoice_processed.return_value = False
     existing_state = MagicMock()
     existing_state.tokens_credited_this_period = 200
+    existing_state.current_period_end = datetime.fromtimestamp(1747094400, tz=UTC).isoformat()
     billing_repo.get_subscription_state.return_value = existing_state
 
     handler = _make_handler(billing_service=billing_service, billing_repo=billing_repo, stripe_repo=stripe_repo)
-    # Downgrading to tier_50 (50 tokens) — already got 200.
+    # Downgrading to tier_50 (50 tokens) — already got 200 this period.
     handler.handle_event(_invoice_paid_event(tier_id="tier_50", token_count="50"))
 
     billing_service.adjust_token_balance.assert_not_called()
     # State should still be updated and invoice recorded.
     stripe_repo.record_processed_invoice.assert_called_once()
     billing_repo.update_subscription_state.assert_called_once()
+
+
+def test_invoice_paid_resets_credit_on_new_period() -> None:
+    """Renewal (new period): resets already_credited and credits full tier amount."""
+    billing_service = MagicMock()
+    billing_repo = MagicMock()
+    stripe_repo = MagicMock()
+    stripe_repo.is_invoice_processed.return_value = False
+    # Previous period had 50 tokens credited, but period_end differs from invoice.
+    existing_state = MagicMock()
+    existing_state.tokens_credited_this_period = 50
+    existing_state.current_period_end = "2025-04-13T00:00:00+00:00"
+    billing_repo.get_subscription_state.return_value = existing_state
+
+    handler = _make_handler(billing_service=billing_service, billing_repo=billing_repo, stripe_repo=stripe_repo)
+    # Invoice for new period (period_end=1747094400 → 2025-05-13).
+    handler.handle_event(_invoice_paid_event())
+
+    billing_service.adjust_token_balance.assert_called_once()
+    call_kwargs = billing_service.adjust_token_balance.call_args.kwargs
+    assert call_kwargs["token_delta"] == 50  # Full tier amount, not 0
+
+
+def test_invoice_paid_non_numeric_token_count_logs_error() -> None:
+    """Non-numeric token_count in metadata should log error and not crash."""
+    billing_service = MagicMock()
+    stripe_repo = MagicMock()
+    stripe_repo.is_invoice_processed.return_value = False
+
+    handler = _make_handler(billing_service=billing_service, stripe_repo=stripe_repo)
+
+    with patch("stripe_webhook_handler.logger") as mock_logger:
+        handler.handle_event(_invoice_paid_event(token_count="not_a_number"))
+        mock_logger.error.assert_called()
+
+    billing_service.adjust_token_balance.assert_not_called()
 
 
 def test_invoice_paid_unknown_tier_logs_error() -> None:

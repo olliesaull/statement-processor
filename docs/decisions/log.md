@@ -112,3 +112,15 @@ Use this format for each entry:
 **Rationale:** N DynamoDB lookups per page load for a cosmetic warning is disproportionate. The erasure lambda handles cancellation regardless. Most users have 1-3 tenants.
 
 **References:** `service/templates/tenant_management.html`
+
+---
+
+### [2026-04-13] security-tradeoff | AppRunner `states:StartExecution` on `resources=["*"]`
+
+**Context:** Noticed during subscription feature security audit that the AppRunner instance role grants `states:StartExecution` on all state machines in the account.
+
+**Decision:** Accept for now — add to backlog.
+
+**Rationale:** The `cloudwatch:PutMetricData` action in the same policy statement genuinely requires `resources=["*"]` (AWS limitation). The `states:StartExecution` action should be scoped to `state_machine.state_machine_arn` but splitting the statement is a low-priority refactor. There is only one state machine in the account today, so blast radius is minimal. Fix when next touching CDK IAM grants.
+
+**References:** `cdk/stacks/statement_processor.py` lines 300-306

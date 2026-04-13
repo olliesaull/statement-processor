@@ -23,14 +23,12 @@ class StripeService:
     """Encapsulate Stripe API calls for customer management and checkout."""
 
     def create_customer(self, *, name: str, email: str, address: dict[str, str], tenant_id: str) -> str:
-        """Create a fresh Stripe Customer for a single checkout with that purchase's billing details.
+        """Create a Stripe Customer for this tenant.
 
-        A new customer is created per checkout rather than reusing a persistent one,
-        so each invoice is attached to a customer whose name, email, and address
-        reflect exactly what the user entered — without overwriting any previous
-        purchase's customer record.
-
-        ``tenant_id`` is stored in metadata for traceability in the Stripe Dashboard.
+        The customer is persisted in ``TenantBillingTable`` and reused across
+        checkouts and subscriptions. Billing details can be updated later via
+        ``update_customer`` (pay-as-you-go flow) or the Stripe Customer Portal
+        (subscription flow).
 
         Args:
             name: Company or person name to appear on the invoice.
@@ -43,7 +41,7 @@ class StripeService:
             Stripe Customer ID (``cus_xxx``).
         """
         customer = stripe.Customer.create(name=name, email=email, address=address, metadata={"tenant_id": tenant_id})
-        logger.info("Created per-checkout Stripe customer", tenant_id=tenant_id, stripe_customer_id=customer.id)
+        logger.info("Created Stripe customer", tenant_id=tenant_id, stripe_customer_id=customer.id)
         return customer.id
 
     def update_customer(self, *, customer_id: str, name: str, email: str, address: dict[str, str]) -> None:
@@ -99,6 +97,10 @@ class StripeService:
         Uses mode='subscription' with a Stripe Price object (one per tier).
         Metadata carries tenant_id and tier_id for the webhook handler.
         """
+        # NOTE: billing_address_collection is not set — Stripe Checkout shows address
+        # fields by default with most payment methods but doesn't force them. The
+        # customer can fill them in during checkout or later via the Customer Portal.
+        # Add billing_address_collection="required" if tax compliance demands it. — reviewed 2026-04-13
         return stripe.checkout.Session.create(
             customer=customer_id,
             mode="subscription",

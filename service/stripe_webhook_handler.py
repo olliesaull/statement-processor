@@ -70,7 +70,12 @@ class StripeWebhookHandler:
             logger.error("Invoice missing required subscription metadata", invoice_id=invoice_id, tenant_id=tenant_id, tier_id=tier_id)
             return
 
-        token_count = int(token_count_str)
+        try:
+            token_count = int(token_count_str)
+        except ValueError:
+            logger.error("Non-numeric token_count in subscription metadata", invoice_id=invoice_id, token_count_str=token_count_str)
+            return
+
         subscription_id = invoice.get("subscription", "")
 
         # Determine period end from the invoice line item.
@@ -78,9 +83,13 @@ class StripeWebhookHandler:
         period_end_ts = lines[0]["period"]["end"] if lines else 0
         period_end_iso = datetime.fromtimestamp(period_end_ts, tz=UTC).isoformat() if period_end_ts else ""
 
-        # Tier change delta: credit new_tokens - already_credited_this_period.
+        # Determine how many tokens were already credited this period.
+        # On a new billing period (renewal), reset to 0 so the full tier amount
+        # is credited. On a mid-period tier change, use the delta so the tenant
+        # only receives the difference (upgrade) or 0 (downgrade).
         existing_state = self._billing_repo.get_subscription_state(tenant_id)
-        already_credited = existing_state.tokens_credited_this_period if existing_state else 0
+        is_new_period = not existing_state or period_end_iso != existing_state.current_period_end
+        already_credited = 0 if is_new_period else existing_state.tokens_credited_this_period
         tokens_to_credit = max(0, token_count - already_credited)
 
         ledger_entry_id = f"subscription#{invoice_id}"

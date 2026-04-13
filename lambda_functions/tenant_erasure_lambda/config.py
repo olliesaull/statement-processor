@@ -27,3 +27,7 @@ if STRIPE_API_KEY_SSM_PATH:
     _ssm = session.client("ssm")
     _stripe_key_response = _ssm.get_parameter(Name=STRIPE_API_KEY_SSM_PATH, WithDecryption=True)
     stripe.api_key = _stripe_key_response["Parameter"]["Value"]
+else:
+    # Import logger lazily to avoid circular dependency at module load time.
+    import logging
+    logging.getLogger("TenantErasureLambda").warning("STRIPE_API_KEY_SSM_PATH not set — Stripe subscription cancellation will be skipped on tenant erasure")

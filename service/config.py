@@ -113,3 +113,5 @@ _webhook_ssm_path = os.environ.get("STRIPE_WEBHOOK_SECRET_SSM_PATH", "")
 STRIPE_WEBHOOK_SECRET: str = _secrets.get(_webhook_ssm_path, "") if _webhook_ssm_path else ""
 if not STRIPE_WEBHOOK_SECRET:
     STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+if not STRIPE_WEBHOOK_SECRET and STAGE not in {"dev", "local"}:
+    raise RuntimeError("STRIPE_WEBHOOK_SECRET is empty — webhook signature verification would accept forged events. Set STRIPE_WEBHOOK_SECRET_SSM_PATH or STRIPE_WEBHOOK_SECRET.")

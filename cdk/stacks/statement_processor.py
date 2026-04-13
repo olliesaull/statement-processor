@@ -234,7 +234,7 @@ class StatementProcessorStack(Stack):
         # Allow erasure lambda to fetch Stripe API key for subscription cancellation.
         tenant_erasure_lambda.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["ssm:GetParameters"],
+                actions=["ssm:GetParameter"],
                 resources=["arn:aws:ssm:eu-west-1:747310139457:parameter/StatementProcessor/STRIPE_API_KEY"],
             )
         )

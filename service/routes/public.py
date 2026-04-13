@@ -8,6 +8,7 @@ authentication.
 from flask import Blueprint, render_template
 
 from logger import logger
+from pricing_config import SUBSCRIPTION_TIERS
 from utils.auth import route_handler_logging
 from utils.content import load_faqs, load_legal_page
 
@@ -52,7 +53,8 @@ def pricing():
     Intentionally has no ``@xero_token_required`` so prospective customers
     can see pricing before signing up.
     """
-    return render_template("pricing.html")
+    tiers = list(SUBSCRIPTION_TIERS.values())
+    return render_template("pricing.html", tiers=tiers)
 
 
 @public_bp.route("/privacy")

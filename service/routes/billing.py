@@ -334,6 +334,10 @@ def subscribe_create():
         return redirect(url_for("billing.manage_subscription"))
 
     # Resolve or create Stripe customer (reuse persistent customer).
+    # NOTE: Does not use resolve_or_create_stripe_customer() from utils/checkout.py
+    # because that helper also updates existing customer details (name, email, address)
+    # from the billing form. The subscription flow has no billing form — Stripe
+    # Checkout collects billing info during the checkout session. — reviewed 2026-04-13
     existing_customer_id = TenantBillingRepository.get_stripe_customer_id(tenant_id)
     if not existing_customer_id:
         customer_id = _stripe_service.create_customer(name=session.get("xero_tenant_name", ""), email=session.get("xero_user_email", ""), address={}, tenant_id=tenant_id)

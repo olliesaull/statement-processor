@@ -55,6 +55,9 @@ def tenant_management():
 
     ct_token_balance = tenant_token_balances.get(current_tenant_id, 0) if current_tenant_id else 0
 
+    # NOTE: This is a separate GetItem from the batch balance read above. Could be
+    # combined but the extra read is negligible at current scale and keeps the
+    # balance-lookup and subscription-state responsibilities cleanly separated. — reviewed 2026-04-13
     subscription_state = TenantBillingRepository.get_subscription_state(current_tenant_id) if current_tenant_id else None
     subscription_tier = SUBSCRIPTION_TIERS.get(subscription_state.tier_id) if subscription_state else None
 
