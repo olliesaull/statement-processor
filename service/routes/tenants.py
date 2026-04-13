@@ -13,8 +13,8 @@ from flask import Blueprint, redirect, request, session, url_for
 
 from config import LOCAL_DATA_DIR
 from logger import logger
-from tenant_activation import set_active_tenant
 from pricing_config import SUBSCRIPTION_TIERS
+from tenant_activation import set_active_tenant
 from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import clear_session_is_set_cookie, route_handler_logging, xero_token_required
