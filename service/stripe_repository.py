@@ -79,3 +79,26 @@ class StripeRepository:
         """
         response = _event_store.get_item(Key={"StripeEventID": session_id})
         return response.get("Item")
+
+    @classmethod
+    def is_invoice_processed(cls, invoice_id: str) -> bool:
+        """Return True if this invoice has already been processed by the webhook."""
+        response = _event_store.get_item(Key={"StripeEventID": invoice_id}, ProjectionExpression="StripeEventID")
+        return "Item" in response
+
+    @classmethod
+    def record_processed_invoice(cls, *, invoice_id: str, tenant_id: str, tier_id: str, tokens_credited: int, ledger_entry_id: str) -> None:
+        """Record a processed subscription invoice to prevent double-crediting."""
+        processed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+        _event_store.put_item(
+            Item={
+                "StripeEventID": invoice_id,
+                "EventType": "invoice.paid",
+                "TenantID": tenant_id,
+                "TierID": tier_id,
+                "TokensCredited": tokens_credited,
+                "LedgerEntryID": ledger_entry_id,
+                "ProcessedAt": processed_at,
+            }
+        )
+        logger.info("Recorded processed subscription invoice", invoice_id=invoice_id, tenant_id=tenant_id, tokens_credited=tokens_credited)
