@@ -1,0 +1,1 @@
+Yes. Visit the **Manage Subscription** page and click **Manage in Stripe** to access the Stripe Customer Portal. From there you can upgrade or downgrade your tier. Changes take effect immediately — if you upgrade, you'll receive the additional pages straight away (minus what you've already been credited this period).
