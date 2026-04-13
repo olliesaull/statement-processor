@@ -12,7 +12,7 @@ from flask import Blueprint, redirect, request, session, url_for
 import oauth_client
 from logger import logger
 from oauth_client import absolute_app_url
-from tenant_activation import set_active_tenant, trigger_initial_sync_if_required
+from tenant_activation import executor, set_active_tenant, trigger_initial_sync_if_required
 from utils.auth import clear_session_is_set_cookie, has_cookie_consent, route_handler_logging, save_xero_oauth2_token, scope_str, set_session_is_set_cookie
 from utils.email import send_login_notification_email
 
@@ -120,22 +120,29 @@ def callback():  # pylint: disable=too-many-return-statements
     # Store the latest tenant list before updating the active tenant.
     session["xero_tenants"] = tenants
 
-    for tid in tenant_ids:
-        trigger_initial_sync_if_required(tid)
-
+    # Determine which tenant will be activated — set_active_tenant triggers
+    # sync for that tenant, so skip it in the loop to avoid a duplicate
+    # check_load_required round-trip.
     if current in tenant_ids:
-        set_active_tenant(current)
+        active_tid = current
     elif tenant_ids:
-        first_tenant = tenant_ids[0]
-        set_active_tenant(first_tenant)
+        active_tid = tenant_ids[0]
     else:
-        set_active_tenant(None)
+        active_tid = None
+
+    for tid in tenant_ids:
+        if tid != active_tid:
+            trigger_initial_sync_if_required(tid)
+
+    set_active_tenant(active_tid)
 
     logger.info("OAuth callback processed", tenants=len(tenants))
 
-    # Fire-and-forget login notification -- never blocks the login flow.
+    # Fire-and-forget login notification -- runs in background thread so it
+    # never blocks the login response.
     active_tenant = next((t for t in tenants if t["tenantId"] == session.get("xero_tenant_id")), None)
-    send_login_notification_email(
+    executor.submit(
+        send_login_notification_email,
         tenant_name=active_tenant["tenantName"] if active_tenant else "Unknown",
         user_name=session.get("xero_user_name") or session.get("xero_user_email", "Unknown"),
         user_email=session.get("xero_user_email", ""),
