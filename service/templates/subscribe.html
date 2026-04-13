@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Subscribe - Statement Processor{% endblock %}
+
+{% block content %}
+<div class="page-main">
+  <header class="page-header">
+    <p class="page-kicker mb-1">Monthly Subscriptions</p>
+    <h1 class="mb-2">Choose Your Plan</h1>
+    <p class="page-subtitle mb-0">Save more with a monthly plan. Pages are credited automatically each month.</p>
+  </header>
+
+  <div class="row g-4 mb-4" style="max-width: 900px;">
+    {% for tier in tiers %}
+    <div class="col-md-4">
+      <div class="card h-100{% if tier.tier_id == 'tier_500' %} border-primary{% endif %}">
+        {% if tier.tier_id == 'tier_500' %}
+        <div class="card-header bg-primary text-white text-center fw-semibold py-1">Best Value</div>
+        {% endif %}
+        <div class="card-body d-flex flex-column text-center">
+          <h2 class="card-title h5 mb-3">{{ tier.display_name }}</h2>
+          <p class="display-6 fw-bold mb-1">&pound;{{ "%.2f"|format(tier.monthly_price_pence / 100) }}</p>
+          <p class="text-muted mb-3">per month</p>
+          <p class="mb-4">{{ tier.rate_pence }}p per page</p>
+          <form method="POST" action="{{ url_for('billing.subscribe_create') }}" class="mt-auto">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="tier_id" value="{{ tier.tier_id }}">
+            <button type="submit" class="btn {% if tier.tier_id == 'tier_500' %}btn-primary{% else %}btn-outline-primary{% endif %} w-100">
+              Subscribe
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <p class="text-muted">
+    Need more than 500 pages per month? <a href="mailto:support@dexero.co.uk">Contact us</a>.
+  </p>
+  <p class="text-muted mb-0">
+    Already have a subscription? <a href="{{ url_for('billing.manage_subscription') }}">Manage your subscription</a>.
+  </p>
+</div>
+{% endblock %}
