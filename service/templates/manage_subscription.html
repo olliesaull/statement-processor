@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Manage Subscription - Statement Processor{% endblock %}
+
+{% block content %}
+<div class="page-main">
+  <header class="page-header">
+    <p class="page-kicker mb-1">Your Subscription</p>
+    <h1 class="mb-2">{{ subscription_tier.display_name if subscription_tier else 'Subscription' }}</h1>
+    <p class="page-subtitle mb-0">Manage your monthly subscription plan.</p>
+  </header>
+
+  <section class="page-panel mb-4" style="max-width: 520px;">
+    <dl class="row mb-0">
+      <dt class="col-sm-5">Plan</dt>
+      <dd class="col-sm-7">{{ subscription_tier.display_name if subscription_tier else subscription_state.tier_id }}</dd>
+
+      <dt class="col-sm-5">Pages per month</dt>
+      <dd class="col-sm-7">{{ subscription_tier.tokens_per_month if subscription_tier else '—' }}</dd>
+
+      <dt class="col-sm-5">Renewal date</dt>
+      <dd class="col-sm-7">{{ subscription_state.current_period_end[:10] if subscription_state.current_period_end else '—' }}</dd>
+
+      <dt class="col-sm-5">Current page balance</dt>
+      <dd class="col-sm-7">{{ token_balance }}</dd>
+
+      <dt class="col-sm-5">Status</dt>
+      <dd class="col-sm-7">
+        {% if subscription_state.status == 'active' %}
+          <span class="badge bg-success">Active</span>
+        {% elif subscription_state.status == 'past_due' %}
+          <span class="badge bg-warning text-dark">Past Due</span>
+        {% else %}
+          <span class="badge bg-secondary">{{ subscription_state.status }}</span>
+        {% endif %}
+      </dd>
+    </dl>
+  </section>
+
+  <div class="d-flex flex-wrap gap-2">
+    {% if portal_url %}
+      <a class="btn btn-primary" href="{{ portal_url }}" rel="noopener">Manage in Stripe</a>
+    {% endif %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('billing.buy_tokens') }}">Buy Extra Pages</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('tenants.tenant_management') }}">Back to Tenant Management</a>
+  </div>
+</div>
+{% endblock %}

@@ -10,6 +10,21 @@ from repository_helpers import fetch_items_by_tenant_id
 
 
 @dataclass(frozen=True)
+class SubscriptionState:
+    """Cached subscription state from TenantBillingTable.
+
+    Informational cache — Stripe is the source of truth.
+    Updated via webhooks.
+    """
+
+    tier_id: str
+    status: str
+    stripe_subscription_id: str
+    current_period_end: str
+    tokens_credited_this_period: int
+
+
+@dataclass(frozen=True)
 class TenantBillingRepository:
     """Repository wrapper around the TenantBilling DynamoDB table."""
 
@@ -85,3 +100,41 @@ class TenantBillingRepository:
                 balances[tenant_id] = cls._determine_token_balance(item)
 
         return balances
+
+    @classmethod
+    def get_subscription_state(cls, tenant_id: str) -> SubscriptionState | None:
+        """Fetch cached subscription state for a tenant.
+
+        Returns None if the tenant has no billing record or no subscription fields.
+        """
+        item = cls.get_item((tenant_id or "").strip())
+        if not item:
+            return None
+
+        tier_id = item.get("SubscriptionTierID")
+        if not tier_id:
+            return None
+
+        return SubscriptionState(
+            tier_id=str(tier_id),
+            status=str(item.get("SubscriptionStatus", "")),
+            stripe_subscription_id=str(item.get("StripeSubscriptionID", "")),
+            current_period_end=str(item.get("SubscriptionCurrentPeriodEnd", "")),
+            tokens_credited_this_period=int(item.get("TokensCreditedThisPeriod", 0)),
+        )
+
+    @classmethod
+    def update_subscription_state(cls, *, tenant_id: str, tier_id: str, status: str, stripe_subscription_id: str, current_period_end: str, tokens_credited_this_period: int) -> None:
+        """Write subscription state fields to the tenant billing record."""
+        cls._table.update_item(
+            Key={"TenantID": tenant_id},
+            UpdateExpression=("SET SubscriptionTierID = :tid, SubscriptionStatus = :st, StripeSubscriptionID = :sid, SubscriptionCurrentPeriodEnd = :pe, TokensCreditedThisPeriod = :tc"),
+            ExpressionAttributeValues={":tid": tier_id, ":st": status, ":sid": stripe_subscription_id, ":pe": current_period_end, ":tc": tokens_credited_this_period},
+        )
+
+    @classmethod
+    def clear_subscription_state(cls, tenant_id: str) -> None:
+        """Remove all subscription fields from the tenant billing record."""
+        cls._table.update_item(
+            Key={"TenantID": tenant_id}, UpdateExpression=("REMOVE SubscriptionTierID, SubscriptionStatus, StripeSubscriptionID, SubscriptionCurrentPeriodEnd, TokensCreditedThisPeriod")
+        )

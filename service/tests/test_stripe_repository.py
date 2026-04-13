@@ -100,3 +100,68 @@ def test_get_processed_session_returns_none_when_not_found(monkeypatch) -> None:
     result = StripeRepository.get_processed_session("cs_missing")
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# is_invoice_processed (webhook idempotency)
+# ---------------------------------------------------------------------------
+
+
+def test_is_invoice_processed_returns_false_when_not_found(monkeypatch) -> None:
+    """Should return False when no record exists for this invoice."""
+    table_mock = _make_table_mock()
+    table_mock.get_item.return_value = {}
+    monkeypatch.setattr(stripe_repository_module, "_event_store", table_mock)
+
+    assert StripeRepository.is_invoice_processed("in_notfound") is False
+
+
+def test_is_invoice_processed_returns_true_when_found(monkeypatch) -> None:
+    """Should return True when a record exists for this invoice."""
+    table_mock = _make_table_mock()
+    table_mock.get_item.return_value = {"Item": {"StripeEventID": "in_abc"}}
+    monkeypatch.setattr(stripe_repository_module, "_event_store", table_mock)
+
+    assert StripeRepository.is_invoice_processed("in_abc") is True
+    table_mock.get_item.assert_called_once_with(Key={"StripeEventID": "in_abc"}, ProjectionExpression="StripeEventID")
+
+
+# ---------------------------------------------------------------------------
+# record_processed_invoice (webhook idempotency)
+# ---------------------------------------------------------------------------
+
+
+def test_record_processed_invoice_writes_correct_item(monkeypatch) -> None:
+    """All required attributes must appear in the written item with conditional put."""
+    table_mock = _make_table_mock()
+    monkeypatch.setattr(stripe_repository_module, "_event_store", table_mock)
+
+    result = StripeRepository.record_processed_invoice(invoice_id="in_xyz", tenant_id="tenant-1", tier_id="tier_50", tokens_credited=50, ledger_entry_id="subscription#in_xyz")
+
+    assert result is True
+    table_mock.put_item.assert_called_once()
+    call_kwargs = table_mock.put_item.call_args.kwargs
+    item = call_kwargs["Item"]
+    assert call_kwargs["ConditionExpression"] == "attribute_not_exists(StripeEventID)"
+
+    assert item["StripeEventID"] == "in_xyz"
+    assert item["EventType"] == "invoice.paid"
+    assert item["TenantID"] == "tenant-1"
+    assert item["TierID"] == "tier_50"
+    assert item["TokensCredited"] == 50
+    assert item["LedgerEntryID"] == "subscription#in_xyz"
+    assert isinstance(item["ProcessedAt"], str)
+    assert "T" in item["ProcessedAt"]
+
+
+def test_record_processed_invoice_returns_false_on_duplicate(monkeypatch) -> None:
+    """Duplicate invoice should return False via conditional check failure."""
+    from botocore.exceptions import ClientError
+
+    table_mock = _make_table_mock()
+    table_mock.put_item.side_effect = ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "exists"}}, "PutItem")
+    monkeypatch.setattr(stripe_repository_module, "_event_store", table_mock)
+
+    result = StripeRepository.record_processed_invoice(invoice_id="in_dup", tenant_id="tenant-1", tier_id="tier_50", tokens_credited=50, ledger_entry_id="subscription#in_dup")
+
+    assert result is False

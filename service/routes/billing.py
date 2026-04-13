@@ -16,7 +16,7 @@ from flask import Blueprint, redirect, render_template, request, session, url_fo
 
 from logger import logger
 from oauth_client import absolute_app_url
-from pricing_config import MAX_TOKENS, MIN_TOKENS, PricingConfig
+from pricing_config import MAX_TOKENS, MIN_TOKENS, SUBSCRIPTION_TIERS, PricingConfig
 from stripe_repository import StripeRepository
 from stripe_service import StripeService
 from tenant_billing_repository import TenantBillingRepository
@@ -293,3 +293,103 @@ def checkout_failed():
     """
     ref = request.args.get("ref", "")
     return render_template("checkout_failed.html", ref=ref)
+
+
+# ---------------------------------------------------------------------------
+# Subscription routes
+# ---------------------------------------------------------------------------
+
+
+@billing_bp.route("/subscribe")
+@xero_token_required
+@route_handler_logging
+def subscribe():
+    """Show subscription tier cards. Redirect to manage if already subscribed."""
+    tenant_id = session.get("xero_tenant_id")
+    subscription_state = TenantBillingRepository.get_subscription_state(tenant_id)
+
+    if subscription_state and subscription_state.status in ("active", "past_due"):
+        return redirect(url_for("billing.manage_subscription"))
+
+    tiers = list(SUBSCRIPTION_TIERS.values())
+    return render_template("subscribe.html", tiers=tiers)
+
+
+@billing_bp.route("/subscribe/create", methods=["POST"])
+@xero_token_required
+@route_handler_logging
+def subscribe_create():
+    """Create a Stripe subscription checkout session for the selected tier."""
+    tenant_id = session.get("xero_tenant_id")
+    tier_id = request.form.get("tier_id", "").strip()
+
+    tier = SUBSCRIPTION_TIERS.get(tier_id)
+    if not tier:
+        logger.warning("Invalid tier_id in subscribe request", tier_id=tier_id, tenant_id=tenant_id)
+        return redirect(url_for("billing.subscribe"))
+
+    # Check not already subscribed.
+    subscription_state = TenantBillingRepository.get_subscription_state(tenant_id)
+    if subscription_state and subscription_state.status in ("active", "past_due"):
+        return redirect(url_for("billing.manage_subscription"))
+
+    # Resolve or create Stripe customer (reuse persistent customer).
+    # NOTE: Does not use resolve_or_create_stripe_customer() from utils/checkout.py
+    # because that helper also updates existing customer details (name, email, address)
+    # from the billing form. The subscription flow has no billing form — Stripe
+    # Checkout collects billing info during the checkout session. — reviewed 2026-04-13
+    existing_customer_id = TenantBillingRepository.get_stripe_customer_id(tenant_id)
+    if not existing_customer_id:
+        customer_id = _stripe_service.create_customer(name=session.get("xero_tenant_name", ""), email=session.get("xero_user_email", ""), address={}, tenant_id=tenant_id)
+        TenantBillingRepository.set_stripe_customer_id(tenant_id, customer_id)
+    else:
+        customer_id = existing_customer_id
+
+    success_url = absolute_app_url(url_for("billing.subscribe_success"))
+    cancel_url = absolute_app_url(url_for("billing.subscribe"))
+
+    try:
+        checkout_session = _stripe_service.create_subscription_checkout_session(
+            customer_id=customer_id, stripe_price_id=tier.stripe_price_id, tenant_id=tenant_id, tier_id=tier_id, token_count=tier.tokens_per_month, success_url=success_url, cancel_url=cancel_url
+        )
+    except stripe.StripeError:
+        logger.exception("Failed to create subscription checkout session", tenant_id=tenant_id, tier_id=tier_id)
+        ref = generate_checkout_failure_ref()
+        return redirect(url_for("billing.checkout_failed", ref=ref))
+
+    return redirect(checkout_session.url, code=303)
+
+
+@billing_bp.route("/subscribe/success")
+@xero_token_required
+@route_handler_logging
+def subscribe_success():
+    """Simple confirmation — tokens are credited via webhook, not here."""
+    return render_template("subscribe_success.html")
+
+
+@billing_bp.route("/manage-subscription")
+@xero_token_required
+@route_handler_logging
+def manage_subscription():
+    """Show subscription status and Stripe Customer Portal link."""
+    tenant_id = session.get("xero_tenant_id")
+    subscription_state = TenantBillingRepository.get_subscription_state(tenant_id)
+    subscription_tier = SUBSCRIPTION_TIERS.get(subscription_state.tier_id) if subscription_state else None
+
+    if not subscription_state or subscription_state.status not in ("active", "past_due"):
+        return redirect(url_for("billing.subscribe"))
+
+    token_balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
+
+    # Create Stripe Customer Portal session for self-service management.
+    customer_id = TenantBillingRepository.get_stripe_customer_id(tenant_id)
+    portal_url = ""
+    if customer_id:
+        try:
+            portal_session = _stripe_service.create_billing_portal_session(customer_id=customer_id, return_url=absolute_app_url(url_for("billing.manage_subscription")))
+            portal_url = portal_session.url
+        except stripe.StripeError:
+            logger.exception("Failed to create billing portal session", tenant_id=tenant_id)
+
+    return render_template("manage_subscription.html", subscription_state=subscription_state, subscription_tier=subscription_tier, token_balance=token_balance, portal_url=portal_url)

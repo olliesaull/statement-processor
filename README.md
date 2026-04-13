@@ -411,7 +411,8 @@ Route handlers are split into 7 Blueprints, each in its own module:
 | `auth` | `routes/auth.py` | `/login`, `/logout`, `/callback` | Xero OAuth flow; imports from `oauth_client` and `tenant_activation` |
 | `tenants` | `routes/tenants.py` | `/tenant_management`, `/tenants/select`, `/tenants/disconnect` | Tenant management; imports `set_active_tenant` from `tenant_activation` |
 | `statements_bp` | `routes/statements.py` | `/statements`, `/statement/<id>`, `/statement/<id>/delete`, `/upload-statements`, `/statements/count` | Statement list, detail, upload, deletion; Blueprint named `statements_bp` to avoid collision with the `statements` function |
-| `billing` | `routes/billing.py` | `/buy-pages`, `/billing-details`, `/checkout/create`, `/checkout/success`, `/checkout/cancel`, `/checkout/failed` | Token purchase, billing details form, Stripe checkout session creation, and checkout result pages |
+| `billing` | `routes/billing.py` | `/buy-pages`, `/billing-details`, `/checkout/create`, `/checkout/success`, `/checkout/cancel`, `/checkout/failed`, `/subscribe`, `/subscribe/create`, `/subscribe/success`, `/manage-subscription` | Token purchase, billing details, Stripe checkout, subscription checkout and management |
+| `webhook` | `routes/webhook.py` | `/api/stripe/webhook` | Stripe webhook endpoint for subscription events. CSRF-exempt (signature verification). See decision log |
 | `api` | `routes/api.py` | `/api/tenant-statuses`, `/api/tenants/<id>/sync`, `/api/upload-statements/preflight`, `/api/banner/dismiss` | JSON API endpoints (all routes return JSON) |
 
 **What stays in `app.py`**: Flask app creation, config, CSRF, session, Blueprint registration, app-level `before_request` hooks (`_inject_tenant_logger_context`, `_extract_csrf_from_json_body`), error handlers (`handle_csrf_error`), context processors (`inject_banners`, `_inject_statement_row_palette_css`), `test_login` (dev-only), and `chrome_devtools_ping`.
@@ -480,8 +481,14 @@ Route handlers are split into 7 Blueprints, each in its own module:
   - Formatting/helpers: `service/utils/formatting.py`, `service/utils/tenant_status.py`
 
 - **Stripe integration**:
-  - `service/stripe_service.py` — all Stripe SDK calls (`stripe.Customer.create`, `stripe.checkout.Session.create/retrieve`).
-  - `service/stripe_repository.py` — DynamoDB ops for checkout state.
+  - `service/stripe_service.py` — all Stripe SDK calls (Customer, Checkout Session, Subscription Checkout, Billing Portal).
+  - `service/stripe_repository.py` — DynamoDB idempotency records for checkout sessions and webhook invoices.
+  - `service/stripe_webhook_handler.py` — processes `invoice.paid`, `customer.subscription.updated`, and `customer.subscription.deleted` events. Handles token crediting with upgrade/downgrade delta logic and subscription state caching.
+  - `service/routes/webhook.py` — Stripe webhook Flask route with signature verification. CSRF-exempt via dedicated Blueprint (Stripe authenticates with signing secret, not session cookies).
+  - `service/pricing_config.py` — graduated pricing tiers (pay-as-you-go) and subscription tier definitions (`SubscriptionTier` dataclass, `SUBSCRIPTION_TIERS` dict).
+  - **Subscription tiers**: 50/200/500 pages per month at 9p/8p/7p per page. Each tier is a separate Stripe Product (Customer Portal requires distinct Products for tier switching). Tokens credited via webhook on `invoice.paid`.
+  - **Subscription lifecycle**: subscriptions are preserved during tenant disconnect grace period and only cancelled when tenant data is actually erased (by the erasure Lambda). This allows reconnecting tenants to find everything intact.
+  - **Tier changes**: upgrade credits `new_tokens - already_credited_this_period`; downgrade credits 0 (no clawback). Prorated billing handled by Stripe.
 
 - **Banner system** (`service/banner_service.py`):
   - Reusable provider-registry pattern for site-wide notification banners.

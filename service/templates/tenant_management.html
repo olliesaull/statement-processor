@@ -20,6 +20,15 @@
       {% if current_tenant %}
         <span class="tenant-current-chip">Current tenant: <strong>{{ current_tenant.tenantName or current_tenant.tenantId }}</strong></span>
         <span class="tenant-current-chip {{ 'tenant-token-chip-danger' if ct_token_balance == 0 else 'tenant-token-chip' }}">Available pages: <strong>{{ ct_token_balance }}</strong></span>
+        {% if subscription_state and subscription_state.status == 'active' %}
+          <span class="tenant-current-chip">
+            Plan: <strong>{{ subscription_tier.display_name }}</strong>
+            &middot; Renews {{ subscription_state.current_period_end[:10] }}
+          </span>
+          <a class="btn btn-outline-primary btn-sm" href="{{ url_for('billing.manage_subscription') }}">Manage Subscription</a>
+        {% else %}
+          <a class="btn btn-primary btn-sm" href="{{ url_for('billing.subscribe') }}">Subscribe &amp; Save</a>
+        {% endif %}
       {% endif %}
       <a class="btn btn-primary ms-auto" href="{{ url_for('auth.login') }}">Add Tenant</a>
     </div>
@@ -67,7 +76,12 @@
                         <button class="btn btn-outline-primary btn-sm" type="submit">Switch to Tenant</button>
                       </form>
                     {% endif %}
-                    <form method="post" action="{{ url_for('tenants.disconnect_tenant') }}" class="disconnect-form">
+                    {# Subscription warning only checks the current tenant's state. Per-tenant
+                       lookups would add N DynamoDB calls per page load for a cosmetic warning.
+                       The erasure lambda handles subscription cancellation regardless of whether
+                       the user saw this warning. See docs/decisions/log.md. #}
+                    <form method="post" action="{{ url_for('tenants.disconnect_tenant') }}" class="disconnect-form"
+                          data-has-subscription="{{ 'true' if tenant.tenantId == current_tenant.tenantId and subscription_state and subscription_state.status == 'active' else 'false' }}">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
                       <input type="hidden" name="erasure_days" value="14">
@@ -109,6 +123,12 @@
         // Reset radio to default (2 weeks).
         const defaultRadio = document.getElementById("erasure-14");
         if (defaultRadio) defaultRadio.checked = true;
+        // Toggle subscription warning based on the disconnect form's data attribute.
+        const hasSubscription = form.dataset.hasSubscription === "true";
+        const warning = document.getElementById("subscription-warning");
+        if (warning) {
+          warning.classList.toggle("d-none", !hasSubscription);
+        }
         appModal.show("housekeeping-modal");
       });
     });

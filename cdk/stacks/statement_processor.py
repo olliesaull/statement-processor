@@ -221,13 +221,23 @@ class StatementProcessorStack(Stack):
                 "S3_BUCKET_NAME": S3_BUCKET_NAME,
                 "TENANT_DATA_TABLE_NAME": TENANT_DATA_TABLE_NAME,
                 "TENANT_STATEMENTS_TABLE_NAME": TENANT_STATEMENTS_TABLE_NAME,
+                "TENANT_BILLING_TABLE_NAME": TENANT_BILLING_TABLE_NAME,
+                "STRIPE_API_KEY_SSM_PATH": "/StatementProcessor/STRIPE_API_KEY",
                 "POWERTOOLS_SERVICE_NAME": "TenantErasureLambda",
             },
         )
 
         tenant_data_table.grant_read_write_data(tenant_erasure_lambda)
         tenant_statements_table.grant_read_write_data(tenant_erasure_lambda)
+        tenant_billing_table.grant_read_data(tenant_erasure_lambda)
         s3_bucket.grant_read_write(tenant_erasure_lambda)
+        # Allow erasure lambda to fetch Stripe API key for subscription cancellation.
+        tenant_erasure_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ssm:GetParameter"],
+                resources=["arn:aws:ssm:eu-west-1:747310139457:parameter/StatementProcessor/STRIPE_API_KEY"],
+            )
+        )
 
         # Daily at 02:00 UTC.
         events.Rule(
@@ -365,14 +375,19 @@ class StatementProcessorStack(Stack):
                         "XERO_CLIENT_ID_SSM_PATH": "/StatementProcessor/XERO_CLIENT_ID",
                         "XERO_CLIENT_SECRET_SSM_PATH": "/StatementProcessor/XERO_CLIENT_SECRET",
                         "FLASK_SECRET_KEY_SSM_PATH": "/StatementProcessor/FLASK_SECRET_KEY",
-                        # Stripe — secret key fetched from SSM at startup
+                        # Stripe — secret keys fetched from SSM at startup
                         "STRIPE_API_KEY_SSM_PATH": "/StatementProcessor/STRIPE_API_KEY",
+                        "STRIPE_WEBHOOK_SECRET_SSM_PATH": "/StatementProcessor/STRIPE_WEBHOOK_SECRET",
                         # Stripe — non-secret config (plain env vars)
                         "STRIPE_PRODUCT_ID": "prod_UBMoFkqStKFcjg",
                         "STRIPE_PRICE_PER_TOKEN_PENCE": "10",
                         "STRIPE_CURRENCY": "gbp",
                         "STRIPE_MIN_TOKENS": "10",
                         "STRIPE_MAX_TOKENS": "10000",
+                        # Stripe subscription tier Price IDs
+                        "STRIPE_PRICE_ID_TIER_50": "price_1TLnqeEGVTFRqrO3kJaMmw2H",
+                        "STRIPE_PRICE_ID_TIER_200": "price_1TLnqfEGVTFRqrO3TsiaazKs",
+                        "STRIPE_PRICE_ID_TIER_500": "price_1TLnqgEGVTFRqrO3DLZHXuTt",
                         # CloudFront-only access — Nginx rejects requests missing this header
                         # when STAGE=prod (see start.sh configure_nginx).
                         "X_STATEMENT_CF": "R7K92M3XWPQ4J",

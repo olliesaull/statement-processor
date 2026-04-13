@@ -71,6 +71,15 @@ sections:
       - order: 6
         question: "Will I be charged VAT?"
         answer: "question18.md"
+      - order: 7
+        question: "What happens to my subscription if I disconnect a tenant?"
+        answer: "question24.md"
+      - order: 8
+        question: "Can I buy extra pages on top of my subscription?"
+        answer: "question25.md"
+      - order: 9
+        question: "Can I change my subscription tier?"
+        answer: "question26.md"
 
   - title: "Security & Data"
     order: 5

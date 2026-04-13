@@ -13,6 +13,7 @@ from flask import Blueprint, redirect, request, session, url_for
 
 from config import LOCAL_DATA_DIR
 from logger import logger
+from pricing_config import SUBSCRIPTION_TIERS
 from tenant_activation import set_active_tenant
 from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
@@ -53,10 +54,25 @@ def tenant_management():
         logger.exception("Failed to load tenant token balances", tenant_ids=tenant_ids, error=exc)
 
     ct_token_balance = tenant_token_balances.get(current_tenant_id, 0) if current_tenant_id else 0
+
+    # NOTE: This is a separate GetItem from the batch balance read above. Could be
+    # combined but the extra read is negligible at current scale and keeps the
+    # balance-lookup and subscription-state responsibilities cleanly separated. — reviewed 2026-04-13
+    subscription_state = TenantBillingRepository.get_subscription_state(current_tenant_id) if current_tenant_id else None
+    subscription_tier = SUBSCRIPTION_TIERS.get(subscription_state.tier_id) if subscription_state else None
+
     logger.info("Rendering tenant_management page", current_tenant_id=current_tenant_id, tenant_ids=tenant_ids, current_tenant_token_balance=ct_token_balance)
 
     return render_template(
-        "tenant_management.html", tenants=tenants, current_tenant=current_tenant, ct_token_balance=ct_token_balance, tenant_token_balances=tenant_token_balances, message=message, error=error
+        "tenant_management.html",
+        tenants=tenants,
+        current_tenant=current_tenant,
+        ct_token_balance=ct_token_balance,
+        tenant_token_balances=tenant_token_balances,
+        message=message,
+        error=error,
+        subscription_state=subscription_state,
+        subscription_tier=subscription_tier,
     )
 
 

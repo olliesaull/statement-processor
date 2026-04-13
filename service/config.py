@@ -42,7 +42,7 @@ def get_envar(envar: str, default_value: str = "") -> str:
 
 
 def _fetch_ssm_secrets() -> dict[str, str]:
-    """Fetch Xero OAuth credentials, Flask secret key, and Stripe API key from SSM in one call.
+    """Fetch Xero OAuth credentials, Flask secret key, Stripe API key, and Stripe webhook secret from SSM in one call.
 
     Parameter paths are read from *_SSM_PATH environment variables so they can
     be updated without a code change. Uses get_parameters (batch) to minimise
@@ -58,6 +58,10 @@ def _fetch_ssm_secrets() -> dict[str, str]:
         boto3 ClientError: If the SSM API call fails — propagates unmodified.
     """
     params = [get_envar("XERO_CLIENT_ID_SSM_PATH"), get_envar("XERO_CLIENT_SECRET_SSM_PATH"), get_envar("FLASK_SECRET_KEY_SSM_PATH"), get_envar("STRIPE_API_KEY_SSM_PATH")]
+    # Webhook secret is optional locally (Stripe CLI provides a temporary one).
+    webhook_ssm = os.environ.get("STRIPE_WEBHOOK_SECRET_SSM_PATH", "")
+    if webhook_ssm:
+        params.append(webhook_ssm)
     region: str = os.environ.get("AWS_REGION", "eu-west-1")
     response = boto3.client("ssm", region_name=region).get_parameters(Names=params, WithDecryption=True)
     invalid: list[str] = response.get("InvalidParameters", [])
@@ -103,3 +107,11 @@ CLIENT_ID: str = _secrets[get_envar("XERO_CLIENT_ID_SSM_PATH")]
 CLIENT_SECRET: str = _secrets[get_envar("XERO_CLIENT_SECRET_SSM_PATH")]
 FLASK_SECRET_KEY: str = _secrets[get_envar("FLASK_SECRET_KEY_SSM_PATH")]
 STRIPE_API_KEY: str = _secrets[get_envar("STRIPE_API_KEY_SSM_PATH")]
+# Webhook secret: loaded from SSM in deployed environments; for local development
+# use the Stripe CLI's temporary signing secret via STRIPE_WEBHOOK_SECRET env var.
+_webhook_ssm_path = os.environ.get("STRIPE_WEBHOOK_SECRET_SSM_PATH", "")
+STRIPE_WEBHOOK_SECRET: str = _secrets.get(_webhook_ssm_path, "") if _webhook_ssm_path else ""
+if not STRIPE_WEBHOOK_SECRET:
+    STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+if not STRIPE_WEBHOOK_SECRET and STAGE not in {"dev", "local"}:
+    raise RuntimeError("STRIPE_WEBHOOK_SECRET is empty — webhook signature verification would accept forged events. Set STRIPE_WEBHOOK_SECRET_SSM_PATH or STRIPE_WEBHOOK_SECRET.")
