@@ -13,7 +13,9 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
-from config import S3_BUCKET_NAME, s3_client, tenant_data_table, tenant_statements_table
+import stripe
+
+from config import S3_BUCKET_NAME, s3_client, tenant_billing_table, tenant_data_table, tenant_statements_table
 from logger import logger
 
 # Statuses that indicate an active operation — skip erasure.
@@ -92,6 +94,33 @@ def _mark_as_erased(tenant_id: str) -> None:
     )
 
 
+def _cancel_stripe_subscription_if_active(tenant_id: str) -> None:
+    """Cancel the tenant's Stripe subscription before erasing data.
+
+    Subscriptions are not cancelled on tenant disconnection — only when
+    data is actually erased. This preserves the subscription during the
+    grace period so reconnecting tenants find everything intact.
+    """
+    response = tenant_billing_table.get_item(
+        Key={"TenantID": tenant_id},
+        ProjectionExpression="StripeSubscriptionID",
+    )
+    item = response.get("Item")
+    if not item:
+        return
+
+    subscription_id = item.get("StripeSubscriptionID")
+    if not subscription_id:
+        return
+
+    try:
+        stripe.Subscription.cancel(subscription_id)
+        logger.info("Cancelled Stripe subscription on tenant erasure", tenant_id=tenant_id, subscription_id=subscription_id)
+    except stripe.StripeError:
+        logger.exception("Failed to cancel Stripe subscription on erasure", tenant_id=tenant_id, subscription_id=subscription_id)
+        # Continue with erasure — subscription can be cleaned up manually.
+
+
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Scan for and erase tenant data past its scheduled erasure time."""
     now_ms = int(time.time() * 1000)
@@ -130,9 +159,13 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             failed_count += 1
             continue
 
-        # Tenant is now claimed (ERASED). Delete the actual data.
-        # If the Lambda crashes here, the tenant is already ERASED so a
-        # reconnection triggers a fresh LOADING that overwrites orphaned data.
+        # Tenant is now claimed (ERASED). Cancel any active Stripe subscription
+        # before deleting data, so the customer is not billed for a deleted tenant.
+        _cancel_stripe_subscription_if_active(tenant_id)
+
+        # Delete the actual data. If the Lambda crashes here, the tenant is
+        # already ERASED so a reconnection triggers a fresh LOADING that
+        # overwrites orphaned data.
         try:
             s3_deleted = _delete_s3_objects(tenant_id)
             statements_deleted = _delete_statement_rows(tenant_id)

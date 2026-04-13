@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
 import main
 
@@ -25,6 +25,10 @@ def test_handler_erases_eligible_tenant(monkeypatch) -> None:
     fake_data_table.scan.return_value = {"Items": [tenant]}
     fake_data_table.update_item.return_value = {}
     monkeypatch.setattr(main, "tenant_data_table", fake_data_table)
+
+    fake_billing_table = MagicMock()
+    fake_billing_table.get_item.return_value = {}
+    monkeypatch.setattr(main, "tenant_billing_table", fake_billing_table)
 
     fake_stmt_table = MagicMock()
     fake_stmt_table.query.return_value = {"Items": []}
@@ -109,6 +113,10 @@ def test_handler_continues_after_single_failure(monkeypatch) -> None:
 
     fake_data_table.update_item = mock_update_item
     monkeypatch.setattr(main, "tenant_data_table", fake_data_table)
+
+    fake_billing_table = MagicMock()
+    fake_billing_table.get_item.return_value = {}
+    monkeypatch.setattr(main, "tenant_billing_table", fake_billing_table)
 
     fake_stmt_table = MagicMock()
     fake_stmt_table.query.return_value = {"Items": []}
@@ -247,3 +255,54 @@ def test_delete_s3_objects_returns_zero_for_empty_prefix(monkeypatch) -> None:
 
     assert deleted == 0
     fake_s3.delete_objects.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Subscription cancellation on erasure
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_subscription_when_active(monkeypatch) -> None:
+    """Active subscription should be cancelled via Stripe API."""
+    fake_billing_table = MagicMock()
+    fake_billing_table.get_item.return_value = {"Item": {"TenantID": "t1", "StripeSubscriptionID": "sub_abc"}}
+    monkeypatch.setattr(main, "tenant_billing_table", fake_billing_table)
+
+    with patch("main.stripe.Subscription.cancel") as mock_cancel:
+        main._cancel_stripe_subscription_if_active("t1")
+        mock_cancel.assert_called_once_with("sub_abc")
+
+
+def test_cancel_subscription_no_billing_record(monkeypatch) -> None:
+    """No billing record should return without calling Stripe."""
+    fake_billing_table = MagicMock()
+    fake_billing_table.get_item.return_value = {}
+    monkeypatch.setattr(main, "tenant_billing_table", fake_billing_table)
+
+    with patch("main.stripe.Subscription.cancel") as mock_cancel:
+        main._cancel_stripe_subscription_if_active("t1")
+        mock_cancel.assert_not_called()
+
+
+def test_cancel_subscription_no_subscription_id(monkeypatch) -> None:
+    """Billing record without StripeSubscriptionID should not call Stripe."""
+    fake_billing_table = MagicMock()
+    fake_billing_table.get_item.return_value = {"Item": {"TenantID": "t1"}}
+    monkeypatch.setattr(main, "tenant_billing_table", fake_billing_table)
+
+    with patch("main.stripe.Subscription.cancel") as mock_cancel:
+        main._cancel_stripe_subscription_if_active("t1")
+        mock_cancel.assert_not_called()
+
+
+def test_cancel_subscription_stripe_error_does_not_raise(monkeypatch) -> None:
+    """Stripe API error should log but not prevent erasure."""
+    import stripe as stripe_lib
+
+    fake_billing_table = MagicMock()
+    fake_billing_table.get_item.return_value = {"Item": {"TenantID": "t1", "StripeSubscriptionID": "sub_abc"}}
+    monkeypatch.setattr(main, "tenant_billing_table", fake_billing_table)
+
+    with patch("main.stripe.Subscription.cancel", side_effect=stripe_lib.StripeError("test error")):
+        # Should not raise — error is caught and logged.
+        main._cancel_stripe_subscription_if_active("t1")
