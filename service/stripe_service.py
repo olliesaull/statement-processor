@@ -91,6 +91,36 @@ class StripeService:
             cancel_url=cancel_url,
         )
 
+    def create_subscription_checkout_session(
+        self, *, customer_id: str, stripe_price_id: str, tenant_id: str, tier_id: str, token_count: int, success_url: str, cancel_url: str
+    ) -> stripe.checkout.Session:
+        """Create a Stripe Checkout Session for a subscription purchase.
+
+        Uses mode='subscription' with a Stripe Price object (one per tier).
+        Metadata carries tenant_id and tier_id for the webhook handler.
+        """
+        return stripe.checkout.Session.create(
+            customer=customer_id,
+            mode="subscription",
+            line_items=[{"price": stripe_price_id, "quantity": 1}],
+            subscription_data={"metadata": {"tenant_id": tenant_id, "tier_id": tier_id, "token_count": str(token_count)}},
+            metadata={"tenant_id": tenant_id, "tier_id": tier_id},
+            success_url=success_url,
+            cancel_url=cancel_url,
+        )
+
+    def create_billing_portal_session(self, *, customer_id: str, return_url: str) -> stripe.billing_portal.Session:
+        """Create a Stripe Customer Portal session for subscription management.
+
+        Args:
+            customer_id: Stripe Customer ID.
+            return_url: URL to redirect to after the portal session.
+
+        Returns:
+            The Stripe Billing Portal Session object.
+        """
+        return stripe.billing_portal.Session.create(customer=customer_id, return_url=return_url)
+
     def retrieve_session(self, session_id: str) -> stripe.checkout.Session:
         """Retrieve a Stripe Checkout Session by ID.
 
