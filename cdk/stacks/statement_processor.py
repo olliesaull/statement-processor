@@ -1,6 +1,7 @@
 import aws_cdk as cdk
 from aws_cdk import (
     Duration,
+    IgnoreMode,
     RemovalPolicy,
     Stack,
 )
@@ -42,6 +43,17 @@ class StatementProcessorStack(Stack):
         cloudfront_aliases: list[str] = [apex_domain, f"www.{apex_domain}"] if apex_domain else []
         if is_production and not apex_domain:
             raise ValueError("domain_name must be set for prod deployments so CloudFront aliases and OAuth callback routing are configured for the public site.")
+        # Shared exclusions for Docker image assets.  The build context is the
+        # repo root ("..") so CDK would otherwise hash tens of GB of cdk.out,
+        # venvs, .git, etc. when computing asset fingerprints.
+        _docker_asset_exclude = [
+            "cdk.out", "cdk/cdk.out", "cdk/venv", "cdk/.venv", "cdk/node_modules",
+            ".git", "**/__pycache__", "**/venv", "**/.venv", "**/*.egg-info",
+            "**/.mypy_cache", "**/.ruff_cache", "**/.pytest_cache",
+            "scripts", "plans", ".worktrees", ".superpowers",
+            "screenshots", "snapshots", "static_analysis_semgrep_1",
+        ]
+
         TENANT_STATEMENTS_TABLE_NAME = "TenantStatementsTable"
         TENANT_DATA_TABLE_NAME = "TenantDataTable"
         TENANT_BILLING_TABLE_NAME = "TenantBillingTable"
@@ -178,6 +190,8 @@ class StatementProcessorStack(Stack):
             directory="..",
             file="lambda_functions/extraction_lambda/Dockerfile",
             platform=ecr_assets.Platform.LINUX_ARM64,
+            exclude=_docker_asset_exclude,
+            ignore_mode=IgnoreMode.DOCKER,
         )
 
         extraction_lambda = _lambda.Function(
@@ -233,6 +247,8 @@ class StatementProcessorStack(Stack):
             directory="..",
             file="lambda_functions/tenant_erasure_lambda/Dockerfile",
             platform=ecr_assets.Platform.LINUX_ARM64,
+            exclude=_docker_asset_exclude,
+            ignore_mode=IgnoreMode.DOCKER,
         )
 
         tenant_erasure_lambda = _lambda.Function(
@@ -366,7 +382,10 @@ class StatementProcessorStack(Stack):
             max_size=1,
         )
 
-        apprunner_asset = ecr_assets.DockerImageAsset(self, "AppRunnerImage", directory="..", file="service/Dockerfile")
+        apprunner_asset = ecr_assets.DockerImageAsset(
+            self, "AppRunnerImage", directory="..", file="service/Dockerfile",
+            exclude=_docker_asset_exclude, ignore_mode=IgnoreMode.DOCKER,
+        )
         web = apprunner_alpha.Service(
             self,
             "Statement Processor Website",
