@@ -2220,3 +2220,332 @@ a:focus-visible {
 }
 .legal-content strong { color: var(--slate-800); }
 /* endregion */
+
+/* ==========================================================================
+   Pricing page redesign (visual uplift — 2026-04-14)
+   ========================================================================== */
+
+/* Header — replaces page-header-hero for pricing */
+.pricing-header {
+  background: var(--slate-50);
+  padding: 72px 0 44px;
+  text-align: center;
+  border-bottom: 1px solid var(--slate-200);
+}
+
+.pricing-header .page-kicker {
+  margin-bottom: 0.5rem;
+}
+
+.pricing-header h1 {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 3vw, 2.4rem);
+  font-weight: 700;
+  color: var(--slate-900);
+  margin-bottom: 0.5rem;
+}
+
+.pricing-header .page-subtitle {
+  font-size: 1rem;
+  color: var(--slate-600);
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+/* Hero price area */
+.pricing-hero-price {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.pricing-hero-price .amount {
+  font-size: 3rem;
+  font-weight: 800;
+  color: var(--slate-900);
+  line-height: 1;
+}
+
+.pricing-hero-price .unit {
+  font-size: 1rem;
+  color: var(--slate-400);
+}
+
+.pricing-how-inline {
+  font-size: 0.85rem;
+  color: var(--slate-600);
+  margin-bottom: 0.3rem;
+}
+
+.pricing-how-inline span {
+  display: inline-block;
+  margin-right: 1.5rem;
+}
+
+.pricing-min-purchase {
+  font-size: 0.8rem;
+  color: var(--slate-400);
+  margin-bottom: 2.5rem;
+}
+
+/* Section labels (shared) */
+.uplift-section-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--slate-400);
+  font-weight: 600;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--slate-200);
+}
+
+/* Two-column layout */
+.pricing-columns {
+  display: flex;
+  gap: 2.5rem;
+  margin-bottom: 2.5rem;
+}
+
+.pricing-col {
+  flex: 1;
+}
+
+/* Subscription cards */
+.pricing-sub-card {
+  background: var(--slate-50);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--slate-200);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.6rem;
+  transition: transform var(--transition);
+}
+
+.pricing-sub-card:hover {
+  transform: translateX(4px);
+}
+
+.pricing-sub-card.featured {
+  border: 2px solid var(--blue-600);
+  background: var(--white);
+  position: relative;
+}
+
+.pricing-sub-card .best-value-badge {
+  position: absolute;
+  top: -8px;
+  right: 16px;
+  background: var(--blue-600);
+  color: var(--white);
+  font-size: 0.6rem;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pricing-sub-card .plan-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--slate-900);
+}
+
+.pricing-sub-card .plan-detail {
+  font-size: 0.75rem;
+  color: var(--slate-400);
+}
+
+.pricing-sub-card .plan-monthly {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--slate-900);
+}
+
+.pricing-sub-card .plan-rate {
+  font-size: 0.7rem;
+  color: var(--slate-400);
+}
+
+.pricing-sub-card .plan-pricing {
+  text-align: right;
+}
+
+/* Volume tier rows */
+.pricing-tier-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  background: var(--slate-50);
+  border-radius: var(--radius);
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--slate-200);
+  transition: transform var(--transition);
+}
+
+.pricing-tier-row:hover {
+  transform: translateX(4px);
+}
+
+.pricing-tier-row .range {
+  font-size: 0.85rem;
+  color: var(--slate-600);
+}
+
+.pricing-tier-row .price {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--slate-900);
+}
+
+/* Example cost rows */
+.pricing-example-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--slate-100);
+  font-size: 0.8rem;
+}
+
+.pricing-example-row:last-child {
+  border-bottom: none;
+}
+
+.pricing-example-row .desc {
+  color: var(--slate-600);
+}
+
+.pricing-example-row .detail {
+  color: var(--slate-400);
+  font-size: 0.75rem;
+}
+
+.pricing-example-row .cost {
+  font-weight: 700;
+  color: var(--slate-900);
+}
+
+/* Contact link */
+.pricing-contact {
+  font-size: 0.8rem;
+  color: var(--slate-400);
+  margin-top: 0.75rem;
+}
+
+.pricing-contact a {
+  color: var(--blue-600);
+  text-decoration: none;
+}
+
+.pricing-contact a:hover {
+  text-decoration: underline;
+}
+
+/* CTA — separate from existing .cta-panel to avoid regression */
+.pricing-cta {
+  background: linear-gradient(135deg, #1a365d, #2c5282);
+  border-radius: var(--radius-lg);
+  padding: 2.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--white);
+  margin-top: 1rem;
+}
+
+.pricing-cta h2 {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  color: var(--white);
+  margin-bottom: 0.3rem;
+}
+
+.pricing-cta p {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin: 0;
+}
+
+.pricing-cta-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.pricing-cta .btn-cta-primary {
+  background: var(--white);
+  color: var(--slate-900);
+  padding: 0.6rem 1.4rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: none;
+  transition: background var(--transition);
+}
+
+.pricing-cta .btn-cta-primary:hover {
+  background: var(--slate-100);
+}
+
+.pricing-cta .btn-cta-secondary {
+  background: transparent;
+  color: var(--white);
+  padding: 0.6rem 1.4rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid rgba(255,255,255,0.4);
+  transition: border-color var(--transition);
+}
+
+.pricing-cta .btn-cta-secondary:hover {
+  border-color: rgba(255,255,255,0.7);
+}
+
+/* Terms panel */
+.pricing-terms {
+  margin-top: 2rem;
+  padding: 1.2rem 1.5rem;
+  background: var(--slate-50);
+  border-radius: var(--radius);
+  border: 1px solid var(--slate-200);
+}
+
+.pricing-terms p {
+  font-size: 0.75rem;
+  color: var(--slate-400);
+  margin: 0;
+}
+
+/* Responsive — stack columns on tablet/mobile */
+@media (max-width: 768px) {
+  .pricing-columns {
+    flex-direction: column;
+  }
+
+  .pricing-cta {
+    flex-direction: column;
+    text-align: center;
+    padding: 2rem 1.5rem;
+    gap: 1.5rem;
+  }
+
+  .pricing-cta-actions {
+    justify-content: center;
+  }
+
+  .pricing-header {
+    padding: 48px 0 32px;
+  }
+
+  .pricing-hero-price .amount {
+    font-size: 2.2rem;
+  }
+}
