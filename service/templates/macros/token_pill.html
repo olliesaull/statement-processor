@@ -1,0 +1,18 @@
+{#
+  Reusable "Available pages" pill — green when balance > 0, red when 0.
+
+  Usage:
+    {% from "macros/token_pill.html" import token_pill %}
+    {{ token_pill(balance=42) }}
+    {{ token_pill(balance=0, id="token-balance-pill") }}
+
+  Parameters:
+    balance  — integer page count (required)
+    id       — DOM id for JS targeting (optional)
+#}
+{% macro token_pill(balance, id=none) %}
+<span {% if id %}id="{{ id }}"{% endif %}
+      class="tenant-current-chip {{ 'tenant-token-chip-danger' if balance == 0 else 'tenant-token-chip' }}">
+  Available pages: <strong>{{ balance }}</strong>
+</span>
+{% endmacro %}
