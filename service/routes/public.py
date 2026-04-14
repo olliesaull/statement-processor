@@ -52,6 +52,11 @@ def pricing():
 
     Intentionally has no ``@xero_token_required`` so prospective customers
     can see pricing before signing up.
+
+    Template context:
+        tiers: subscription tier list from ``SUBSCRIPTION_TIERS``.
+        min_tokens: smallest purchasable token quantity (``PricingConfig.MIN_TOKENS``).
+        min_price_pounds: cost of ``min_tokens`` in pounds.
     """
     tiers = list(SUBSCRIPTION_TIERS.values())
     min_tokens = PricingConfig.MIN_TOKENS

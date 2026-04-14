@@ -2550,6 +2550,23 @@ a:focus-visible {
   }
 }
 
+/* Column intro text + action wrapper */
+.pricing-col-intro {
+  font-size: 0.8rem;
+  color: var(--slate-600);
+  margin-bottom: 1rem;
+}
+
+.pricing-col-action {
+  margin-top: 1.5rem;
+}
+
+.pricing-example-section {
+  margin-top: 2rem;
+}
+
+/* endregion */
+
 /* ==========================================================================
    Tenant management redesign (visual uplift — 2026-04-14)
    ========================================================================== */
@@ -2719,3 +2736,25 @@ a:focus-visible {
     gap: 1rem;
   }
 }
+
+/* Content area below summary strip */
+.tenant-content-area {
+  padding-top: 2rem;
+  padding-bottom: 3rem;
+}
+
+.tenant-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.tenant-section-heading h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--slate-900);
+  margin: 0;
+}
+
+/* endregion */

@@ -54,7 +54,7 @@
     </div>
   {% endif %}
 
-  <div class="container" style="padding-top: 2rem; padding-bottom: 3rem;">
+  <div class="container tenant-content-area">
     {% if message %}
       <div class="alert alert-success" role="alert">{{ message }}</div>
     {% endif %}
@@ -63,8 +63,8 @@
     {% endif %}
 
     {% if tenants %}
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2 style="font-size: 1.1rem; font-weight: 600; color: var(--slate-900); margin: 0;">Connected Tenants</h2>
+      <div class="tenant-section-heading">
+        <h2>Connected Tenants</h2>
       </div>
       {% from "macros/landscape_tip.html" import landscape_tip %}
       {{ landscape_tip() }}

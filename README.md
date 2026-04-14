@@ -413,7 +413,7 @@ Route handlers are split into 7 Blueprints, each in its own module:
 | `statements_bp` | `routes/statements.py` | `/statements`, `/statement/<id>`, `/statement/<id>/delete`, `/upload-statements`, `/statements/count` | Statement list, detail, upload, deletion; Blueprint named `statements_bp` to avoid collision with the `statements` function |
 | `billing` | `routes/billing.py` | `/buy-pages`, `/billing-details`, `/checkout/create`, `/checkout/success`, `/checkout/cancel`, `/checkout/failed`, `/subscribe`, `/subscribe/create`, `/subscribe/success`, `/manage-subscription` | Token purchase, billing details, Stripe checkout, subscription checkout and management |
 | `webhook` | `routes/webhook.py` | `/api/stripe/webhook` | Stripe webhook endpoint for subscription events. CSRF-exempt (signature verification). See decision log |
-| `api` | `routes/api.py` | `/api/tenant-statuses`, `/api/tenants/<id>/sync`, `/api/upload-statements/preflight`, `/api/banner/dismiss` | JSON API endpoints (all routes return JSON) |
+| `api` | `routes/api.py` | `/api/tenant-statuses`, `/api/tenants/<id>/sync`, `/api/tenants/<id>/token-balance`, `/api/upload-statements/preflight`, `/api/banner/dismiss` | JSON API endpoints (all routes return JSON) |
 
 **What stays in `app.py`**: Flask app creation, config, CSRF, session, Blueprint registration, app-level `before_request` hooks (`_inject_tenant_logger_context`, `_extract_csrf_from_json_body`), error handlers (`handle_csrf_error`), context processors (`inject_banners`, `_inject_statement_row_palette_css`), `test_login` (dev-only), and `chrome_devtools_ping`.
 
@@ -637,6 +637,17 @@ The site uses Bootstrap 5.3.3 with a custom design token layer in `service/stati
 - **No CSS reset added**: The new design system does not add `* { margin:0; padding:0 }` or redefine `.container` — these would break Bootstrap's own layout assumptions.
 - **Sticky footer**: `body` uses `display: flex; flex-direction: column; min-height: 100dvh` with `.site-shell-main { flex: 1 }` to push the footer to the bottom on short-content pages (checkout success/cancel/failed).
 - **Self-hosted fonts and Bootstrap**: Bootstrap CSS/JS and Google Fonts (Source Serif 4 + Outfit, woff2) are served from `service/static/assets/vendor/` instead of external CDNs. This eliminates runtime dependencies on jsdelivr and Google Fonts, removes the need for CDN entries in the nginx CSP, and avoids privacy implications of third-party font requests. The download script (`service/scripts/update-vendor-assets.sh`) fetches all vendor files and generates `fonts.css` with `@font-face` declarations.
+
+### Jinja Macros
+
+Reusable template components live in `service/templates/macros/`. Import them with `{% from "macros/<name>.html" import <macro> %}`.
+
+| Macro | File | Purpose |
+|-------|------|---------|
+| `modal` | `macros/modal.html` | Bootstrap modal wrapper with configurable title, confirm button, and danger variant |
+| `pagination_nav` | `macros/pagination.html` | Pagination controls with HTMX support and compact variant for sticky docks |
+| `token_pill` | `macros/token_pill.html` | Colour-coded page balance pill (green/amber/red based on threshold) |
+| `landscape_tip` | `macros/landscape_tip.html` | Mobile portrait rotation tip shown above tables on narrow screens |
 
 ## HTMX Partial Page Updates
 

@@ -153,3 +153,19 @@ Use this format for each entry:
 **Decision:** Option B — inline simplified check.
 
 **Rationale:** `main.js` is loaded as `type="module"`, making its top-level functions module-scoped and inaccessible from plain inline `<script>` tags. The shared helper also clears the `session_is_set` cookie and handles `cookie_consent_required` — neither is critical here since the login page handles cleanup on arrival. Exporting the helper to `window` would work but couples module internals to global scope for a single use case.
+
+---
+
+### [2026-04-14] design | Scoped CSS classes for pricing and tenant management redesign
+
+**Context:** Visual uplift of `/pricing` and `/tenant_management` pages. Needed new CSS for headers, cards, summary strips, and tables.
+
+**Options considered:**
+- Option A: Modify existing shared classes (`.page-header-hero`, `.cta-panel`, `.page-table-shell`)
+- Option B: Create new page-scoped classes (`.pricing-*`, `.tenant-*`)
+
+**Decision:** Option B — scoped classes.
+
+**Rationale:** Modifying shared classes risks regressions on other pages. Scoped classes can be iterated on independently and are easier to remove or replace in a future site-wide redesign. The slight duplication (e.g., `.pricing-header` padding similar to `.page-header-hero`) is acceptable for isolation.
+
+**References:** `service/static/assets/css/main.css` (pricing and tenant management redesign sections)

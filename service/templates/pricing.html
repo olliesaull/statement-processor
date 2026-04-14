@@ -5,9 +5,9 @@
 
 {% block content %}
   <!-- Header — light background, no gradient -->
-  <header class="pricing-header reveal">
+  <header class="pricing-header">
     <div class="container">
-      <p class="page-kicker">Pricing</p>
+      <p class="page-kicker reveal">Pricing</p>
       <h1 class="reveal reveal-delay-1">Choose the right plan for your practice.</h1>
       <p class="page-subtitle reveal reveal-delay-2">Subscribe monthly for the best value, or pay as you go with flexible page credits.</p>
     </div>
@@ -17,6 +17,8 @@
   <section class="section">
     <div class="container">
       <div class="reveal">
+        {# NOTE: hero price and featured tier (tier_500) are hardcoded marketing
+           copy. Only 3 tiers exist and they rarely change — reviewed 2026-04-14 #}
         <div class="pricing-hero-price">
           <span class="amount">&pound;0.07</span>
           <span class="unit">per page, from</span>
@@ -38,7 +40,7 @@
         <!-- Left: Monthly Subscriptions -->
         <div class="pricing-col">
           <div class="uplift-section-label">Monthly Subscriptions</div>
-          <p style="font-size: 0.8rem; color: var(--slate-600); margin-bottom: 1rem;">
+          <p class="pricing-col-intro">
             Save more with a monthly plan. Pages credited automatically each month.
           </p>
 
@@ -47,7 +49,7 @@
               {% if tier.tier_id == 'tier_500' %}
                 <span class="best-value-badge">Best Value</span>
               {% endif %}
-              <div class="plan-info">
+              <div>
                 <div class="plan-name">{{ tier.display_name }}</div>
                 <div class="plan-detail">{{ tier.tokens_per_month }} pages/month &middot; &pound;{{ "%.2f"|format(tier.rate_pence / 100) }} per page</div>
               </div>
@@ -60,7 +62,7 @@
 
           <div class="pricing-contact">Need a custom volume? <a href="mailto:support@dexero.co.uk">Contact us</a>.</div>
 
-          <div style="margin-top: 1.5rem;">
+          <div class="pricing-col-action">
             <a href="{{ url_for('billing.subscribe') }}" class="btn btn-primary w-100">View Subscription Options</a>
           </div>
         </div>
@@ -68,7 +70,7 @@
         <!-- Right: Pay As You Go -->
         <div class="pricing-col">
           <div class="uplift-section-label">Pay As You Go</div>
-          <p style="font-size: 0.8rem; color: var(--slate-600); margin-bottom: 1rem;">
+          <p class="pricing-col-intro">
             No commitment. Buy what you need.
           </p>
 
@@ -85,7 +87,7 @@
             <span class="price">from &pound;0.08 /page</span>
           </div>
 
-          <div style="margin-top: 2rem;">
+          <div class="pricing-example-section">
             <div class="uplift-section-label">Example Costs</div>
             <div class="pricing-example-row">
               <span class="desc">Small supplier statement</span>
