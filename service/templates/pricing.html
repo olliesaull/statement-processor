@@ -4,166 +4,139 @@
 {% block container_class %}p-0{% endblock %}
 
 {% block content %}
-  <!-- Page Header -->
-  <header class="page-header page-header-hero">
+  <!-- Header — light background, no gradient -->
+  <header class="pricing-header reveal">
     <div class="container">
-      <p class="section-kicker reveal">Pricing</p>
-      <h1 class="reveal reveal-delay-1">Simple, pay-as-you-go pricing.</h1>
-      <p class="page-subtitle reveal reveal-delay-2">Pay as you go or subscribe monthly. Volume discounts on larger purchases.</p>
+      <p class="page-kicker">Pricing</p>
+      <h1 class="reveal reveal-delay-1">Choose the right plan for your practice.</h1>
+      <p class="page-subtitle reveal reveal-delay-2">Subscribe monthly for the best value, or pay as you go with flexible page credits.</p>
     </div>
   </header>
 
-  <!-- How it works -->
+  <!-- Hero price + how it works -->
   <section class="section">
     <div class="container">
-      <div class="page-panel reveal">
-        <h2>How it works</h2>
-        <ul>
-          <li>Each PDF page costs <strong>1 page credit</strong>.</li>
-          <li>Pages are purchased in advance and deducted as you upload statements.</li>
-          <li>Unused pages roll over and never expire.</li>
-        </ul>
+      <div class="reveal">
+        <div class="pricing-hero-price">
+          <span class="amount">&pound;0.07</span>
+          <span class="unit">per page, from</span>
+        </div>
+        <div class="pricing-how-inline">
+          <span>&check; 1 PDF page = 1 credit</span>
+          <span>&check; Buy in advance, use anytime</span>
+          <span>&check; Credits never expire</span>
+        </div>
+        <div class="pricing-min-purchase">Minimum purchase: {{ min_tokens }} pages = &pound;{{ "%.2f"|format(min_price_pounds) }}</div>
       </div>
     </div>
   </section>
 
-  <!-- Pricing details -->
+  <!-- Two-column body: Subscriptions (left) | PAYG (right) -->
   <section class="section section-alt">
     <div class="container">
-      <div class="page-panel reveal">
-        <h2>Pricing</h2>
-        <div class="d-inline-block border rounded p-4 mb-3">
-          <p class="display-6 fw-bold mb-1">from £0.08 <small class="fs-5 fw-normal text-muted">per page</small></p>
-          <p class="mb-1">Volume discounts on larger purchases</p>
-          <p class="mb-1">Minimum purchase: <strong>10 pages = £1.00</strong></p>
-          <p class="mb-0 text-muted">No subscription required. Buy what you need.</p>
+      <div class="pricing-columns reveal">
+        <!-- Left: Monthly Subscriptions -->
+        <div class="pricing-col">
+          <div class="uplift-section-label">Monthly Subscriptions</div>
+          <p style="font-size: 0.8rem; color: var(--slate-600); margin-bottom: 1rem;">
+            Save more with a monthly plan. Pages credited automatically each month.
+          </p>
+
+          {% for tier in tiers %}
+            <div class="pricing-sub-card {{ 'featured' if tier.tier_id == 'tier_500' }}">
+              {% if tier.tier_id == 'tier_500' %}
+                <span class="best-value-badge">Best Value</span>
+              {% endif %}
+              <div class="plan-info">
+                <div class="plan-name">{{ tier.display_name }}</div>
+                <div class="plan-detail">{{ tier.tokens_per_month }} pages/month &middot; &pound;{{ "%.2f"|format(tier.rate_pence / 100) }} per page</div>
+              </div>
+              <div class="plan-pricing">
+                <div class="plan-monthly">&pound;{{ "%.2f"|format(tier.monthly_price_pence / 100) }}</div>
+                <div class="plan-rate">/month</div>
+              </div>
+            </div>
+          {% endfor %}
+
+          <div class="pricing-contact">Need a custom volume? <a href="mailto:support@dexero.co.uk">Contact us</a>.</div>
+
+          <div style="margin-top: 1.5rem;">
+            <a href="{{ url_for('billing.subscribe') }}" class="btn btn-primary w-100">View Subscription Options</a>
+          </div>
         </div>
 
-        <h3 class="h6 mb-2 mt-3">Volume pricing</h3>
-        <div class="table-responsive">
-          <table class="table table-bordered align-middle" style="max-width: 520px;">
-            <thead class="table-light">
-              <tr>
-                <th scope="col">Pages</th>
-                <th scope="col" class="text-center">Price per page</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Up to 499</td>
-                <td class="text-center">£0.10</td>
-              </tr>
-              <tr>
-                <td>500+</td>
-                <td class="text-center">from £0.09</td>
-              </tr>
-              <tr>
-                <td>1,000+</td>
-                <td class="text-center">from £0.08</td>
-              </tr>
-            </tbody>
-          </table>
+        <!-- Right: Pay As You Go -->
+        <div class="pricing-col">
+          <div class="uplift-section-label">Pay As You Go</div>
+          <p style="font-size: 0.8rem; color: var(--slate-600); margin-bottom: 1rem;">
+            No commitment. Buy what you need.
+          </p>
+
+          <div class="pricing-tier-row">
+            <span class="range">Up to 499 pages</span>
+            <span class="price">&pound;0.10 /page</span>
+          </div>
+          <div class="pricing-tier-row">
+            <span class="range">500+ pages</span>
+            <span class="price">from &pound;0.09 /page</span>
+          </div>
+          <div class="pricing-tier-row">
+            <span class="range">1,000+ pages</span>
+            <span class="price">from &pound;0.08 /page</span>
+          </div>
+
+          <div style="margin-top: 2rem;">
+            <div class="uplift-section-label">Example Costs</div>
+            <div class="pricing-example-row">
+              <span class="desc">Small supplier statement</span>
+              <span class="detail">2 pages</span>
+              <span class="cost">&pound;0.20</span>
+            </div>
+            <div class="pricing-example-row">
+              <span class="desc">Typical monthly statement</span>
+              <span class="detail">8 pages</span>
+              <span class="cost">&pound;0.80</span>
+            </div>
+            <div class="pricing-example-row">
+              <span class="desc">Large annual statement</span>
+              <span class="detail">30 pages</span>
+              <span class="cost">&pound;3.00</span>
+            </div>
+            <div class="pricing-example-row">
+              <span class="desc">Backfill &mdash; one year of statements</span>
+              <span class="detail">750 pages</span>
+              <span class="cost">&pound;72.49</span>
+            </div>
+          </div>
         </div>
-
-        <h3 class="h6 mb-2 mt-3">Example costs</h3>
-        <div class="table-responsive">
-          <table class="table table-bordered align-middle" style="max-width: 520px;">
-            <thead class="table-light">
-              <tr>
-                <th scope="col">Example</th>
-                <th scope="col" class="text-center">Pages</th>
-                <th scope="col" class="text-center">Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Small supplier statement</td>
-                <td class="text-center">2</td>
-                <td class="text-center">£0.20</td>
-              </tr>
-              <tr>
-                <td>Typical monthly statement</td>
-                <td class="text-center">8</td>
-                <td class="text-center">£0.80</td>
-              </tr>
-              <tr>
-                <td>Large annual statement</td>
-                <td class="text-center">30</td>
-                <td class="text-center">£3.00</td>
-              </tr>
-              <tr>
-                <td>Backfill &mdash; one year of statements</td>
-                <td class="text-center">750</td>
-                <td class="text-center">£72.49</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Monthly Subscriptions -->
-  <section class="section">
-    <div class="container">
-      <div class="page-panel reveal">
-        <h2>Monthly Subscriptions</h2>
-        <p>Save more with a monthly plan. Pages are credited automatically each month.</p>
-
-        <div class="table-responsive">
-          <table class="table table-bordered align-middle" style="max-width: 600px;">
-            <thead class="table-light">
-              <tr>
-                <th scope="col">Plan</th>
-                <th scope="col" class="text-center">Pages/month</th>
-                <th scope="col" class="text-center">Price/page</th>
-                <th scope="col" class="text-center">Monthly price</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for tier in tiers %}
-              <tr>
-                <td>{{ tier.display_name }}</td>
-                <td class="text-center">{{ tier.tokens_per_month }}</td>
-                <td class="text-center">&pound;{{ "%.2f"|format(tier.rate_pence / 100) }}</td>
-                <td class="text-center">&pound;{{ "%.2f"|format(tier.monthly_price_pence / 100) }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-
-        <p class="text-muted mt-2">Need more than 500 pages per month? <a href="mailto:support@dexero.co.uk">Contact us</a>.</p>
-        <a href="{{ url_for('billing.subscribe') }}" class="btn btn-primary">View subscription options</a>
-      </div>
-    </div>
-  </section>
-
-  <!-- Terms / Notes -->
-  <section class="section">
-    <div class="container">
-      <div class="page-panel page-panel-muted reveal">
-        <h2>Terms &amp; Notes</h2>
-        <p class="text-muted small mb-0">
-          All prices are exclusive of VAT. VAT is charged at the prevailing UK rate.<br>
-          Pages are non-refundable once purchased.
-        </p>
       </div>
     </div>
   </section>
 
   <!-- CTA -->
-  <section class="section section-alt">
+  <section class="section">
     <div class="container">
-      <div class="cta-panel reveal">
+      <div class="pricing-cta reveal">
         <div>
           <h2>Ready to get started?</h2>
           <p>Open Tenant Management to begin, or follow the step-by-step guide first.</p>
         </div>
-        <div class="cta-actions">
-          <a href="{{ url_for('tenants.tenant_management') }}" class="btn btn-primary">Open Tenant Management</a>
-          <a href="{{ url_for('public.instructions') }}" class="btn btn-secondary">View Step-By-Step Guide</a>
+        <div class="pricing-cta-actions">
+          <a href="{{ url_for('tenants.tenant_management') }}" class="btn-cta-primary">Open Tenant Management</a>
+          <a href="{{ url_for('public.instructions') }}" class="btn-cta-secondary">View Step-By-Step Guide</a>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Terms -->
+  <section class="section">
+    <div class="container">
+      <div class="pricing-terms reveal">
+        <p>
+          All prices are exclusive of VAT. VAT is charged at the prevailing UK rate.<br>
+          Pages are non-refundable once purchased.
+        </p>
       </div>
     </div>
   </section>
