@@ -20,6 +20,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       {# Tenant selector — pre-filled from query param or current tenant #}
+      {% from "macros/token_pill.html" import token_pill %}
       {% if tenants|length > 1 %}
         <div class="mb-3">
           <label for="selected-tenant" class="form-label fw-semibold">Purchase pages for</label>
@@ -36,9 +37,12 @@
         <input type="hidden" name="selected_tenant_id" value="{{ preselected_tenant_id }}">
         <p class="mb-3">
           Purchasing for <strong>{{ tenants[0].tenantName if tenants else 'your tenant' }}</strong>.
-          Current balance: <strong>{{ token_balance }}</strong> page{% if token_balance != 1 %}s{% endif %}.
         </p>
       {% endif %}
+
+      <div class="mb-3">
+        {{ token_pill(balance=token_balance, id="token-balance-pill") }}
+      </div>
 
       <div class="mb-3">
         <label for="token-count" class="form-label fw-semibold">Number of pages to purchase</label>
@@ -122,6 +126,57 @@
 
     input.addEventListener("input", updateDisplay);
     updateDisplay();
+
+    // --- Dynamic balance pill update on tenant switch ---
+    const tenantSelect = document.getElementById("selected-tenant");
+    const pill = document.getElementById("token-balance-pill");
+
+    if (tenantSelect && pill) {
+      // Snapshot the current state so we can revert on error.
+      let lastPillHTML = pill.innerHTML;
+      let lastPillClass = pill.className;
+
+      tenantSelect.addEventListener("change", async () => {
+        const tenantId = tenantSelect.value;
+        if (!tenantId) return;
+
+        // Loading state: grey pill with spinner.
+        lastPillHTML = pill.innerHTML;
+        lastPillClass = pill.className;
+        pill.className = "tenant-current-chip tenant-token-chip-loading";
+        pill.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Available pages: <strong>\u2026</strong>';
+
+        try {
+          const response = await fetch("/api/tenants/" + encodeURIComponent(tenantId) + "/token-balance", {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+          });
+
+          if (await redirectForUnauthorizedResponse(response, window.location.origin + "/login")) {
+            return;
+          }
+
+          if (!response.ok) {
+            throw new Error("Balance fetch failed: " + response.status);
+          }
+
+          const data = await response.json();
+          const balance = data.token_balance;
+          const chipClass = balance === 0 ? "tenant-token-chip-danger" : "tenant-token-chip";
+
+          pill.className = "tenant-current-chip " + chipClass;
+          pill.innerHTML = "Available pages: <strong>" + balance + "</strong>";
+
+          // Update snapshot for next revert.
+          lastPillHTML = pill.innerHTML;
+          lastPillClass = pill.className;
+        } catch (err) {
+          // Revert to previous state on error.
+          pill.className = lastPillClass;
+          pill.innerHTML = lastPillHTML;
+        }
+      });
+    }
   }());
 </script>
 {% endblock %}
