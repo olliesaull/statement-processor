@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVICE_DIR = REPO_ROOT / "service"
+COMMON_DIR = REPO_ROOT / "common"
 DEFAULT_ENV_FILE = SERVICE_DIR / ".env"
 
 
@@ -61,8 +62,11 @@ def main() -> int:
     env_file = Path(args.env_file).expanduser().resolve()
     _load_environment(env_file)
 
-    if str(SERVICE_DIR) not in sys.path:
-        sys.path.insert(0, str(SERVICE_DIR))
+    # service/ for billing_service, tenant_billing_repository, config, etc.
+    # common/ for sp_common.enums (shared enums used by billing_service)
+    for path in (SERVICE_DIR, COMMON_DIR):
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
 
     from billing_service import (  # pylint: disable=import-outside-toplevel
         LAST_MUTATION_SOURCE_MANUAL_ADJUSTMENT,

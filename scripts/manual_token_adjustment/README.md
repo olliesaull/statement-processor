@@ -43,4 +43,5 @@ python3.13 manual_token_adjustment.py tenant-123 50 --yes
 - The script loads `../../service/.env` by default.
 - `token_delta` must be non-zero.
 - Negative adjustments fail if the tenant does not have enough tokens.
-- `requirements.txt` reuses `service/requirements.txt` because the script imports and executes the same billing code as the web app.
+- `requirements.txt` reuses `service/requirements.txt` and installs `common/sp_common` because the script imports and executes the same billing code as the web app.
+- Importing `config.py` triggers SSM secret fetching and a Redis/Valkey connection, so the `.env` must have valid SSM parameter paths and `VALKEY_URL` pointing to a running instance.
