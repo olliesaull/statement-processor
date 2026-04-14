@@ -124,3 +124,20 @@ Use this format for each entry:
 **Rationale:** The `cloudwatch:PutMetricData` action in the same policy statement genuinely requires `resources=["*"]` (AWS limitation). The `states:StartExecution` action should be scoped to `state_machine.state_machine_arn` but splitting the statement is a low-priority refactor. There is only one state machine in the account today, so blast radius is minimal. Fix when next touching CDK IAM grants.
 
 **References:** `cdk/stacks/statement_processor.py` lines 300-306
+
+---
+
+### [2026-04-14] architecture | Stripe Customer created before checkout, not on payment success
+
+**Context:** `create_subscription_checkout_session` requires a `customer_id`. The customer is created and stored in DynamoDB before Stripe Checkout opens, meaning a cancelled checkout leaves an orphaned Stripe customer.
+
+**Options considered:**
+- Option A: Create customer upfront, pass to checkout session (current approach)
+- Option B: Omit `customer_id` and let Stripe create the customer implicitly, then retrieve and store it in the webhook/success handler
+- Option C: Current approach + periodic cleanup of orphaned customers
+
+**Decision:** Option A — create upfront, accept orphans.
+
+**Rationale:** Stripe subscription-mode checkout requires a customer ID. Letting Stripe create one implicitly (Option B) would require retrieving the customer ID after checkout completes and adds complexity to the webhook flow. Orphaned Stripe customers have no cost or billing impact — they're inert records. Periodic cleanup (Option C) is available if orphan volume becomes a concern but isn't justified now.
+
+**References:** `service/routes/billing.py` lines 341-346, `service/stripe_service.py` `create_subscription_checkout_session`

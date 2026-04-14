@@ -136,3 +136,22 @@ class StripeService:
             The Stripe Checkout Session object.
         """
         return stripe.checkout.Session.retrieve(session_id)
+
+    def retrieve_subscription_metadata(self, subscription_id: str) -> dict:
+        """Retrieve metadata from a Stripe Subscription.
+
+        Fallback for when invoice.subscription_details.metadata is empty
+        in the webhook payload — the subscription object always has it.
+
+        Args:
+            subscription_id: Stripe Subscription ID (``sub_xxx``).
+
+        Returns:
+            Metadata dict from the subscription, or empty dict on failure.
+        """
+        try:
+            subscription = stripe.Subscription.retrieve(subscription_id)
+            return dict(subscription.get("metadata", {}))
+        except stripe.StripeError:
+            logger.warning("Failed to retrieve subscription metadata", subscription_id=subscription_id)
+            return {}

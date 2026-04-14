@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from logger import logger
+from pricing_config import STRIPE_PRICE_TO_TIER
 
 
 class StripeWebhookHandler:
@@ -19,7 +20,7 @@ class StripeWebhookHandler:
     Dependencies default to real classes but can be overridden in tests.
     """
 
-    def __init__(self, billing_service: Any = None, billing_repo: Any = None, stripe_repo: Any = None) -> None:
+    def __init__(self, billing_service: Any = None, billing_repo: Any = None, stripe_repo: Any = None, stripe_service: Any = None) -> None:
         if billing_service is None:
             from billing_service import BillingService
 
@@ -32,10 +33,15 @@ class StripeWebhookHandler:
             from stripe_repository import StripeRepository
 
             stripe_repo = StripeRepository
+        if stripe_service is None:
+            from stripe_service import StripeService
+
+            stripe_service = StripeService()
 
         self._billing_service = billing_service
         self._billing_repo = billing_repo
         self._stripe_repo = stripe_repo
+        self._stripe_service = stripe_service
 
     def handle_event(self, event: dict) -> None:
         """Dispatch a Stripe event to the appropriate handler."""
@@ -61,22 +67,29 @@ class StripeWebhookHandler:
             logger.info("Invoice already processed, skipping", invoice_id=invoice_id)
             return
 
-        metadata = invoice.get("subscription_details", {}).get("metadata", {})
+        # API version 2026-03-25.dahlia moved subscription details to
+        # invoice.parent.subscription_details.
+        parent_sub = invoice.get("parent", {}).get("subscription_details", {}) or {}
+        metadata = parent_sub.get("metadata", {})
+        subscription_id = parent_sub.get("subscription", "") or invoice.get("subscription", "")
         tenant_id = metadata.get("tenant_id", "")
-        tier_id = metadata.get("tier_id", "")
-        token_count_str = metadata.get("token_count", "")
 
-        if not tenant_id or not tier_id or not token_count_str:
-            logger.error("Invoice missing required subscription metadata", invoice_id=invoice_id, tenant_id=tenant_id, tier_id=tier_id)
+        # Resolve tier from the price ID on invoice line items rather than
+        # metadata — metadata is set at checkout and is NOT updated when
+        # the customer changes tier via the Stripe Customer Portal.
+        tier = self._resolve_tier_from_invoice_lines(invoice)
+
+        # Fallback: retrieve tenant_id from subscription if not in invoice.
+        if not tenant_id and subscription_id:
+            sub_metadata = self._stripe_service.retrieve_subscription_metadata(subscription_id)
+            tenant_id = sub_metadata.get("tenant_id", "")
+
+        if not tenant_id or not tier:
+            logger.error("Invoice missing required subscription data", invoice_id=invoice_id, tenant_id=tenant_id, tier_resolved=tier is not None)
             return
 
-        try:
-            token_count = int(token_count_str)
-        except ValueError:
-            logger.error("Non-numeric token_count in subscription metadata", invoice_id=invoice_id, token_count_str=token_count_str)
-            return
-
-        subscription_id = invoice.get("subscription", "")
+        tier_id = tier.tier_id
+        token_count = tier.tokens_per_month
 
         # Determine period end from the invoice line item.
         lines = invoice.get("lines", {}).get("data", [])
@@ -112,6 +125,45 @@ class StripeWebhookHandler:
 
         logger.info("Processed subscription invoice", invoice_id=invoice_id, tenant_id=tenant_id, tier_id=tier_id, tokens_credited=tokens_to_credit)
 
+    @staticmethod
+    def _resolve_tier_from_invoice_lines(invoice: dict) -> "SubscriptionTier | None":
+        """Resolve the subscription tier from invoice line item price IDs.
+
+        On a proration invoice (tier change), multiple lines exist — pick
+        the non-proration line (the new tier charge). On a simple renewal,
+        there's typically one line.
+        """
+        from pricing_config import SubscriptionTier
+
+        lines = invoice.get("lines", {}).get("data", [])
+        for line in lines:
+            # Skip proration credits (negative amounts / credited items).
+            sub_item_details = line.get("parent", {}).get("subscription_item_details", {}) or {}
+            if sub_item_details.get("proration") and line.get("amount", 0) < 0:
+                continue
+            price_id = line.get("pricing", {}).get("price_details", {}).get("price", "")
+            tier = STRIPE_PRICE_TO_TIER.get(price_id)
+            if tier:
+                return tier
+        # Fallback: try any line with a matching price.
+        for line in lines:
+            price_id = line.get("pricing", {}).get("price_details", {}).get("price", "")
+            tier = STRIPE_PRICE_TO_TIER.get(price_id)
+            if tier:
+                return tier
+        return None
+
+    @staticmethod
+    def _resolve_tier_from_subscription_items(subscription: dict) -> "SubscriptionTier | None":
+        """Resolve the subscription tier from subscription item price IDs."""
+        items = subscription.get("items", {}).get("data", [])
+        for item in items:
+            price_id = item.get("price", {}).get("id", "")
+            tier = STRIPE_PRICE_TO_TIER.get(price_id)
+            if tier:
+                return tier
+        return None
+
     def _handle_subscription_updated(self, event: dict) -> None:
         """Update cached subscription state from a subscription.updated event."""
         subscription = event["data"]["object"]
@@ -122,7 +174,20 @@ class StripeWebhookHandler:
             logger.warning("subscription.updated missing tenant_id in metadata", subscription_id=subscription.get("id"))
             return
 
-        period_end_iso = datetime.fromtimestamp(subscription["current_period_end"], tz=UTC).isoformat()
+        # Resolve tier from price ID on subscription items — metadata is
+        # stale after Customer Portal tier changes.
+        tier = self._resolve_tier_from_subscription_items(subscription)
+        tier_id = tier.tier_id if tier else metadata.get("tier_id", "")
+
+        # API version 2026-03-25.dahlia moved current_period_end from the
+        # top-level subscription to items.data[].current_period_end.
+        items = subscription.get("items", {}).get("data", [])
+        period_end_ts = items[0]["current_period_end"] if items else subscription.get("current_period_end")
+        period_end_iso = datetime.fromtimestamp(period_end_ts, tz=UTC).isoformat() if period_end_ts else ""
+
+        # Track pending cancellation — cancel_at is a Unix timestamp when set.
+        cancel_at_ts = subscription.get("cancel_at")
+        cancel_at_iso = datetime.fromtimestamp(cancel_at_ts, tz=UTC).isoformat() if cancel_at_ts else ""
 
         # Preserve tokens_credited_this_period from existing state.
         existing_state = self._billing_repo.get_subscription_state(tenant_id)
@@ -130,14 +195,15 @@ class StripeWebhookHandler:
 
         self._billing_repo.update_subscription_state(
             tenant_id=tenant_id,
-            tier_id=metadata.get("tier_id", ""),
+            tier_id=tier_id,
             status=subscription.get("status", ""),
             stripe_subscription_id=subscription["id"],
             current_period_end=period_end_iso,
             tokens_credited_this_period=tokens_credited,
+            cancel_at=cancel_at_iso,
         )
 
-        logger.info("Updated subscription state", tenant_id=tenant_id, subscription_id=subscription["id"])
+        logger.info("Updated subscription state", tenant_id=tenant_id, subscription_id=subscription["id"], tier_id=tier_id, cancel_at=cancel_at_iso)
 
     def _handle_subscription_deleted(self, event: dict) -> None:
         """Clear subscription state when a subscription is cancelled."""

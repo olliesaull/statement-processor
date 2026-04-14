@@ -387,7 +387,7 @@ def manage_subscription():
     portal_url = ""
     if customer_id:
         try:
-            portal_session = _stripe_service.create_billing_portal_session(customer_id=customer_id, return_url=absolute_app_url(url_for("billing.manage_subscription")))
+            portal_session = _stripe_service.create_billing_portal_session(customer_id=customer_id, return_url=absolute_app_url(url_for("billing.manage_subscription", portal_return=1)))
             portal_url = portal_session.url
         except stripe.StripeError:
             logger.exception("Failed to create billing portal session", tenant_id=tenant_id)

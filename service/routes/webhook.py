@@ -9,6 +9,8 @@ the webhook signing secret instead.
 Decision logged in docs/decisions/log.md.
 """
 
+import json
+
 import stripe
 from flask import Blueprint, request
 
@@ -33,7 +35,10 @@ def stripe_webhook():
     sig_header = request.headers.get("Stripe-Signature", "")
 
     try:
-        event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+        stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+        # Verify signature, then parse payload as a plain dict.
+        # StripeObject doesn't support .get() and the handler uses dict idioms.
+        event = json.loads(payload)
     except (ValueError, stripe.SignatureVerificationError):
         logger.warning("Stripe webhook signature verification failed")
         return "Invalid signature", 400

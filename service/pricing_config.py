@@ -62,6 +62,12 @@ SUBSCRIPTION_TIERS: dict[str, SubscriptionTier] = {
     "tier_500": SubscriptionTier(tier_id="tier_500", display_name="500 Pages/mo", tokens_per_month=500, rate_pence=7, stripe_price_id=get_envar("STRIPE_PRICE_ID_TIER_500")),
 }
 
+# Reverse lookup: Stripe Price ID → SubscriptionTier.
+# Used by webhook handlers to resolve the tier from invoice/subscription
+# line items, since subscription metadata is not updated when tiers
+# change via the Stripe Customer Portal.
+STRIPE_PRICE_TO_TIER: dict[str, SubscriptionTier] = {tier.stripe_price_id: tier for tier in SUBSCRIPTION_TIERS.values()}
+
 
 class PricingConfig:
     """Graduated pricing calculations for pay-as-you-go token purchases."""

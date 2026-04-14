@@ -2,40 +2,70 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from stripe_webhook_handler import StripeWebhookHandler
 
 
-def _make_handler(*, billing_service: MagicMock | None = None, billing_repo: MagicMock | None = None, stripe_repo: MagicMock | None = None) -> StripeWebhookHandler:
+@dataclass(frozen=True)
+class _FakeTier:
+    """Minimal tier object for tests."""
+
+    tier_id: str
+    tokens_per_month: int
+
+
+# Fake price-to-tier mapping used by all tests.
+_FAKE_PRICE_MAP = {
+    "price_test_50": _FakeTier(tier_id="tier_50", tokens_per_month=50),
+    "price_test_200": _FakeTier(tier_id="tier_200", tokens_per_month=200),
+    "price_test_500": _FakeTier(tier_id="tier_500", tokens_per_month=500),
+}
+
+
+def _make_handler(
+    *, billing_service: MagicMock | None = None, billing_repo: MagicMock | None = None, stripe_repo: MagicMock | None = None, stripe_service: MagicMock | None = None
+) -> StripeWebhookHandler:
     """Create a handler with mocked dependencies."""
-    return StripeWebhookHandler(billing_service=billing_service or MagicMock(), billing_repo=billing_repo or MagicMock(), stripe_repo=stripe_repo or MagicMock())
+    return StripeWebhookHandler(
+        billing_service=billing_service or MagicMock(), billing_repo=billing_repo or MagicMock(), stripe_repo=stripe_repo or MagicMock(), stripe_service=stripe_service or MagicMock()
+    )
 
 
-def _invoice_paid_event(
-    *, invoice_id: str = "in_abc", subscription_id: str = "sub_xyz", tenant_id: str = "tenant-1", tier_id: str = "tier_50", token_count: str = "50", period_end: int = 1747094400
-) -> dict:
-    """Build a minimal invoice.paid event dict."""
+_TIER_TO_PRICE = {"tier_50": "price_test_50", "tier_200": "price_test_200", "tier_500": "price_test_500"}
+
+
+@pytest.fixture(autouse=True)
+def _patch_price_map():
+    """Patch the price-to-tier lookup for all tests in this module."""
+    with patch("stripe_webhook_handler.STRIPE_PRICE_TO_TIER", _FAKE_PRICE_MAP):
+        yield
+
+
+def _invoice_paid_event(*, invoice_id: str = "in_abc", subscription_id: str = "sub_xyz", tenant_id: str = "tenant-1", tier_id: str = "tier_50", period_end: int = 1747094400) -> dict:
+    """Build a minimal invoice.paid event dict matching API version 2026-03-25.dahlia."""
+    price_id = _TIER_TO_PRICE.get(tier_id, "price_test_unknown")
     return {
         "type": "invoice.paid",
         "data": {
             "object": {
                 "id": invoice_id,
-                "subscription": subscription_id,
-                "subscription_details": {"metadata": {"tenant_id": tenant_id, "tier_id": tier_id, "token_count": token_count}},
-                "lines": {"data": [{"period": {"end": period_end}}]},
+                "parent": {"subscription_details": {"subscription": subscription_id, "metadata": {"tenant_id": tenant_id}}, "type": "subscription_details"},
+                "lines": {"data": [{"amount": 450, "period": {"end": period_end}, "parent": {"subscription_item_details": {"proration": False}}, "pricing": {"price_details": {"price": price_id}}}]},
             }
         },
     }
 
 
-def _subscription_updated_event(
-    *, subscription_id: str = "sub_xyz", tenant_id: str = "tenant-1", tier_id: str = "tier_50", token_count: str = "50", status: str = "active", current_period_end: int = 1747094400
-) -> dict:
-    """Build a minimal customer.subscription.updated event dict."""
+def _subscription_updated_event(*, subscription_id: str = "sub_xyz", tenant_id: str = "tenant-1", tier_id: str = "tier_50", status: str = "active", current_period_end: int = 1747094400) -> dict:
+    """Build a minimal customer.subscription.updated event dict matching API version 2026-03-25.dahlia."""
+    price_id = _TIER_TO_PRICE.get(tier_id, "price_test_unknown")
     return {
         "type": "customer.subscription.updated",
-        "data": {"object": {"id": subscription_id, "status": status, "current_period_end": current_period_end, "metadata": {"tenant_id": tenant_id, "tier_id": tier_id, "token_count": token_count}}},
+        "data": {"object": {"id": subscription_id, "status": status, "items": {"data": [{"current_period_end": current_period_end, "price": {"id": price_id}}]}, "metadata": {"tenant_id": tenant_id}}},
     }
 
 
@@ -98,7 +128,7 @@ def test_invoice_paid_credits_difference_on_upgrade() -> None:
 
     handler = _make_handler(billing_service=billing_service, billing_repo=billing_repo, stripe_repo=stripe_repo)
     # Upgrading to tier_200 (200 tokens) within the same period.
-    handler.handle_event(_invoice_paid_event(tier_id="tier_200", token_count="200"))
+    handler.handle_event(_invoice_paid_event(tier_id="tier_200"))
 
     call_kwargs = billing_service.adjust_token_balance.call_args.kwargs
     assert call_kwargs["token_delta"] == 150  # 200 - 50
@@ -119,7 +149,7 @@ def test_invoice_paid_skips_credit_on_downgrade() -> None:
 
     handler = _make_handler(billing_service=billing_service, billing_repo=billing_repo, stripe_repo=stripe_repo)
     # Downgrading to tier_50 (50 tokens) — already got 200 this period.
-    handler.handle_event(_invoice_paid_event(tier_id="tier_50", token_count="50"))
+    handler.handle_event(_invoice_paid_event(tier_id="tier_50"))
 
     billing_service.adjust_token_balance.assert_not_called()
     # State should still be updated and invoice recorded.
@@ -148,31 +178,20 @@ def test_invoice_paid_resets_credit_on_new_period() -> None:
     assert call_kwargs["token_delta"] == 50  # Full tier amount, not 0
 
 
-def test_invoice_paid_non_numeric_token_count_logs_error() -> None:
-    """Non-numeric token_count in metadata should log error and not crash."""
+def test_invoice_paid_unrecognised_price_logs_error() -> None:
+    """Invoice with an unrecognised price ID should log error and not credit."""
     billing_service = MagicMock()
     stripe_repo = MagicMock()
     stripe_repo.is_invoice_processed.return_value = False
 
     handler = _make_handler(billing_service=billing_service, stripe_repo=stripe_repo)
 
-    with patch("stripe_webhook_handler.logger") as mock_logger:
-        handler.handle_event(_invoice_paid_event(token_count="not_a_number"))
-        mock_logger.error.assert_called()
-
-    billing_service.adjust_token_balance.assert_not_called()
-
-
-def test_invoice_paid_unknown_tier_logs_error() -> None:
-    """Unknown tier in metadata should log error and return without crediting."""
-    billing_service = MagicMock()
-    stripe_repo = MagicMock()
-    stripe_repo.is_invoice_processed.return_value = False
-
-    handler = _make_handler(billing_service=billing_service, stripe_repo=stripe_repo)
+    # Build event with a price ID that isn't in the tier map.
+    event = _invoice_paid_event()
+    event["data"]["object"]["lines"]["data"][0]["pricing"]["price_details"]["price"] = "price_unknown"
 
     with patch("stripe_webhook_handler.logger") as mock_logger:
-        handler.handle_event(_invoice_paid_event(tier_id="", token_count=""))
+        handler.handle_event(event)
         mock_logger.error.assert_called()
 
     billing_service.adjust_token_balance.assert_not_called()

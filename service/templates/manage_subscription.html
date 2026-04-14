@@ -25,7 +25,9 @@
 
       <dt class="col-sm-5">Status</dt>
       <dd class="col-sm-7">
-        {% if subscription_state.status == 'active' %}
+        {% if subscription_state.cancel_at %}
+          <span class="badge bg-warning text-dark">Active until {{ subscription_state.cancel_at[:10] }}</span>
+        {% elif subscription_state.status == 'active' %}
           <span class="badge bg-success">Active</span>
         {% elif subscription_state.status == 'past_due' %}
           <span class="badge bg-warning text-dark">Past Due</span>
@@ -44,4 +46,23 @@
     <a class="btn btn-outline-secondary" href="{{ url_for('tenants.tenant_management') }}">Back to Tenant Management</a>
   </div>
 </div>
+
+<script>
+  // Returning from Stripe Customer Portal via its "Return" button lands
+  // on ?portal_return=1. The webhook may not have been processed yet, so
+  // strip the param and do a single delayed reload to pick up changes.
+  // Browser back button restores from bfcache — reload immediately.
+  (function() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.has('portal_return')) {
+      // Replace history to strip the param (prevents refresh loops),
+      // then reload after a short delay for the webhook to land.
+      history.replaceState(null, '', window.location.pathname);
+      setTimeout(function() { window.location.reload(); }, 2000);
+    }
+    window.addEventListener('pageshow', function(e) {
+      if (e.persisted) window.location.reload();
+    });
+  })();
+</script>
 {% endblock %}

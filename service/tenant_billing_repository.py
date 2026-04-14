@@ -22,6 +22,7 @@ class SubscriptionState:
     stripe_subscription_id: str
     current_period_end: str
     tokens_credited_this_period: int
+    cancel_at: str  # ISO timestamp if cancellation scheduled, empty string otherwise
 
 
 @dataclass(frozen=True)
@@ -121,20 +122,26 @@ class TenantBillingRepository:
             stripe_subscription_id=str(item.get("StripeSubscriptionID", "")),
             current_period_end=str(item.get("SubscriptionCurrentPeriodEnd", "")),
             tokens_credited_this_period=int(item.get("TokensCreditedThisPeriod", 0)),
+            cancel_at=str(item.get("SubscriptionCancelAt", "")),
         )
 
     @classmethod
-    def update_subscription_state(cls, *, tenant_id: str, tier_id: str, status: str, stripe_subscription_id: str, current_period_end: str, tokens_credited_this_period: int) -> None:
+    def update_subscription_state(
+        cls, *, tenant_id: str, tier_id: str, status: str, stripe_subscription_id: str, current_period_end: str, tokens_credited_this_period: int, cancel_at: str = ""
+    ) -> None:
         """Write subscription state fields to the tenant billing record."""
         cls._table.update_item(
             Key={"TenantID": tenant_id},
-            UpdateExpression=("SET SubscriptionTierID = :tid, SubscriptionStatus = :st, StripeSubscriptionID = :sid, SubscriptionCurrentPeriodEnd = :pe, TokensCreditedThisPeriod = :tc"),
-            ExpressionAttributeValues={":tid": tier_id, ":st": status, ":sid": stripe_subscription_id, ":pe": current_period_end, ":tc": tokens_credited_this_period},
+            UpdateExpression=(
+                "SET SubscriptionTierID = :tid, SubscriptionStatus = :st, StripeSubscriptionID = :sid, SubscriptionCurrentPeriodEnd = :pe, TokensCreditedThisPeriod = :tc, SubscriptionCancelAt = :ca"
+            ),
+            ExpressionAttributeValues={":tid": tier_id, ":st": status, ":sid": stripe_subscription_id, ":pe": current_period_end, ":tc": tokens_credited_this_period, ":ca": cancel_at},
         )
 
     @classmethod
     def clear_subscription_state(cls, tenant_id: str) -> None:
         """Remove all subscription fields from the tenant billing record."""
         cls._table.update_item(
-            Key={"TenantID": tenant_id}, UpdateExpression=("REMOVE SubscriptionTierID, SubscriptionStatus, StripeSubscriptionID, SubscriptionCurrentPeriodEnd, TokensCreditedThisPeriod")
+            Key={"TenantID": tenant_id},
+            UpdateExpression=("REMOVE SubscriptionTierID, SubscriptionStatus, StripeSubscriptionID, SubscriptionCurrentPeriodEnd, TokensCreditedThisPeriod, SubscriptionCancelAt"),
         )
