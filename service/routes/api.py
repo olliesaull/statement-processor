@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, request, session, url_for
 from logger import logger
 from sync import sync_data
 from tenant_activation import executor
+from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import route_handler_logging, xero_token_required
 from utils.statement_upload_validation import build_statement_upload_preflight
@@ -58,6 +59,25 @@ def trigger_tenant_sync(tenant_id: str):
     except Exception as exc:
         logger.exception("Failed to trigger manual sync", tenant_id=tenant_id, error=exc)
         return jsonify({"error": "Failed to trigger sync"}), 500
+
+
+@api_bp.route("/api/tenants/<tenant_id>/token-balance", methods=["GET"])
+@xero_token_required
+@route_handler_logging
+def tenant_token_balance(tenant_id: str):
+    """Return the current token balance for a single tenant."""
+    tenant_id = (tenant_id or "").strip()
+    if not tenant_id:
+        return jsonify({"error": "TenantID is required"}), 400
+
+    tenant_records = session.get("xero_tenants", []) or []
+    tenant_ids = {t.get("tenantId") for t in tenant_records if isinstance(t, dict)}
+    if tenant_id not in tenant_ids:
+        logger.info("Token balance denied; tenant not authorized", tenant_id=tenant_id)
+        return jsonify({"error": "Tenant not authorized"}), 403
+
+    balance = TenantBillingRepository.get_tenant_token_balance(tenant_id)
+    return jsonify({"token_balance": balance}), 200
 
 
 @api_bp.route("/api/upload-statements/preflight", methods=["POST"])
