@@ -98,7 +98,7 @@ class StripeRepository:
             True if the record was written (first processor), False if it
             already existed (duplicate delivery).
         """
-        from botocore.exceptions import ClientError
+        from botocore.exceptions import ClientError  # pylint: disable=import-outside-toplevel
 
         processed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
         try:

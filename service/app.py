@@ -79,7 +79,7 @@ app.config["CLIENT_SECRET"] = CLIENT_SECRET
 # OAuth client and tenant activation helpers live in dedicated modules
 # (oauth_client.py, tenant_activation.py) to avoid circular imports with
 # route Blueprints that previously had to use deferred `from app import ...`.
-from oauth_client import init_oauth
+from oauth_client import init_oauth  # pylint: disable=wrong-import-position
 
 init_oauth(app)
 

@@ -29,7 +29,7 @@ def init_oauth(app: Flask) -> OAuth:
     Returns:
         The configured OAuth registry.
     """
-    global oauth
+    global oauth  # pylint: disable=global-statement
     oauth = OAuth(app)
     oauth.register(
         name="xero",

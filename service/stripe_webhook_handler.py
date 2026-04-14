@@ -22,19 +22,19 @@ class StripeWebhookHandler:
 
     def __init__(self, billing_service: Any = None, billing_repo: Any = None, stripe_repo: Any = None, stripe_service: Any = None) -> None:
         if billing_service is None:
-            from billing_service import BillingService
+            from billing_service import BillingService  # pylint: disable=import-outside-toplevel
 
             billing_service = BillingService
         if billing_repo is None:
-            from tenant_billing_repository import TenantBillingRepository
+            from tenant_billing_repository import TenantBillingRepository  # pylint: disable=import-outside-toplevel
 
             billing_repo = TenantBillingRepository
         if stripe_repo is None:
-            from stripe_repository import StripeRepository
+            from stripe_repository import StripeRepository  # pylint: disable=import-outside-toplevel
 
             stripe_repo = StripeRepository
         if stripe_service is None:
-            from stripe_service import StripeService
+            from stripe_service import StripeService  # pylint: disable=import-outside-toplevel
 
             stripe_service = StripeService()
 
@@ -133,8 +133,6 @@ class StripeWebhookHandler:
         the non-proration line (the new tier charge). On a simple renewal,
         there's typically one line.
         """
-        from pricing_config import SubscriptionTier
-
         lines = invoice.get("lines", {}).get("data", [])
         for line in lines:
             # Skip proration credits (negative amounts / credited items).
