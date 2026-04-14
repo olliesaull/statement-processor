@@ -18,8 +18,9 @@
   <section class="page-panel page-panel-flat mb-4">
     <div class="d-flex flex-wrap align-items-center gap-2">
       {% if current_tenant %}
+        {% from "macros/token_pill.html" import token_pill %}
         <span class="tenant-current-chip">Current tenant: <strong>{{ current_tenant.tenantName or current_tenant.tenantId }}</strong></span>
-        <span class="tenant-current-chip {{ 'tenant-token-chip-danger' if ct_token_balance == 0 else 'tenant-token-chip' }}">Available pages: <strong>{{ ct_token_balance }}</strong></span>
+        {{ token_pill(balance=ct_token_balance) }}
         {% if subscription_state and subscription_state.status == 'active' %}
           <span class="tenant-current-chip">
             Plan: <strong>{{ subscription_tier.display_name }}</strong>
