@@ -141,3 +141,15 @@ Use this format for each entry:
 **Rationale:** Stripe subscription-mode checkout requires a customer ID. Letting Stripe create one implicitly (Option B) would require retrieving the customer ID after checkout completes and adds complexity to the webhook flow. Orphaned Stripe customers have no cost or billing impact — they're inert records. Periodic cleanup (Option C) is available if orphan volume becomes a concern but isn't justified now.
 
 **References:** `service/routes/billing.py` lines 341-346, `service/stripe_service.py` `create_subscription_checkout_session`
+
+### [2026-04-14] design | Inline 401 handling in buy pages balance pill JS
+
+**Context:** The balance pill on `/buy-pages` fetches token balance via `GET /api/tenants/<id>/token-balance` when the tenant dropdown changes. Needed auth error handling for the fetch call.
+
+**Options considered:**
+- Option A: Use the shared `redirectForUnauthorizedResponse` helper from `main.js`
+- Option B: Inline a simplified 401/redirect check in the page script
+
+**Decision:** Option B — inline simplified check.
+
+**Rationale:** `main.js` is loaded as `type="module"`, making its top-level functions module-scoped and inaccessible from plain inline `<script>` tags. The shared helper also clears the `session_is_set` cookie and handles `cookie_consent_required` — neither is critical here since the login page handles cleanup on arrival. Exporting the helper to `window` would work but couples module internals to global scope for a single use case.

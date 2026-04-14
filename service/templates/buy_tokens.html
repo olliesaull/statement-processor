@@ -153,6 +153,10 @@
           });
 
           // Handle auth expiry — API returns 401, or middleware redirects to login.
+          // NOTE: Simplified vs redirectForUnauthorizedResponse in main.js (which also
+          // clears session_is_set cookie and handles cookie_consent_required). That helper
+          // is module-scoped and not accessible here. A plain redirect suffices — the login
+          // page handles cookie/session cleanup on arrival. — reviewed 2026-04-14
           if (response.status === 401 || (response.redirected && response.url.includes("/login"))) {
             window.location.href = window.location.origin + "/login";
             return;
