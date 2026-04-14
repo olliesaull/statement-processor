@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% block container_class %}p-0{% endblock %}
+
 {% block content %}
 <div class="page-main">
   <header class="tenant-header">
@@ -64,6 +66,8 @@
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
         <h2 style="font-size: 1.1rem; font-weight: 600; color: var(--slate-900); margin: 0;">Connected Tenants</h2>
       </div>
+      {% from "macros/landscape_tip.html" import landscape_tip %}
+      {{ landscape_tip() }}
       <div class="table-responsive">
         <table class="tenant-table-refined">
           <thead>
