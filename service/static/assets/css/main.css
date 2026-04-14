@@ -2549,3 +2549,173 @@ a:focus-visible {
     font-size: 2.2rem;
   }
 }
+
+/* ==========================================================================
+   Tenant management redesign (visual uplift — 2026-04-14)
+   ========================================================================== */
+
+/* Header */
+.tenant-header {
+  background: var(--slate-50);
+  padding: 2.5rem 0;
+  border-bottom: 1px solid var(--slate-200);
+}
+
+.tenant-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.tenant-header .page-kicker {
+  margin-bottom: 0.3rem;
+}
+
+.tenant-header h1 {
+  font-family: var(--font-display);
+  font-size: 1.8rem;
+  font-weight: 600;
+  color: var(--slate-900);
+  margin-bottom: 0.3rem;
+}
+
+.tenant-header .page-subtitle {
+  font-size: 0.85rem;
+  color: var(--slate-600);
+}
+
+/* Summary strip — floats over header bottom edge */
+.tenant-summary-strip {
+  background: var(--white);
+  border: 1px solid var(--slate-200);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.5rem;
+  margin-top: -1.25rem;
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.tenant-summary-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.tenant-summary-item .summary-label {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--slate-400);
+  font-weight: 600;
+  margin-bottom: 0.15rem;
+}
+
+.tenant-summary-item .summary-value {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--slate-900);
+}
+
+.tenant-summary-item .summary-detail {
+  font-size: 0.7rem;
+  color: var(--slate-600);
+}
+
+.tenant-summary-divider {
+  width: 1px;
+  height: 2.5rem;
+  background: var(--slate-200);
+}
+
+.tenant-summary-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* Balance colour modifiers */
+.summary-value-healthy {
+  color: var(--green-600);
+}
+
+.summary-value-danger {
+  color: #dc2626;
+}
+
+.summary-value-muted {
+  color: var(--slate-400);
+  font-weight: 500;
+}
+
+/* Refined tenant table */
+.tenant-table-refined {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tenant-table-refined thead th {
+  padding: 0.7rem 1rem;
+  text-align: left;
+  border-bottom: 2px solid var(--slate-900);
+  color: var(--slate-900);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.tenant-table-refined thead th:not(:first-child) {
+  text-align: center;
+}
+
+.tenant-table-refined tbody td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--slate-100);
+  font-size: 0.85rem;
+  color: var(--slate-600);
+}
+
+.tenant-table-refined tbody td:not(:first-child) {
+  text-align: center;
+}
+
+.tenant-table-refined tbody tr:hover {
+  background: var(--slate-50);
+}
+
+.tenant-table-refined .tenant-name-cell {
+  font-weight: 600;
+  color: var(--slate-900);
+}
+
+.tenant-table-refined .tenant-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* Responsive — summary strip wraps */
+@media (max-width: 768px) {
+  .tenant-summary-strip {
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  .tenant-summary-divider {
+    display: none;
+  }
+
+  .tenant-summary-actions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .tenant-header-row {
+    flex-direction: column;
+    gap: 1rem;
+  }
+}
