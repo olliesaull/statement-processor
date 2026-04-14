@@ -234,6 +234,113 @@ def test_subscription_deleted_clears_state() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_subscription_deleted_handles_null_metadata() -> None:
+    """subscription.deleted with metadata=None should not raise."""
+    billing_repo = MagicMock()
+    handler = _make_handler(billing_repo=billing_repo)
+
+    event = _subscription_deleted_event()
+    event["data"]["object"]["metadata"] = None
+
+    handler.handle_event(event)
+    billing_repo.clear_subscription_state.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# None-safety: Stripe sends null for many nested fields
+# ---------------------------------------------------------------------------
+
+
+def test_invoice_paid_handles_null_parent() -> None:
+    """invoice.paid with parent=None should not raise (regression for prod alarm 2026-04-14)."""
+    stripe_repo = MagicMock()
+    stripe_repo.is_invoice_processed.return_value = False
+    stripe_service = MagicMock()
+    stripe_service.retrieve_subscription_metadata.return_value = {"tenant_id": "tenant-1"}
+
+    handler = _make_handler(billing_repo=MagicMock(get_subscription_state=MagicMock(return_value=None)), stripe_repo=stripe_repo, stripe_service=stripe_service)
+
+    event = _invoice_paid_event()
+    event["data"]["object"]["parent"] = None
+
+    # Should not raise AttributeError.
+    handler.handle_event(event)
+
+
+def test_invoice_paid_handles_null_lines() -> None:
+    """invoice.paid with lines=None should not raise."""
+    stripe_repo = MagicMock()
+    stripe_repo.is_invoice_processed.return_value = False
+
+    handler = _make_handler(stripe_repo=stripe_repo)
+
+    event = _invoice_paid_event()
+    event["data"]["object"]["lines"] = None
+
+    # No lines → can't resolve tier → logs error and returns.
+    handler.handle_event(event)
+
+
+def test_invoice_paid_handles_null_pricing_in_line_item() -> None:
+    """invoice.paid with pricing=None on a line item should not raise."""
+    stripe_repo = MagicMock()
+    stripe_repo.is_invoice_processed.return_value = False
+
+    handler = _make_handler(stripe_repo=stripe_repo)
+
+    event = _invoice_paid_event()
+    event["data"]["object"]["lines"]["data"][0]["pricing"] = None
+
+    # Null pricing → can't resolve tier → logs error and returns.
+    handler.handle_event(event)
+
+
+def test_invoice_paid_handles_null_line_parent() -> None:
+    """invoice.paid with parent=None on a line item should not raise."""
+    stripe_repo = MagicMock()
+    stripe_repo.is_invoice_processed.return_value = False
+    stripe_service = MagicMock()
+    stripe_service.retrieve_subscription_metadata.return_value = {"tenant_id": "tenant-1"}
+
+    handler = _make_handler(billing_repo=MagicMock(get_subscription_state=MagicMock(return_value=None)), stripe_repo=stripe_repo, stripe_service=stripe_service)
+
+    event = _invoice_paid_event()
+    event["data"]["object"]["lines"]["data"][0]["parent"] = None
+
+    # Should not raise — line.parent=None is treated as non-proration.
+    handler.handle_event(event)
+
+
+def test_subscription_updated_handles_null_items() -> None:
+    """subscription.updated with items=None should not raise."""
+    billing_repo = MagicMock()
+    billing_repo.get_subscription_state.return_value = None
+    handler = _make_handler(billing_repo=billing_repo)
+
+    event = _subscription_updated_event()
+    event["data"]["object"]["items"] = None
+
+    handler.handle_event(event)
+
+
+def test_subscription_updated_handles_null_metadata() -> None:
+    """subscription.updated with metadata=None should not raise."""
+    billing_repo = MagicMock()
+    handler = _make_handler(billing_repo=billing_repo)
+
+    event = _subscription_updated_event()
+    event["data"]["object"]["metadata"] = None
+
+    # No tenant_id → warns and returns.
+    handler.handle_event(event)
+    billing_repo.update_subscription_state.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Unhandled event types
+# ---------------------------------------------------------------------------
+
+
 def test_unhandled_event_type_ignored_gracefully() -> None:
     """Unknown event types should be silently ignored."""
     handler = _make_handler()

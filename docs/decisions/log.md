@@ -169,3 +169,19 @@ Use this format for each entry:
 **Rationale:** Modifying shared classes risks regressions on other pages. Scoped classes can be iterated on independently and are easier to remove or replace in a future site-wide redesign. The slight duplication (e.g., `.pricing-header` padding similar to `.page-header-hero`) is acceptable for isolation.
 
 **References:** `service/static/assets/css/main.css` (pricing and tenant management redesign sections)
+
+---
+
+### [2026-04-14] convention | `_dig()` helper for Stripe nested dict traversal
+
+**Context:** Production alarm — `invoice.get("parent", {}).get("subscription_details")` crashed because `parent` was explicitly `None`. Fourth recurring incident of the same `.get()` chaining bug pattern with Stripe data.
+
+**Options considered:**
+- Option A: Fix each `.get()` chain individually with `(x.get("key") or {})` pattern
+- Option B: Introduce a `_dig()` helper that safely traverses nested dicts
+
+**Decision:** Option B — `_dig()` helper in `stripe_webhook_handler.py`.
+
+**Rationale:** Stripe sends `null` for many fields that logically "should" be dicts. The `dict.get("key", {})` default only applies when the key is missing, not when it's present-but-None. A helper eliminates the entire class of bug: `_dig(obj, "a", "b", "c", default={})` handles None at any level. Scoped to the webhook handler module — not a shared utility — since this is the only file that traverses raw Stripe event JSON.
+
+**References:** `service/stripe_webhook_handler.py` `_dig()`

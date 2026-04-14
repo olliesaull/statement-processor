@@ -14,6 +14,15 @@ from logger import logger
 from pricing_config import STRIPE_PRICE_TO_TIER
 
 
+def _dig(obj: dict, *keys: str, default: Any = None) -> Any:
+    """Safely traverse nested dicts where intermediate values may be None."""
+    for key in keys:
+        if not isinstance(obj, dict):
+            return default
+        obj = obj.get(key)  # type: ignore[assignment]
+    return obj if obj is not None else default
+
+
 class StripeWebhookHandler:
     """Dispatch and handle Stripe webhook events for subscriptions.
 
@@ -69,7 +78,7 @@ class StripeWebhookHandler:
 
         # API version 2026-03-25.dahlia moved subscription details to
         # invoice.parent.subscription_details.
-        parent_sub = (invoice.get("parent") or {}).get("subscription_details", {}) or {}
+        parent_sub = _dig(invoice, "parent", "subscription_details", default={})
         metadata = parent_sub.get("metadata", {})
         subscription_id = parent_sub.get("subscription", "") or invoice.get("subscription", "")
         tenant_id = metadata.get("tenant_id", "")
@@ -92,7 +101,7 @@ class StripeWebhookHandler:
         token_count = tier.tokens_per_month
 
         # Determine period end from the invoice line item.
-        lines = invoice.get("lines", {}).get("data", [])
+        lines = _dig(invoice, "lines", "data", default=[])
         period_end_ts = lines[0]["period"]["end"] if lines else 0
         period_end_iso = datetime.fromtimestamp(period_end_ts, tz=UTC).isoformat() if period_end_ts else ""
 
@@ -133,19 +142,19 @@ class StripeWebhookHandler:
         the non-proration line (the new tier charge). On a simple renewal,
         there's typically one line.
         """
-        lines = invoice.get("lines", {}).get("data", [])
+        lines = _dig(invoice, "lines", "data", default=[])
         for line in lines:
             # Skip proration credits (negative amounts / credited items).
-            sub_item_details = line.get("parent", {}).get("subscription_item_details", {}) or {}
+            sub_item_details = _dig(line, "parent", "subscription_item_details", default={})
             if sub_item_details.get("proration") and line.get("amount", 0) < 0:
                 continue
-            price_id = line.get("pricing", {}).get("price_details", {}).get("price", "")
+            price_id = _dig(line, "pricing", "price_details", "price", default="")
             tier = STRIPE_PRICE_TO_TIER.get(price_id)
             if tier:
                 return tier
         # Fallback: try any line with a matching price.
         for line in lines:
-            price_id = line.get("pricing", {}).get("price_details", {}).get("price", "")
+            price_id = _dig(line, "pricing", "price_details", "price", default="")
             tier = STRIPE_PRICE_TO_TIER.get(price_id)
             if tier:
                 return tier
@@ -154,9 +163,9 @@ class StripeWebhookHandler:
     @staticmethod
     def _resolve_tier_from_subscription_items(subscription: dict) -> "SubscriptionTier | None":
         """Resolve the subscription tier from subscription item price IDs."""
-        items = subscription.get("items", {}).get("data", [])
+        items = _dig(subscription, "items", "data", default=[])
         for item in items:
-            price_id = item.get("price", {}).get("id", "")
+            price_id = _dig(item, "price", "id", default="")
             tier = STRIPE_PRICE_TO_TIER.get(price_id)
             if tier:
                 return tier
@@ -165,7 +174,7 @@ class StripeWebhookHandler:
     def _handle_subscription_updated(self, event: dict) -> None:
         """Update cached subscription state from a subscription.updated event."""
         subscription = event["data"]["object"]
-        metadata = subscription.get("metadata", {})
+        metadata = subscription.get("metadata") or {}
         tenant_id = metadata.get("tenant_id", "")
 
         if not tenant_id:
@@ -179,7 +188,7 @@ class StripeWebhookHandler:
 
         # API version 2026-03-25.dahlia moved current_period_end from the
         # top-level subscription to items.data[].current_period_end.
-        items = subscription.get("items", {}).get("data", [])
+        items = _dig(subscription, "items", "data", default=[])
         period_end_ts = items[0]["current_period_end"] if items else subscription.get("current_period_end")
         period_end_iso = datetime.fromtimestamp(period_end_ts, tz=UTC).isoformat() if period_end_ts else ""
 
@@ -206,7 +215,7 @@ class StripeWebhookHandler:
     def _handle_subscription_deleted(self, event: dict) -> None:
         """Clear subscription state when a subscription is cancelled."""
         subscription = event["data"]["object"]
-        metadata = subscription.get("metadata", {})
+        metadata = subscription.get("metadata") or {}
         tenant_id = metadata.get("tenant_id", "")
 
         if not tenant_id:
