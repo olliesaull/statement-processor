@@ -2,60 +2,87 @@
 
 {% block content %}
 <div class="page-main">
-  <header class="page-header">
-    <p class="page-kicker mb-1">Workspace Setup</p>
-    <h1 class="mb-2">Tenant Management</h1>
-    <p class="page-subtitle mb-0">Connect tenants, switch the active tenant, and run syncs when you need refreshed Xero data.</p>
+  <header class="tenant-header">
+    <div class="container">
+      <div class="tenant-header-row">
+        <div>
+          <p class="page-kicker mb-1">Workspace Setup</p>
+          <h1 class="mb-2">Tenant Management</h1>
+          <p class="page-subtitle mb-0">Connect tenants, switch the active tenant, and run syncs when you need refreshed Xero data.</p>
+        </div>
+        <div>
+          <a class="btn btn-primary" href="{{ url_for('auth.login') }}">Add Tenant</a>
+        </div>
+      </div>
+    </div>
   </header>
 
-  {% if message %}
-    <div class="alert alert-success" role="alert">{{ message }}</div>
-  {% endif %}
-  {% if error %}
-    <div class="alert alert-danger" role="alert">{{ error }}</div>
-  {% endif %}
-
-  <section class="page-panel page-panel-flat mb-4">
-    <div class="d-flex flex-wrap align-items-center gap-2">
-      {% if current_tenant %}
-        {% from "macros/token_pill.html" import token_pill %}
-        <span class="tenant-current-chip">Current tenant: <strong>{{ current_tenant.tenantName or current_tenant.tenantId }}</strong></span>
-        {{ token_pill(balance=ct_token_balance) }}
-        {% if subscription_state and subscription_state.status == 'active' %}
-          <span class="tenant-current-chip">
-            Plan: <strong>{{ subscription_tier.display_name }}</strong>
-            &middot; Renews {{ subscription_state.current_period_end[:10] }}
-          </span>
-          <a class="btn btn-outline-primary btn-sm" href="{{ url_for('billing.manage_subscription') }}">Manage Subscription</a>
-        {% else %}
-          <a class="btn btn-primary btn-sm" href="{{ url_for('billing.subscribe') }}">Subscribe &amp; Save</a>
-        {% endif %}
-      {% endif %}
-      <a class="btn btn-primary ms-auto" href="{{ url_for('auth.login') }}">Add Tenant</a>
+  {% if current_tenant %}
+    <div class="container">
+      <div class="tenant-summary-strip">
+        <div class="tenant-summary-item">
+          <span class="summary-label">Current Tenant</span>
+          <span class="summary-value">{{ current_tenant.tenantName or current_tenant.tenantId }}</span>
+        </div>
+        <div class="tenant-summary-divider"></div>
+        <div class="tenant-summary-item">
+          <span class="summary-label">Available Pages</span>
+          <span class="summary-value {{ 'summary-value-danger' if ct_token_balance == 0 else 'summary-value-healthy' }}">{{ ct_token_balance }}</span>
+        </div>
+        <div class="tenant-summary-divider"></div>
+        <div class="tenant-summary-item">
+          <span class="summary-label">Plan</span>
+          {% if subscription_state and subscription_state.status == 'active' %}
+            <span class="summary-value">{{ subscription_tier.display_name }}</span>
+            <span class="summary-detail">Renews {{ subscription_state.current_period_end[:10] }}</span>
+          {% else %}
+            <span class="summary-value summary-value-muted">No plan</span>
+            <span class="summary-detail">Pay-as-you-go</span>
+          {% endif %}
+        </div>
+        <div class="tenant-summary-actions">
+          {% if subscription_state and subscription_state.status == 'active' %}
+            <a class="btn btn-primary btn-sm" href="{{ url_for('billing.manage_subscription') }}">Manage Subscription</a>
+          {% else %}
+            <a class="btn btn-primary btn-sm" href="{{ url_for('billing.subscribe') }}">Subscribe &amp; Save</a>
+          {% endif %}
+          <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('billing.buy_tokens') }}">Buy Pages</a>
+        </div>
+      </div>
     </div>
-  </section>
+  {% endif %}
 
-  {% if tenants %}
-    <div class="page-table-shell">
+  <div class="container" style="padding-top: 2rem; padding-bottom: 3rem;">
+    {% if message %}
+      <div class="alert alert-success" role="alert">{{ message }}</div>
+    {% endif %}
+    {% if error %}
+      <div class="alert alert-danger" role="alert">{{ error }}</div>
+    {% endif %}
+
+    {% if tenants %}
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="font-size: 1.1rem; font-weight: 600; color: var(--slate-900); margin: 0;">Connected Tenants</h2>
+      </div>
       <div class="table-responsive">
-        <table class="table table-bordered align-middle tenant-table">
-          <thead class="table-light">
+        <table class="tenant-table-refined">
+          <thead>
             <tr>
               <th scope="col">Tenant Name</th>
-              <th scope="col" class="text-center">Pages</th>
-              <th scope="col" class="text-center">Status</th>
-              <th scope="col" class="text-center">Actions</th>
+              <th scope="col">Pages</th>
+              <th scope="col">Status</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>
             {% for tenant in tenants %}
               {% set is_active = current_tenant is not none and tenant.tenantId == current_tenant.tenantId %}
               <tr id="row-{{ tenant.tenantId }}">
-                <td>{{ tenant.tenantName or tenant.tenantId }}</td>
-                <td class="text-center">
+                <td class="tenant-name-cell">{{ tenant.tenantName or tenant.tenantId }}</td>
+                <td>
                   <span class="tenant-token-balance">{{ tenant_token_balances.get(tenant.tenantId, 0) }}</span>
                 </td>
-                <td class="text-center">
+                <td>
                   {% if is_active %}
                     <span class="badge bg-success">Current Tenant</span>
                   {% else %}
@@ -66,8 +93,8 @@
                     <span>Syncing</span>
                   </div>
                 </td>
-                <td class="text-center">
-                  <div class="d-flex flex-wrap justify-content-center gap-2">
+                <td>
+                  <div class="tenant-actions">
                     <button class="btn btn-outline-secondary btn-sm sync-btn" type="button" data-tenant-id="{{ tenant.tenantId }}">Sync</button>
                     <a class="btn btn-outline-success btn-sm" href="{{ url_for('billing.buy_tokens', tenant_id=tenant.tenantId) }}">Buy Pages</a>
                     {% if not is_active %}
@@ -95,12 +122,12 @@
           </tbody>
         </table>
       </div>
-    </div>
-  {% else %}
-    <div class="page-panel">
-      <p class="mb-0">No tenants connected yet. Use the button above to add one.</p>
-    </div>
-  {% endif %}
+    {% else %}
+      <div class="page-panel">
+        <p class="mb-0">No tenants connected yet. Use the button above to add one.</p>
+      </div>
+    {% endif %}
+  </div>
 </div>
 
   {# Housekeeping modal — shown when disconnecting a tenant #}
