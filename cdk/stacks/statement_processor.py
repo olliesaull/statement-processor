@@ -65,7 +65,6 @@ class StatementProcessorStack(Stack):
         APP_RUNNER_SERVICE_NAME = f"statement-processor-{stage}"
         CLOUDFRONT_CERTIFICATE_ARN = "arn:aws:acm:us-east-1:747310139457:certificate/1e702711-0bd2-4806-b60d-c7ec45b93eac"
         CLOUDFRONT_CACHE_POLICY_ID = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
-        CLOUDFRONT_ORIGIN_REQUEST_POLICY_ID = "27f26a87-73c7-4734-9f02-b10dbda0774c"
 
         NOTIFICATION_EMAILS = ["ollie@dotelastic.com", "james@dotelastic.com"]
 
@@ -449,7 +448,12 @@ class StatementProcessorStack(Stack):
         app_runner_service_domain = cfn_service.attr_service_url
 
         cloudfront_cache_policy = cloudfront.CachePolicy.from_cache_policy_id(self, "StatementProcessorCloudFrontCachePolicy", CLOUDFRONT_CACHE_POLICY_ID)
-        cloudfront_origin_request_policy = cloudfront.OriginRequestPolicy.from_origin_request_policy_id(self, "StatementProcessorCloudFrontOriginRequestPolicy", CLOUDFRONT_ORIGIN_REQUEST_POLICY_ID)
+        cloudfront_origin_request_policy = cloudfront.OriginRequestPolicy(
+            self, "StatementProcessorCloudFrontOriginRequestPolicy",
+            header_behavior=cloudfront.OriginRequestHeaderBehavior.allow_list("Stripe-Signature"),
+            cookie_behavior=cloudfront.OriginRequestCookieBehavior.all(),
+            query_string_behavior=cloudfront.OriginRequestQueryStringBehavior.all(),
+        )
         cloudfront_default_behavior = cloudfront.BehaviorOptions(
             # App Runner is a custom HTTPS origin; CloudFront OAC is not supported for this origin type.
             origin=origins.HttpOrigin(
