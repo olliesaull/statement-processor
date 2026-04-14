@@ -22,3 +22,7 @@ plans/
 superpowers/
 openshell/secrets/*
 !openshell/secrets/.gitkeep
+screenshots/
+snapshots/
+static_analysis_semgrep_1/
+uv.lock
