@@ -812,6 +812,12 @@ a:focus-visible {
   color: #991b1b;
 }
 
+.tenant-token-chip-loading {
+  background-color: var(--slate-100);
+  border-color: var(--slate-200);
+  color: var(--slate-500);
+}
+
 .tenant-token-balance {
   display: inline-flex;
   align-items: center;
