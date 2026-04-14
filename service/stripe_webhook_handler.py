@@ -69,7 +69,7 @@ class StripeWebhookHandler:
 
         # API version 2026-03-25.dahlia moved subscription details to
         # invoice.parent.subscription_details.
-        parent_sub = invoice.get("parent", {}).get("subscription_details", {}) or {}
+        parent_sub = (invoice.get("parent") or {}).get("subscription_details", {}) or {}
         metadata = parent_sub.get("metadata", {})
         subscription_id = parent_sub.get("subscription", "") or invoice.get("subscription", "")
         tenant_id = metadata.get("tenant_id", "")
