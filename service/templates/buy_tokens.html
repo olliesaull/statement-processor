@@ -152,7 +152,9 @@
             headers: { "Content-Type": "application/json" },
           });
 
-          if (await redirectForUnauthorizedResponse(response, window.location.origin + "/login")) {
+          // Handle auth expiry — API returns 401, or middleware redirects to login.
+          if (response.status === 401 || (response.redirected && response.url.includes("/login"))) {
+            window.location.href = window.location.origin + "/login";
             return;
           }
 
