@@ -8,7 +8,7 @@ authentication.
 from flask import Blueprint, render_template
 
 from logger import logger
-from pricing_config import SUBSCRIPTION_TIERS
+from pricing_config import SUBSCRIPTION_TIERS, PricingConfig
 from utils.auth import route_handler_logging
 from utils.content import load_faqs, load_legal_page
 
@@ -54,7 +54,9 @@ def pricing():
     can see pricing before signing up.
     """
     tiers = list(SUBSCRIPTION_TIERS.values())
-    return render_template("pricing.html", tiers=tiers)
+    min_tokens = PricingConfig.MIN_TOKENS
+    min_price_pounds = PricingConfig.calculate_total_pence(min_tokens) / 100
+    return render_template("pricing.html", tiers=tiers, min_tokens=min_tokens, min_price_pounds=min_price_pounds)
 
 
 @public_bp.route("/privacy")
