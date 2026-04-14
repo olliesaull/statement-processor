@@ -49,6 +49,7 @@ class StatementProcessorStack(Stack):
         STRIPE_EVENT_STORE_TABLE_NAME = "StripeEventStoreTable"
         S3_BUCKET_NAME = f"dexero-statement-processor-{stage}"
         STATIC_ASSETS_BUCKET_NAME = f"dexero-statement-processor-{stage}-assets"
+        BEDROCK_LOGS_BUCKET_NAME = f"dexero-bedrock-invocation-logs-{stage}"
         APP_RUNNER_SERVICE_NAME = f"statement-processor-{stage}"
         CLOUDFRONT_CERTIFICATE_ARN = "arn:aws:acm:us-east-1:747310139457:certificate/1e702711-0bd2-4806-b60d-c7ec45b93eac"
         CLOUDFRONT_CACHE_POLICY_ID = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
@@ -134,6 +135,33 @@ class StatementProcessorStack(Stack):
             STATIC_ASSETS_BUCKET_NAME,
             bucket_name=STATIC_ASSETS_BUCKET_NAME,
             removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
+        )
+
+        # Bedrock model invocation logs — enable logging in the Bedrock
+        # console (Settings → Model invocation logging) pointing to this
+        # bucket. Logs are auto-expired after 30 days to avoid unbounded
+        # growth; increase if needed for longer audit trails.
+        bedrock_logs_bucket = s3.Bucket(
+            self,
+            BEDROCK_LOGS_BUCKET_NAME,
+            bucket_name=BEDROCK_LOGS_BUCKET_NAME,
+            removal_policy=RemovalPolicy.RETAIN if is_production else RemovalPolicy.DESTROY,
+            auto_delete_objects=not is_production,
+            lifecycle_rules=[
+                s3.LifecycleRule(expiration=Duration.days(30)),
+            ],
+        )
+        # Bedrock needs write access to deliver invocation logs.
+        bedrock_logs_bucket.add_to_resource_policy(
+            iam.PolicyStatement(
+                sid="AllowBedrockWriteLogs",
+                principals=[iam.ServicePrincipal("bedrock.amazonaws.com")],
+                actions=["s3:PutObject"],
+                resources=[bedrock_logs_bucket.arn_for_objects("*")],
+                conditions={
+                    "StringEquals": {"AWS:SourceAccount": env.account},
+                },
+            )
         )
         # endregion ---------- S3 ----------
 
