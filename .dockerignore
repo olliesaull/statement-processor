@@ -1,0 +1,41 @@
+# Git
+.git
+
+# Python caches and virtual environments
+**/__pycache__
+**/*.pyc
+**/.mypy_cache
+**/.ruff_cache
+**/.pytest_cache
+**/venv
+**/.venv
+**/*.egg-info
+
+# CDK output
+cdk.out
+cdk/venv
+cdk/.venv
+cdk/node_modules
+
+# IDE and OS
+.idea
+**/.vscode
+.DS_Store
+
+# Test and dev artifacts
+**/htmlcov
+**/.coverage
+screenshots
+snapshots
+static_analysis_semgrep_1
+plans
+.worktrees
+.superpowers
+.playwright-mcp
+
+# Large/binary files that don't belong in images
+*.pdf
+*.PDF
+*.xlsx
+*.log
+uv.lock

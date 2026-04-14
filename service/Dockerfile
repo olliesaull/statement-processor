@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 # Install remaining dependencies (filter out the editable common install
 # since we already installed it non-editable above).
-COPY requirements.txt ./
+COPY service/requirements.txt ./
 RUN grep -v '^\-e' requirements.txt > requirements-docker.txt \
     && pip install --no-cache-dir --target=/app/packages -r requirements-docker.txt
 
@@ -42,20 +42,20 @@ COPY --from=builder /app/packages /usr/local/lib/python3.13/site-packages
 # Copy only runtime application code.
 # Copy every top-level Python module so new service modules are not accidentally
 # omitted from the container image during future refactors.
-COPY ./*.py ./
-COPY content/ ./content/
-COPY core/ ./core/
-COPY templates/ ./templates/
+COPY service/*.py ./
+COPY service/content/ ./content/
+COPY service/core/ ./core/
+COPY service/templates/ ./templates/
 # Keep static assets in all images for environment parity and direct Function URL fallback.
 # CloudFront serves /static/* in production; removing static saves only ~0.15 MB, so we optimize for simplicity.
-COPY static/ ./static/
-COPY ui/ ./ui/
-COPY routes/ ./routes/
-COPY utils/ ./utils/
-COPY valkey.conf /etc/valkey/valkey.conf
-COPY nginx.conf /app/nginx.conf
-COPY nginx-routes.conf /etc/nginx/nginx-routes.conf
-COPY start.sh /start.sh
+COPY service/static/ ./static/
+COPY service/ui/ ./ui/
+COPY service/routes/ ./routes/
+COPY service/utils/ ./utils/
+COPY service/valkey.conf /etc/valkey/valkey.conf
+COPY service/nginx.conf /app/nginx.conf
+COPY service/nginx-routes.conf /etc/nginx/nginx-routes.conf
+COPY service/start.sh /start.sh
 RUN chmod +x /start.sh
 
 # Pre-compile Python bytecode for faster cold starts.

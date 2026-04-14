@@ -21,7 +21,10 @@ if docker ps -aq -f "name=^${CONTAINER_NAME}$" >/dev/null && [[ -n "$(docker ps 
 fi
 
 echo "Building Docker image: ${IMAGE_NAME}"
-docker build -t "${IMAGE_NAME}" .
+# Build context is the repo root so the shared common/ package is accessible.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+docker build -t "${IMAGE_NAME}" -f "${SCRIPT_DIR}/Dockerfile" "${REPO_ROOT}"
 
 DOCKER_ARGS=(--name "${CONTAINER_NAME}" --env-file .env -p "${PORT}:8080")
 if [[ -d "${HOME}/.aws" ]]; then

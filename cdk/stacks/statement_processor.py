@@ -175,7 +175,8 @@ class StatementProcessorStack(Stack):
         )
 
         extraction_lambda_image = _lambda.EcrImageCode.from_asset_image(
-            directory="../lambda_functions/extraction_lambda",
+            directory="..",
+            file="lambda_functions/extraction_lambda/Dockerfile",
             platform=ecr_assets.Platform.LINUX_ARM64,
         )
 
@@ -229,7 +230,8 @@ class StatementProcessorStack(Stack):
         )
 
         tenant_erasure_lambda_image = _lambda.EcrImageCode.from_asset_image(
-            directory="../lambda_functions/tenant_erasure_lambda",
+            directory="..",
+            file="lambda_functions/tenant_erasure_lambda/Dockerfile",
             platform=ecr_assets.Platform.LINUX_ARM64,
         )
 
@@ -364,7 +366,7 @@ class StatementProcessorStack(Stack):
             max_size=1,
         )
 
-        apprunner_asset = ecr_assets.DockerImageAsset(self, "AppRunnerImage", directory="../service/")
+        apprunner_asset = ecr_assets.DockerImageAsset(self, "AppRunnerImage", directory="..", file="service/Dockerfile")
         web = apprunner_alpha.Service(
             self,
             "Statement Processor Website",

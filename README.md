@@ -338,12 +338,13 @@ pip install -e common/
 ```
 
 **Docker images** (non-editable install):
-- `service/Dockerfile` and `lambda_functions/extraction_lambda/Dockerfile` both include:
+- All Dockerfiles (`service/Dockerfile`, `lambda_functions/extraction_lambda/Dockerfile`, `lambda_functions/tenant_erasure_lambda/Dockerfile`) use the **repo root as the build context** so they can access `common/`. CDK achieves this via `directory=".."` with a `file=` parameter pointing to each Dockerfile. Each Dockerfile includes:
   ```dockerfile
-  COPY common/ /app/common/
-  RUN pip install common/
+  COPY common/ /common/
+  RUN pip install --no-cache-dir /common
   ```
-- The package is copied into the image and installed without the `-e` flag so that the Docker image is self-contained and does not depend on a volume-mounted source tree.
+- COPY paths in each Dockerfile are prefixed with their subdirectory (e.g. `COPY service/routes/ ./routes/`, `COPY lambda_functions/extraction_lambda/core ${LAMBDA_TASK_ROOT}/core/`).
+- A root `.dockerignore` keeps the build context small by excluding `.git`, virtual environments, caches, and non-runtime files.
 
 ### Why separate?
 1. **Decoupling**: Extraction Lambda and service both depend on common models, but development can happen independently.
@@ -1189,14 +1190,19 @@ Always check these configuration files before deploying to ensure the Docker ima
 
 #### Dockerfile updates
 
+All Dockerfiles use the **repo root as the build context** (CDK sets `directory=".."` with `file=` pointing to each Dockerfile). COPY paths are prefixed with the subdirectory relative to the repo root.
+
 **Service** (`service/Dockerfile`):
-- **New directories under `service/`**: Add a `COPY <dir>/ ./<dir>/` line. The Dockerfile copies directories explicitly — new ones are silently excluded from the container image.
+- **New directories under `service/`**: Add a `COPY service/<dir>/ ./<dir>/` line. The Dockerfile copies directories explicitly — new ones are silently excluded from the container image.
 - **New config/data files**: If the app reads a new file at runtime, ensure it is copied into the image.
-- **Common package**: Already included via `COPY common/ /app/common/` and `RUN pip install common/`.
 
 **Extraction Lambda** (`lambda_functions/extraction_lambda/Dockerfile`):
-- **New modules under `lambda_functions/extraction_lambda/`**: Add a `COPY` line if needed.
-- **Common package**: Already included via `COPY common/ /app/common/` and `RUN pip install common/`.
+- **New modules under `lambda_functions/extraction_lambda/`**: Add a `COPY` line prefixed with `lambda_functions/extraction_lambda/`.
+
+**Tenant Erasure Lambda** (`lambda_functions/tenant_erasure_lambda/Dockerfile`):
+- **New modules under `lambda_functions/tenant_erasure_lambda/`**: Add a `COPY` line prefixed with `lambda_functions/tenant_erasure_lambda/`.
+
+All three images include `common/` via `COPY common/ /common/` and `RUN pip install --no-cache-dir /common`. A root `.dockerignore` controls what enters the build context.
 
 #### Nginx query string allowlist
 
