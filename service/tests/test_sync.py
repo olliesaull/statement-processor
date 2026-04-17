@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 import sync
 from tenant_data_repository import TenantStatus
 
@@ -191,3 +193,161 @@ def test_s3_data_exists_returns_true_on_non_aws_error(monkeypatch) -> None:
     monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
 
     assert sync._s3_data_exists("t1") is True
+
+
+@pytest.fixture()
+def _sync_scaffold(monkeypatch):
+    """Install deterministic stand-ins for every external collaborator used by sync_data.
+
+    Returns a dict the test can reach into to configure stubs and inspect calls.
+    """
+    scaffold: dict = {
+        "try_acquire_results": [True],  # consumed per call
+        "contacts_ok": True,
+        "credit_notes_ok": True,
+        "invoices_ok": True,
+        "payments_ok": True,
+        "index_calls": [],
+        "status_calls": [],
+        "mark_reconcile_calls": [],
+        "existing_record": None,  # item returned by get_item
+    }
+
+    # get_xero_api_client — nothing needs the real client.
+    monkeypatch.setattr(sync, "get_xero_api_client", lambda *a, **kw: MagicMock())
+    # Cache bump is fire-and-forget.
+    monkeypatch.setattr(sync, "bump_tenant_generation", lambda *a, **kw: None)
+    # build_per_contact_index — record that it was called.
+    monkeypatch.setattr(sync, "build_per_contact_index", lambda tid: scaffold["index_calls"].append(tid))
+    # _resolve_modified_since — don't pull from a real record.
+    monkeypatch.setattr(sync, "_resolve_modified_since", lambda rec: None)
+
+    # TenantDataRepository
+    fake_repo = MagicMock()
+    fake_repo.get_item.side_effect = lambda tid: scaffold["existing_record"]
+
+    def _try_acquire(tenant_id, target_status, stale_threshold_ms):  # noqa: ARG001
+        if scaffold["try_acquire_results"]:
+            return scaffold["try_acquire_results"].pop(0)
+        return True
+
+    fake_repo.try_acquire_sync.side_effect = _try_acquire
+    fake_repo.mark_reconcile_ready.side_effect = lambda tid: scaffold["mark_reconcile_calls"].append(tid)
+    monkeypatch.setattr(sync, "TenantDataRepository", fake_repo)
+    scaffold["repo"] = fake_repo
+
+    # update_tenant_status — record calls.
+    def _record_status(tenant_id, tenant_status=TenantStatus.FREE, last_sync_time=None):
+        scaffold["status_calls"].append({"tenant_id": tenant_id, "status": tenant_status, "last_sync_time": last_sync_time})
+        return True
+
+    monkeypatch.setattr(sync, "update_tenant_status", _record_status)
+
+    # Fetcher stubs keyed by function name.
+    def _contacts(api, tenant_id, modified_since=None):  # noqa: ARG001
+        return scaffold["contacts_ok"]
+
+    def _credit_notes(api, tenant_id, modified_since=None):  # noqa: ARG001
+        return scaffold["credit_notes_ok"]
+
+    def _invoices(api, tenant_id, modified_since=None):  # noqa: ARG001
+        return scaffold["invoices_ok"]
+
+    def _payments(api, tenant_id, modified_since=None):  # noqa: ARG001
+        return scaffold["payments_ok"]
+
+    monkeypatch.setattr(sync, "sync_contacts", _contacts)
+    monkeypatch.setattr(sync, "sync_credit_notes", _credit_notes)
+    monkeypatch.setattr(sync, "sync_invoices", _invoices)
+    monkeypatch.setattr(sync, "sync_payments", _payments)
+
+    return scaffold
+
+
+class TestSyncDataOrchestration:
+    """sync_data follows the contacts-first + heavy-phase choreography."""
+
+    def test_loading_flow_ends_at_free_and_marks_reconcile_ready(self, _sync_scaffold):
+        sync.sync_data("tenant-ok", TenantStatus.LOADING)
+
+        # Status transitions: LOADING -> SYNCING (post-contacts) -> FREE.
+        statuses = [c["status"] for c in _sync_scaffold["status_calls"]]
+        assert statuses == [TenantStatus.SYNCING, TenantStatus.FREE]
+
+        # Index build only runs after all heavy-phase resources succeeded.
+        assert _sync_scaffold["index_calls"] == ["tenant-ok"]
+        # Reconcile gate flipped.
+        assert _sync_scaffold["mark_reconcile_calls"] == ["tenant-ok"]
+        # Final FREE carries start_time (not None).
+        final_call = _sync_scaffold["status_calls"][-1]
+        assert final_call["last_sync_time"] is not None
+
+    def test_heavy_phase_failure_sets_load_incomplete_and_skips_index(self, _sync_scaffold):
+        _sync_scaffold["invoices_ok"] = False
+
+        sync.sync_data("tenant-broken", TenantStatus.LOADING)
+
+        # First transition is LOADING -> SYNCING once contacts are done.
+        statuses = [c["status"] for c in _sync_scaffold["status_calls"]]
+        assert TenantStatus.LOAD_INCOMPLETE in statuses
+        # Index build MUST be skipped when heavy phase failed.
+        assert _sync_scaffold["index_calls"] == []
+        # Reconcile gate must NOT be flipped.
+        assert _sync_scaffold["mark_reconcile_calls"] == []
+
+    def test_contacts_failure_sets_load_incomplete_and_skips_heavy_phase(self, _sync_scaffold):
+        _sync_scaffold["contacts_ok"] = False
+        # The heavy-phase fetchers should never be called — track that.
+        heavy_calls: list[str] = []
+        monkey = lambda resource: lambda api, tenant_id, modified_since=None: heavy_calls.append(resource) or True  # noqa: E731, ARG005
+        # Rebind in scaffold to detect invocation.
+        import sync as sync_mod  # local alias for monkey.
+
+        sync_mod.sync_credit_notes = monkey("credit_notes")
+        sync_mod.sync_invoices = monkey("invoices")
+        sync_mod.sync_payments = monkey("payments")
+
+        sync.sync_data("tenant-no-contacts", TenantStatus.LOADING)
+
+        assert heavy_calls == []
+        statuses = [c["status"] for c in _sync_scaffold["status_calls"]]
+        assert TenantStatus.LOAD_INCOMPLETE in statuses
+        assert _sync_scaffold["mark_reconcile_calls"] == []
+
+    def test_manual_syncing_with_all_success_preserves_reconcile_ready(self, _sync_scaffold):
+        """Manual SYNCING flow must NOT re-mark reconcile-ready (already set)."""
+        _sync_scaffold["existing_record"] = {"ReconcileReadyAt": 1700000000000, "LastSyncTime": 1700000000000}
+
+        sync.sync_data("tenant-manual-ok", TenantStatus.SYNCING)
+
+        # Reconcile already ready — don't touch it.
+        assert _sync_scaffold["mark_reconcile_calls"] == []
+        # Still ends at FREE with start_time.
+        final_call = _sync_scaffold["status_calls"][-1]
+        assert final_call["status"] == TenantStatus.FREE
+        assert final_call["last_sync_time"] is not None
+
+    def test_manual_syncing_partial_failure_keeps_free_with_null_sync_time(self, _sync_scaffold):
+        """Existing manual-sync-partial-failure behavior preserved for reconcile-ready tenants."""
+        _sync_scaffold["existing_record"] = {"ReconcileReadyAt": 1700000000000}
+        _sync_scaffold["invoices_ok"] = False
+
+        sync.sync_data("tenant-manual-partial", TenantStatus.SYNCING)
+
+        final_call = _sync_scaffold["status_calls"][-1]
+        # Reconcile-ready tenant with partial failure returns to FREE, not LOAD_INCOMPLETE.
+        assert final_call["status"] == TenantStatus.FREE
+        assert final_call["last_sync_time"] is None
+        # Reconcile gate untouched.
+        assert _sync_scaffold["mark_reconcile_calls"] == []
+
+    def test_try_acquire_rejects_second_concurrent_call(self, _sync_scaffold):
+        """On False from try_acquire_sync, sync_data logs and returns early."""
+        _sync_scaffold["try_acquire_results"] = [False]
+
+        sync.sync_data("tenant-busy", TenantStatus.LOADING)
+
+        # No status updates, no fetching.
+        assert _sync_scaffold["status_calls"] == []
+        assert _sync_scaffold["index_calls"] == []
+        assert _sync_scaffold["mark_reconcile_calls"] == []

@@ -394,35 +394,119 @@ def build_per_contact_index(tenant_id: str) -> None:
     logger.info("Built per-contact index", tenant_id=tenant_id, contacts=len(by_contact), upload_failures=upload_failures)
 
 
+_SYNC_STALE_THRESHOLD_MS = 5 * 60 * 1000  # 5 minutes — recover from crashed workers.
+
+
+def sync_contacts_phase(api: AccountingApi, tenant_id: str, modified_since: datetime | None = None) -> bool:
+    """Run the contacts-only phase that gates app access during the initial load.
+
+    Extracted so ``sync_data`` can flip TenantStatus ``LOADING → SYNCING`` as
+    soon as contacts finish — unblocking navigation while the heavy phase keeps
+    running in the background.
+    """
+    return sync_contacts(api, tenant_id, modified_since=modified_since)
+
+
+def sync_heavy_phase(api: AccountingApi, tenant_id: str, modified_since: datetime | None = None) -> dict[str, bool]:
+    """Run invoices + credit notes + payments serially after contacts finish.
+
+    Serial (not parallel) because the real bottleneck is Xero's 60 rpm rate
+    limit per tenant, not local concurrency. Parallelism would just race into
+    HTTP 429s without improving wall-clock time — see the decision log entry
+    "Deferred parallelization" for rationale.
+
+    Returns:
+        Mapping of resource name → success flag. Downstream uses this to
+        decide whether per-contact index build + reconcile-ready flip runs.
+    """
+    return {
+        "credit_notes": sync_credit_notes(api, tenant_id, modified_since=modified_since),
+        "invoices": sync_invoices(api, tenant_id, modified_since=modified_since),
+        "payments": sync_payments(api, tenant_id, modified_since=modified_since),
+    }
+
+
 def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[str, Any] | None = None) -> None:
-    """Sync all datasets for a tenant and update tenant status."""
+    """Sync all Xero datasets for a tenant and transition tenant status.
+
+    Choreography (see contacts-first unlock plan for rationale):
+
+    1. ``try_acquire_sync`` — atomically claim the tenant; return early if
+       another sync is already in flight and its heartbeat is fresh.
+    2. Contacts phase — once complete, flip ``LOADING → SYNCING`` so the user
+       can use the app while the heavy phase runs.
+    3. Heavy phase — invoices + credit notes + payments serial.
+    4. Per-contact index build — only if every heavy-phase resource succeeded,
+       otherwise the index would misrepresent partial data.
+    5. On full success — ``mark_reconcile_ready`` + ``FREE`` with the start
+       timestamp as ``LastSyncTime``.
+    6. On any failure — ``LOAD_INCOMPLETE`` so the UI offers a Retry button,
+       except for a manual ``SYNCING`` run on a tenant whose
+       ``ReconcileReadyAt`` is already set — that stays ``FREE`` with
+       ``LastSyncTime=None`` so reconcile access is not pulled out from under
+       the user mid-session.
+    """
+    if not TenantDataRepository.try_acquire_sync(tenant_id, target_status=operation_type, stale_threshold_ms=_SYNC_STALE_THRESHOLD_MS):
+        logger.warning("Sync already in flight; skipping overlapping start", tenant_id=tenant_id, target_status=str(operation_type))
+        return
+
     tenant_record = TenantDataRepository.get_item(tenant_id)
+    reconcile_ready_before = bool(tenant_record and tenant_record.get("ReconcileReadyAt"))
     modified_since: datetime | None = None
     if operation_type != TenantStatus.LOADING and tenant_record:
         modified_since = _resolve_modified_since(tenant_record)
 
     start_time_ms = int(time.time() * 1000)
-    update_tenant_status(tenant_id, operation_type)
     api = get_xero_api_client(oauth_token)
-    all_ok = True
-    sync_tasks = (sync_contacts, sync_credit_notes, sync_invoices, sync_payments)
-    for sync_func in sync_tasks:
-        if not sync_func(api, tenant_id, modified_since=modified_since):
-            all_ok = False
 
-    # Build per-contact index files for fast statement page lookups.
-    try:
-        build_per_contact_index(tenant_id)
-    except Exception:
-        logger.exception("Failed to build per-contact index", tenant_id=tenant_id)
+    contacts_ok = sync_contacts_phase(api, tenant_id, modified_since=modified_since)
 
-    # Bump the tenant cache generation so that any Redis-cached statement
-    # views (which embed Xero reconciliation data) become unreachable.
-    # This ensures a user who syncs and immediately opens a statement
-    # sees fresh data rather than stale cached results.
+    if not contacts_ok:
+        # Heavy phase is skipped; partial contacts data would mislead the UI.
+        update_tenant_status(tenant_id, TenantStatus.LOAD_INCOMPLETE)
+        logger.warning("Contacts phase failed; sync aborted", tenant_id=tenant_id)
+        return
+
+    # Contacts done — unblock the app before starting the heavy phase.
+    if operation_type == TenantStatus.LOADING:
+        update_tenant_status(tenant_id, TenantStatus.SYNCING)
+
+    heavy_results = sync_heavy_phase(api, tenant_id, modified_since=modified_since)
+    heavy_ok = all(heavy_results.values())
+
+    if heavy_ok:
+        # Per-contact index is a view of the flat files — only safe when every
+        # source file is current. Partial data would surface as missing rows
+        # on the statement detail page.
+        try:
+            build_per_contact_index(tenant_id)
+        except Exception:
+            logger.exception("Failed to build per-contact index", tenant_id=tenant_id)
+            heavy_ok = False
+
+    # Bump the tenant cache generation so any Redis-cached statement views
+    # (which embed Xero reconciliation data) become unreachable. Runs on
+    # both success and partial failure — stale data is never correct.
     try:
         bump_tenant_generation(tenant_id)
     except Exception:
         logger.exception("Failed to bump tenant cache generation after sync", tenant_id=tenant_id)
 
-    update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=start_time_ms if all_ok else None)
+    if heavy_ok:
+        # Only flip the gate on the first successful full load. A manual
+        # incremental sync on an already-ready tenant must leave ReconcileReadyAt
+        # (and LastFullLoadCompletedAt) untouched — rewriting them would look
+        # like a fresh initial load in telemetry.
+        if not reconcile_ready_before:
+            TenantDataRepository.mark_reconcile_ready(tenant_id)
+        update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=start_time_ms)
+        return
+
+    if operation_type == TenantStatus.SYNCING and reconcile_ready_before:
+        # Manual incremental sync on an already reconcile-ready tenant: a
+        # partial failure mustn't yank the user out of the app. Keep them at
+        # FREE but signal "not a clean sync" by clearing LastSyncTime.
+        update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=None)
+        return
+
+    update_tenant_status(tenant_id, TenantStatus.LOAD_INCOMPLETE)
