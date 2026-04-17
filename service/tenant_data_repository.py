@@ -145,8 +145,18 @@ class TenantDataRepository:
     def schedule_erasure(cls, tenant_id: str, erasure_epoch_ms: int, current_status: TenantStatus) -> None:
         """Schedule tenant data for erasure at a future time.
 
-        Sets EraseTenantDataTime and transitions status if the tenant was
-        mid-load (LOADING -> LOAD_INCOMPLETE) or mid-sync (SYNCING -> FREE).
+        Sets EraseTenantDataTime and transitions interrupted states to a safe
+        resting state before erasure runs:
+
+        - LOADING (initial contacts phase) -> LOAD_INCOMPLETE so the Retry-sync
+          affordance reappears if the user reconnects before the grace period.
+        - SYNCING is overloaded (see ``TenantStatus`` docstring). We resolve the
+          ambiguity by inspecting ``ReconcileReadyAt``:
+          * Unset -> still in the initial heavy phase, fall through to
+            LOAD_INCOMPLETE so reconciliation stays gated until a full sync
+            completes.
+          * Set -> post-initial incremental sync, FREE is correct because
+            reconciliation remained available throughout.
 
         Args:
             tenant_id: Tenant being disconnected.
@@ -156,14 +166,28 @@ class TenantDataRepository:
         update_expr = "SET EraseTenantDataTime = :erasure_time"
         expr_values: dict[str, object] = {":erasure_time": erasure_epoch_ms}
 
-        # Transition interrupted states to a safe resting state before erasure runs.
-        status_transitions = {TenantStatus.LOADING: TenantStatus.LOAD_INCOMPLETE, TenantStatus.SYNCING: TenantStatus.FREE}
-        new_status = status_transitions.get(current_status)
+        new_status = cls._resolve_erasure_transition(tenant_id, current_status)
         if new_status:
             update_expr += ", TenantStatus = :new_status"
             expr_values[":new_status"] = new_status
 
         cls._table.update_item(Key={"TenantID": tenant_id}, UpdateExpression=update_expr, ExpressionAttributeValues=expr_values)
+
+    @classmethod
+    def _resolve_erasure_transition(cls, tenant_id: str, current_status: TenantStatus) -> TenantStatus | None:
+        """Pick the post-disconnect status, reading ``ReconcileReadyAt`` for SYNCING."""
+        if current_status == TenantStatus.LOADING:
+            return TenantStatus.LOAD_INCOMPLETE
+        if current_status != TenantStatus.SYNCING:
+            return None
+
+        # SYNCING is the overloaded state. A missing row or missing
+        # ``ReconcileReadyAt`` means the tenant never completed a full load,
+        # so LOAD_INCOMPLETE preserves the Retry-sync path on reconnect.
+        item = cls.get_item(tenant_id)
+        if item and item.get("ReconcileReadyAt") is not None:
+            return TenantStatus.FREE
+        return TenantStatus.LOAD_INCOMPLETE
 
     @classmethod
     def cancel_erasure(cls, tenant_id: str) -> None:

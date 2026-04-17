@@ -116,6 +116,58 @@ def test_schedule_erasure_keeps_free_status(monkeypatch) -> None:
     assert ":new_status" not in calls[0].get("ExpressionAttributeValues", {})
 
 
+class TestScheduleErasureSyncingBranches:
+    """SYNCING transitions depend on ReconcileReadyAt: null -> LOAD_INCOMPLETE, set -> FREE.
+
+    The gate preserves ``LOAD_INCOMPLETE`` when a user disconnects mid-heavy-phase of the
+    initial load (before ``ReconcileReadyAt`` was written) so the UI keeps the Retry-sync
+    affordance; falls back to ``FREE`` for later incremental/manual syncs.
+    """
+
+    @staticmethod
+    def _install_fake_table(monkeypatch, item: dict | None):
+        update_calls: list[dict] = []
+
+        class FakeTable:
+            @staticmethod
+            def get_item(**_):
+                return {"Item": item} if item is not None else {}
+
+            @staticmethod
+            def update_item(**kwargs):
+                update_calls.append(kwargs)
+
+        monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+        return update_calls
+
+    def test_syncing_without_reconcile_ready_transitions_to_load_incomplete(self, monkeypatch):
+        """Initial heavy-phase disconnect must keep LOAD_INCOMPLETE (Retry-sync path)."""
+        calls = self._install_fake_table(monkeypatch, item={"TenantID": "tenant-1", "TenantStatus": "SYNCING"})
+
+        TenantDataRepository.schedule_erasure("tenant-1", erasure_epoch_ms=1700000000000, current_status=TenantStatus.SYNCING)
+
+        assert len(calls) == 1
+        assert calls[0]["ExpressionAttributeValues"][":new_status"] == TenantStatus.LOAD_INCOMPLETE
+
+    def test_syncing_with_reconcile_ready_transitions_to_free(self, monkeypatch):
+        """Post-initial incremental sync disconnect returns to FREE (unchanged behaviour)."""
+        calls = self._install_fake_table(monkeypatch, item={"TenantID": "tenant-1", "TenantStatus": "SYNCING", "ReconcileReadyAt": 1700000000000})
+
+        TenantDataRepository.schedule_erasure("tenant-1", erasure_epoch_ms=1700000000000, current_status=TenantStatus.SYNCING)
+
+        assert len(calls) == 1
+        assert calls[0]["ExpressionAttributeValues"][":new_status"] == TenantStatus.FREE
+
+    def test_syncing_without_tenant_row_transitions_to_load_incomplete(self, monkeypatch):
+        """Defensive: missing row during SYNCING disconnect treated as never-reconciled."""
+        calls = self._install_fake_table(monkeypatch, item=None)
+
+        TenantDataRepository.schedule_erasure("tenant-1", erasure_epoch_ms=1700000000000, current_status=TenantStatus.SYNCING)
+
+        assert len(calls) == 1
+        assert calls[0]["ExpressionAttributeValues"][":new_status"] == TenantStatus.LOAD_INCOMPLETE
+
+
 def test_cancel_erasure_removes_attribute(monkeypatch) -> None:
     """cancel_erasure should REMOVE EraseTenantDataTime."""
     calls: list[dict] = []
