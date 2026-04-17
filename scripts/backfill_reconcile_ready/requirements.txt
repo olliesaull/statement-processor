@@ -1,0 +1,2 @@
+-r ../../service/requirements.txt
+-e ../../common
