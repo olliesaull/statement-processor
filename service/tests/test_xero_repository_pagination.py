@@ -220,3 +220,119 @@ class TestPaginationMetadataLogging:
         entry = logged_calls[0]
         assert entry["has_pagination"] is False
         assert entry["item_count"] is None
+
+
+class TestFetcherProgressCallbacks:
+    """Each fetcher fires progress_callback after every page with monotonic counts."""
+
+    def _make_invoice_items(self, n: int, start: int = 1) -> list:
+        return [
+            SimpleNamespace(
+                invoice_id=f"inv-{i}",
+                type="ACCPAY",
+                number=f"N{i}",
+                status="AUTHORISED",
+                date=None,
+                due_date=None,
+                reference=None,
+                total=0,
+                amount_due=0,
+                amount_paid=0,
+                amount_credited=0,
+                updated_date_utc=None,
+                contact=SimpleNamespace(contact_id="c1", name="c"),
+            )
+            for i in range(start, start + n)
+        ]
+
+    def test_invoices_fires_callback_with_monotonic_records_fetched(self) -> None:
+        """Callback sees records_fetched grow across pages and record_total from pagination."""
+        api = MagicMock()
+        # Two pages: first full (INVOICES_PAGE_SIZE), second short.
+        first_batch = self._make_invoice_items(INVOICES_PAGE_SIZE)
+        second_batch = self._make_invoice_items(5, start=INVOICES_PAGE_SIZE + 1)
+        api.get_invoices.side_effect = [
+            _make_invoice_result(invoices=first_batch, pagination=_make_pagination(item_count=INVOICES_PAGE_SIZE + 5, page_count=2)),
+            _make_invoice_result(invoices=second_batch, pagination=_make_pagination(item_count=INVOICES_PAGE_SIZE + 5, page_count=2)),
+        ]
+
+        calls: list[tuple[int, int | None]] = []
+        get_invoices(tenant_id=TENANT_ID, api=api, progress_callback=lambda fetched, total: calls.append((fetched, total)))
+
+        assert len(calls) == 2
+        fetched_counts = [c[0] for c in calls]
+        totals = [c[1] for c in calls]
+        # Counts must be strictly monotonic — downstream UI would glitch otherwise.
+        assert fetched_counts[0] == INVOICES_PAGE_SIZE
+        assert fetched_counts[1] == INVOICES_PAGE_SIZE + 5
+        assert totals == [INVOICES_PAGE_SIZE + 5, INVOICES_PAGE_SIZE + 5]
+
+    def test_invoices_callback_receives_none_when_pagination_absent(self) -> None:
+        """record_total=None propagates through the callback unchanged."""
+        api = MagicMock()
+        api.get_invoices.return_value = _make_invoice_result(invoices=self._make_invoice_items(3), pagination=None)
+
+        calls: list[tuple[int, int | None]] = []
+        get_invoices(tenant_id=TENANT_ID, api=api, progress_callback=lambda fetched, total: calls.append((fetched, total)))
+
+        assert len(calls) == 1
+        assert calls[0][0] == 3
+        assert calls[0][1] is None
+
+    def test_credit_notes_fires_callback(self) -> None:
+        api = MagicMock()
+        batch = [
+            SimpleNamespace(
+                credit_note_id=f"cn-{i}",
+                credit_note_number="N",
+                type="ACCPAYCREDIT",
+                status="AUTHORISED",
+                date=None,
+                due_date=None,
+                reference=None,
+                total=0,
+                amount_credited=0,
+                remaining_credit=0,
+                contact=SimpleNamespace(contact_id="c1", name="c"),
+            )
+            for i in range(3)
+        ]
+        api.get_credit_notes.return_value = _make_credit_note_result(credit_notes=batch, pagination=_make_pagination(item_count=3, page_count=1))
+
+        calls: list[tuple[int, int | None]] = []
+        get_credit_notes(tenant_id=TENANT_ID, api=api, progress_callback=lambda fetched, total: calls.append((fetched, total)))
+
+        assert calls == [(3, 3)]
+
+    def test_payments_fires_callback(self) -> None:
+        api = MagicMock()
+        batch = [
+            SimpleNamespace(
+                payment_id=f"pay-{i}", reference=None, amount=0, date=None, status="AUTHORISED", invoice=SimpleNamespace(invoice_id=f"inv-{i}", contact=SimpleNamespace(contact_id="c1", name="c"))
+            )
+            for i in range(4)
+        ]
+        api.get_payments.return_value = _make_payment_result(payments=batch, pagination=_make_pagination(item_count=4, page_count=1))
+
+        calls: list[tuple[int, int | None]] = []
+        get_payments(tenant_id=TENANT_ID, api=api, progress_callback=lambda fetched, total: calls.append((fetched, total)))
+
+        assert calls == [(4, 4)]
+
+    def test_contacts_fires_callback(self) -> None:
+        api = MagicMock()
+        batch = [SimpleNamespace(contact_id=f"c-{i}", name=f"Contact {i}", updated_date_utc=None, contact_status="ACTIVE") for i in range(2)]
+        api.get_contacts.return_value = _make_contacts_result(contacts=batch, pagination=_make_pagination(item_count=2, page_count=1))
+
+        calls: list[tuple[int, int | None]] = []
+        get_contacts_from_xero(tenant_id=TENANT_ID, api=api, progress_callback=lambda fetched, total: calls.append((fetched, total)))
+
+        assert calls == [(2, 2)]
+
+    def test_callback_not_fired_when_none(self) -> None:
+        """Default behaviour (no callback passed) must not crash."""
+        api = MagicMock()
+        api.get_invoices.return_value = _make_invoice_result(invoices=self._make_invoice_items(1), pagination=_make_pagination(item_count=1, page_count=1))
+
+        # Should not raise.
+        get_invoices(tenant_id=TENANT_ID, api=api)

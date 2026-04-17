@@ -9,6 +9,7 @@ This module:
 
 import json
 import os
+from collections.abc import Callable
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -88,8 +89,20 @@ def load_local_dataset(resource: XeroType, tenant_id: str | None = None) -> Any 
     return None
 
 
-def get_contacts_from_xero(tenant_id: str | None = None, modified_since: datetime | None = None, api: AccountingApi | None = None) -> list[dict[str, Any]]:
-    """Fetch contacts directly from Xero ordered by name."""
+ProgressCallback = Callable[[int, int | None], None]
+
+
+def get_contacts_from_xero(
+    tenant_id: str | None = None, modified_since: datetime | None = None, api: AccountingApi | None = None, progress_callback: ProgressCallback | None = None
+) -> list[dict[str, Any]]:
+    """Fetch contacts directly from Xero ordered by name.
+
+    Args:
+        progress_callback: Optional ``(records_fetched, record_total) -> None``.
+            Fires once per page. ``record_total`` is ``None`` when Xero's
+            response omits pagination — callers must render indeterminate
+            progress in that case.
+    """
     tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id:
         logger.info("Skipping contact lookup; tenant not selected")
@@ -144,6 +157,11 @@ def get_contacts_from_xero(tenant_id: str | None = None, modified_since: datetim
 
             logger.debug("Fetched contact page", tenant_id=tenant_id, page=page, returned=len(batch))
 
+            if progress_callback is not None:
+                pagination = getattr(result, "pagination", None)
+                record_total = getattr(pagination, "item_count", None) if pagination else None
+                progress_callback(len(contacts), record_total)
+
             if len(batch) < CONTACTS_PAGE_SIZE:
                 break
             page += 1
@@ -161,8 +179,13 @@ def get_contacts_from_xero(tenant_id: str | None = None, modified_since: datetim
     return []
 
 
-def get_invoices(tenant_id: str | None = None, modified_since: datetime | None = None, api: AccountingApi | None = None) -> list[dict[str, Any]]:
-    """Get all supplier bills (ACCPAY) from Xero, across all pages."""
+def get_invoices(tenant_id: str | None = None, modified_since: datetime | None = None, api: AccountingApi | None = None, progress_callback: ProgressCallback | None = None) -> list[dict[str, Any]]:
+    """Get all supplier bills (ACCPAY) from Xero, across all pages.
+
+    Args:
+        progress_callback: Optional ``(records_fetched, record_total) -> None``.
+            Fires once per page. See ``get_contacts_from_xero``.
+    """
 
     tenant_id = tenant_id or session.get("xero_tenant_id")
     if not tenant_id:
@@ -219,6 +242,11 @@ def get_invoices(tenant_id: str | None = None, modified_since: datetime | None =
                 else:
                     extras.append(rec)
 
+            if progress_callback is not None:
+                pagination = getattr(result, "pagination", None)
+                record_total = getattr(pagination, "item_count", None) if pagination else None
+                progress_callback(total_returned, record_total)
+
             # Stop when the final page returns less than the per-endpoint page size
             if batch_count < INVOICES_PAGE_SIZE:
                 break
@@ -240,12 +268,14 @@ def get_invoices(tenant_id: str | None = None, modified_since: datetime | None =
         return []
 
 
-def get_credit_notes(tenant_id: str | None = None, modified_since: datetime | None = None, api: AccountingApi | None = None) -> list[dict[str, Any]]:
+def get_credit_notes(tenant_id: str | None = None, modified_since: datetime | None = None, api: AccountingApi | None = None, progress_callback: ProgressCallback | None = None) -> list[dict[str, Any]]:
     """
     Get all supplier credit notes (ACCPAYCREDIT) across all pages (no contact filter).
 
     Args:
         modified_since: Optional datetime to fetch only credit notes modified since this timestamp.
+        progress_callback: Optional ``(records_fetched, record_total) -> None``.
+            Fires once per page. See ``get_contacts_from_xero``.
 
     Returns:
         A list of credit note dicts (same shape as previous per-contact function).
@@ -317,6 +347,11 @@ def get_credit_notes(tenant_id: str | None = None, modified_since: datetime | No
 
             logger.debug("Fetched credit note page", tenant_id=tenant_id, page=page, returned=len(batch))
 
+            if progress_callback is not None:
+                pagination = getattr(result, "pagination", None)
+                record_total = getattr(pagination, "item_count", None) if pagination else None
+                progress_callback(len(credit_notes), record_total)
+
             if len(batch) < CREDIT_NOTES_PAGE_SIZE:
                 break
             page += 1
@@ -333,12 +368,14 @@ def get_credit_notes(tenant_id: str | None = None, modified_since: datetime | No
     return []
 
 
-def get_payments(tenant_id: str | None = None, modified_since: datetime | None = None, api: AccountingApi | None = None) -> list[dict[str, Any]]:
+def get_payments(tenant_id: str | None = None, modified_since: datetime | None = None, api: AccountingApi | None = None, progress_callback: ProgressCallback | None = None) -> list[dict[str, Any]]:
     """
     Get all payments across all pages (no contact filter).
 
     Args:
         modified_since: Optional datetime to fetch only payments modified since this timestamp.
+        progress_callback: Optional ``(records_fetched, record_total) -> None``.
+            Fires once per page. See ``get_contacts_from_xero``.
 
     Returns:
         A list of payment dicts (same shape as previous per-contact function).
@@ -399,6 +436,11 @@ def get_payments(tenant_id: str | None = None, modified_since: datetime | None =
                 )
 
             logger.debug("Fetched payment page", tenant_id=tenant_id, page=page, returned=len(batch))
+
+            if progress_callback is not None:
+                pagination = getattr(result, "pagination", None)
+                record_total = getattr(pagination, "item_count", None) if pagination else None
+                progress_callback(len(payments), record_total)
 
             if len(batch) < PAYMENTS_PAGE_SIZE:
                 break
