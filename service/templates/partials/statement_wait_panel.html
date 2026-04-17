@@ -1,0 +1,55 @@
+{#
+  statement_wait_panel.html — single-tenant progress fragment for /statement/<id>.
+
+  Rendered by:
+    - reconcile_ready_required decorator when ReconcileReadyAt is null (full page).
+    - GET /statement/<id>/wait (poll target; ready → HX-Redirect, not-ready → this fragment).
+
+  Context:
+    statement_id: str
+    tenant_view: TenantProgressView | None
+
+  The wrapper element shares an id with statement.html's not-ready branch so
+  hx-swap="outerHTML" swaps in place without layout jump.
+#}
+<div id="statement-reconcile-not-ready"
+     class="page-panel page-panel-flat sync-progress-wait-panel text-center py-5"
+     hx-get="/statement/{{ statement_id }}/wait"
+     hx-trigger="every 3s[(window.__userActive ?? true) && !document.hidden]"
+     hx-swap="outerHTML">
+  <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
+  <p class="mb-1">Your Xero data is still syncing.</p>
+  <p class="text-muted mb-3">This page will open automatically once reconciliation data is ready.</p>
+
+  {% if tenant_view %}
+    <ul class="sync-progress-compact text-start mx-auto" style="max-width: 420px;">
+      {% for resource in tenant_view.resources %}
+        <li class="sync-progress-row {{ 'done' if resource.is_complete else ('active' if resource.is_active else ('failed' if resource.is_failed else 'pending')) }} {% if resource.indeterminate %}indeterminate{% endif %}">
+          <span class="sync-progress-label">{{ resource.display_name }}</span>
+          <span class="sync-progress-value">
+            {% if resource.is_complete %}Done
+            {% elif resource.is_failed %}Failed
+            {% elif resource.is_active %}
+              {% if resource.indeterminate %}
+                {{ resource.records_fetched or 0 }} fetched
+              {% else %}
+                {{ resource.records_fetched or 0 }} / {{ resource.record_total }}
+                {% if resource.percent is not none %}({{ resource.percent }}%){% endif %}
+              {% endif %}
+            {% else %}Pending
+            {% endif %}
+          </span>
+        </li>
+      {% endfor %}
+      <li class="sync-progress-row {{ 'done' if tenant_view.per_contact_index_status == 'complete' else ('active' if tenant_view.per_contact_index_status == 'in_progress' else ('failed' if tenant_view.per_contact_index_status == 'failed' else 'pending')) }}">
+        <span class="sync-progress-label">Contact index</span>
+        <span class="sync-progress-value">
+          {% if tenant_view.per_contact_index_status == 'complete' %}Done
+          {% elif tenant_view.per_contact_index_status == 'in_progress' %}Building&hellip;
+          {% elif tenant_view.per_contact_index_status == 'failed' %}Failed
+          {% else %}Pending{% endif %}
+        </span>
+      </li>
+    </ul>
+  {% endif %}
+</div>

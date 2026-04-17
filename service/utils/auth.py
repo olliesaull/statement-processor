@@ -26,6 +26,7 @@ from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 from config import CLIENT_ID, CLIENT_SECRET
 from logger import logger
 from tenant_data_repository import TenantDataRepository, TenantStatus
+from utils.sync_progress import build_tenant_progress_view
 from utils.tenant_status import get_tenant_status
 
 # region Constants
@@ -431,9 +432,16 @@ def reconcile_ready_required(f: Callable[..., Any]) -> Callable[..., Any]:
         reconcile_ready_at = item.get("ReconcileReadyAt") if item else None
         if reconcile_ready_at is None:
             statement_id = kwargs.get("statement_id")
+            tenant_name = session.get("xero_tenant_name") or tenant_id or ""
+            tenant_view = build_tenant_progress_view(tenant_id or "", tenant_name, item)
             logger.info("Rendering reconcile-not-ready view", tenant_id=tenant_id, statement_id=statement_id, route=request.path)
             return render_template(
-                "statement.html", reconcile_not_ready=True, statement_id=statement_id, tenant_id=tenant_id, page_heading=f"Statement {statement_id}" if statement_id else "Statement"
+                "statement.html",
+                reconcile_not_ready=True,
+                statement_id=statement_id,
+                tenant_id=tenant_id,
+                tenant_view=tenant_view,
+                page_heading=f"Statement {statement_id}" if statement_id else "Statement",
             )
         return f(*args, **kwargs)
 

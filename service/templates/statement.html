@@ -9,12 +9,9 @@
     {#
       Tenant is still in the post-contacts heavy phase: contacts are available,
       but reconciliation data (invoices + credit notes + payments + per-contact
-      index) has not completed. We render a minimal wait view that polls the
-      wait endpoint; once ReconcileReadyAt is set, the endpoint returns an
-      HX-Redirect header and HTMX navigates the browser to this URL again for
-      a fresh render of the real statement detail.
-      The poll URL is hardcoded here rather than using url_for; the endpoint
-      itself is introduced in the next step.
+      index) has not completed. The partial below polls /statement/<id>/wait;
+      once ReconcileReadyAt is set, the endpoint returns HX-Redirect and HTMX
+      navigates the browser to this URL again for a fresh render.
     #}
     <div class="page-header statement-page-header d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
       <div class="page-header-content">
@@ -23,14 +20,7 @@
       </div>
     </div>
 
-    <div id="statement-reconcile-not-ready" class="page-panel page-panel-flat text-center py-5"
-         hx-get="/statement/{{ statement_id }}/wait"
-         hx-trigger="load delay:3s, every 3s[(window.__userActive ?? true) && !document.hidden]"
-         hx-swap="outerHTML">
-      <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
-      <p class="mb-1">Your Xero data is still syncing.</p>
-      <p class="text-muted mb-0">This page will open automatically once reconciliation data is ready.</p>
-    </div>
+    {% include "partials/statement_wait_panel.html" %}
   {% elif is_processing %}
     {# Page header shown inline for the processing state (no filters or download needed) #}
     <div class="page-header statement-page-header d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">

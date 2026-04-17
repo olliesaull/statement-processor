@@ -9,7 +9,7 @@ import os
 import shutil
 import time
 
-from flask import Blueprint, redirect, request, session, url_for
+from flask import Blueprint, redirect, render_template, request, session, url_for
 
 from config import LOCAL_DATA_DIR
 from logger import logger
@@ -18,6 +18,7 @@ from tenant_activation import set_active_tenant
 from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import clear_session_is_set_cookie, route_handler_logging, xero_token_required
+from utils.sync_progress import build_progress_view, should_poll
 from utils.tenant_status import get_tenant_status
 
 tenants_bp = Blueprint("tenants", __name__)
@@ -74,6 +75,26 @@ def tenant_management():
         subscription_state=subscription_state,
         subscription_tier=subscription_tier,
     )
+
+
+@tenants_bp.route("/tenants/sync-progress")
+@xero_token_required
+@route_handler_logging
+def sync_progress():
+    """Return the multi-tenant sync-progress HTMX fragment for session tenants.
+
+    Read session tenants only — no cross-tenant reads — then BatchGetItem the
+    rows in a single DynamoDB round-trip. The rendered partial embeds
+    ``hx-trigger`` while at least one tenant is still syncing; once every
+    tenant is reconcile-ready, polling stops.
+    """
+    session_tenants = session.get("xero_tenants") or []
+    tenant_ids = [t.get("tenantId") for t in session_tenants if isinstance(t, dict) and t.get("tenantId")]
+    rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
+    tenant_views = build_progress_view(session_tenants, rows)
+    polling = should_poll(tenant_views)
+    logger.info("Rendering sync-progress fragment", tenant_ids=tenant_ids, polling=polling)
+    return render_template("partials/sync_progress_panel.html", tenant_views=tenant_views, polling=polling, TenantStatus=TenantStatus)
 
 
 @tenants_bp.route("/tenants/select", methods=["POST"])

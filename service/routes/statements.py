@@ -14,6 +14,7 @@ from config import S3_BUCKET_NAME
 from logger import logger
 from statement_view_cache import cache_statement_view, get_cached_statement_view, invalidate_statement_view_cache
 from tenant_billing_repository import TenantBillingRepository
+from tenant_data_repository import TenantDataRepository
 from utils.auth import active_tenant_required, block_when_loading, reconcile_ready_required, route_handler_logging, xero_token_required
 from utils.dynamo import (
     delete_statement_data,
@@ -29,6 +30,7 @@ from utils.pagination import paginate
 from utils.statement_detail import build_statement_view_data
 from utils.statement_upload import get_active_contacts_for_upload, handle_upload_statements_post
 from utils.storage import StatementJSONNotFoundError, fetch_json_statement, statement_json_s3_key
+from utils.sync_progress import build_tenant_progress_view
 
 statements_bp = Blueprint("statements", __name__)
 
@@ -458,6 +460,40 @@ def statement(statement_id: str):
     # the #statement-content region without a full page reload.
     template = "partials/statement_content.html" if _is_htmx_request() else "statement.html"
     return render_template(template, **context)
+
+
+@statements_bp.route("/statement/<statement_id>/wait")
+@xero_token_required
+@route_handler_logging
+def statement_wait(statement_id: str):
+    """HTMX poll target for the statement not-ready view.
+
+    Mirrors the ownership guard from ``statement()`` so a foreign statement_id
+    cannot be used to poll another tenant's data. When the tenant is
+    reconcile-ready we return an empty 200 with ``HX-Redirect`` so HTMX kicks
+    off a full navigation — necessary because a full nav re-triggers the
+    statement route's real render path.
+    """
+    tenant_id = session.get("xero_tenant_id")
+
+    record = get_statement_record(tenant_id, statement_id)
+    if not record:
+        logger.info("statement_wait: statement not found", tenant_id=tenant_id, statement_id=statement_id)
+        abort(404)
+
+    item = TenantDataRepository.get_item(tenant_id) if tenant_id else None
+    reconcile_ready_at = item.get("ReconcileReadyAt") if item else None
+    if reconcile_ready_at is not None:
+        # Full navigation clears the HTMX polling cycle and re-enters
+        # reconcile_ready_required on the GET — which now passes through.
+        logger.info("statement_wait: reconcile ready, issuing HX-Redirect", tenant_id=tenant_id, statement_id=statement_id)
+        response = make_response("", 200)
+        response.headers["HX-Redirect"] = url_for("statements.statement", statement_id=statement_id)
+        return response
+
+    tenant_name = session.get("xero_tenant_name") or tenant_id or ""
+    tenant_view = build_tenant_progress_view(tenant_id or "", tenant_name, item)
+    return render_template("partials/statement_wait_panel.html", statement_id=statement_id, tenant_view=tenant_view)
 
 
 @statements_bp.route("/upload-statements", methods=["GET", "POST"])
