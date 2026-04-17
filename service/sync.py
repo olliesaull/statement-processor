@@ -468,13 +468,42 @@ def sync_heavy_phase(api: AccountingApi, tenant_id: str, modified_since: datetim
     }
 
 
-def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[str, Any] | None = None) -> None:
+_RESOURCE_PROGRESS_ATTRS: dict[str, str] = {"contacts": "ContactsProgress", "credit_notes": "CreditNotesProgress", "invoices": "InvoicesProgress", "payments": "PaymentsProgress"}
+
+
+def _resource_is_complete(tenant_item: dict[str, Any] | None, resource: str) -> bool:
+    """Return True when the stored ``*Progress.status`` is ``complete``."""
+    if not tenant_item:
+        return False
+    progress = tenant_item.get(_RESOURCE_PROGRESS_ATTRS[resource])
+    return isinstance(progress, dict) and progress.get("status") == "complete"
+
+
+def _should_skip_for_retry(resource: str, only_run: set[str] | None, tenant_item: dict[str, Any] | None) -> bool:
+    """Decide whether to skip a resource on a retry run.
+
+    ``only_run=None`` is a full sync — never skip. Otherwise skip when the
+    resource is outside the retry set, or when it's already ``complete``
+    (race-safe: a user double-clicking Retry must not re-fetch a resource
+    that finished while the second click was in flight).
+    """
+    if only_run is None:
+        return False
+    if resource not in only_run:
+        return True
+    return _resource_is_complete(tenant_item, resource)
+
+
+def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[str, Any] | None = None, only_run_resources: set[str] | None = None, *, already_acquired: bool = False) -> None:
     """Sync all Xero datasets for a tenant and transition tenant status.
 
     Choreography (see contacts-first unlock plan for rationale):
 
     1. ``try_acquire_sync`` — atomically claim the tenant; return early if
-       another sync is already in flight and its heartbeat is fresh.
+       another sync is already in flight and its heartbeat is fresh. Callers
+       that already acquired the lock (e.g. the retry-sync API endpoint that
+       needs to return 409 on rejection) can skip this with
+       ``already_acquired=True``.
     2. Contacts phase — once complete, flip ``LOADING → SYNCING`` so the user
        can use the app while the heavy phase runs.
     3. Heavy phase — invoices + credit notes + payments serial.
@@ -487,8 +516,16 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
        ``ReconcileReadyAt`` is already set — that stays ``FREE`` with
        ``LastSyncTime=None`` so reconcile access is not pulled out from under
        the user mid-session.
+
+    Args:
+        only_run_resources: When set, limit execution to the named resources
+            (``contacts``, ``credit_notes``, ``invoices``, ``payments``) and
+            treat the others as "already done" for index+reconcile-ready
+            evaluation. Used by the Retry-sync endpoint to re-run only the
+            failed subset without re-fetching all of Xero. ``None`` (default)
+            runs a full sync as before.
     """
-    if not TenantDataRepository.try_acquire_sync(tenant_id, target_status=operation_type, stale_threshold_ms=_SYNC_STALE_THRESHOLD_MS):
+    if not already_acquired and not TenantDataRepository.try_acquire_sync(tenant_id, target_status=operation_type, stale_threshold_ms=_SYNC_STALE_THRESHOLD_MS):
         logger.warning("Sync already in flight; skipping overlapping start", tenant_id=tenant_id, target_status=str(operation_type))
         return
 
@@ -501,7 +538,12 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
     start_time_ms = int(time.time() * 1000)
     api = get_xero_api_client(oauth_token)
 
-    contacts_ok = sync_contacts_phase(api, tenant_id, modified_since=modified_since)
+    # Contacts phase: run only on a full sync, or when explicitly retried.
+    if _should_skip_for_retry("contacts", only_run_resources, tenant_record):
+        contacts_ok = True
+        logger.info("Retry: skipping contacts phase (already complete or out of scope)", tenant_id=tenant_id)
+    else:
+        contacts_ok = sync_contacts_phase(api, tenant_id, modified_since=modified_since)
 
     if not contacts_ok:
         # Heavy phase is skipped; partial contacts data would mislead the UI.
@@ -510,11 +552,29 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
         return
 
     # Contacts done — unblock the app before starting the heavy phase.
-    if operation_type == TenantStatus.LOADING:
+    # Only fires on a full initial load; retry runs are already past LOADING.
+    if operation_type == TenantStatus.LOADING and only_run_resources is None:
         update_tenant_status(tenant_id, TenantStatus.SYNCING)
 
-    heavy_results = sync_heavy_phase(api, tenant_id, modified_since=modified_since)
-    heavy_ok = all(heavy_results.values())
+    heavy_specs: list[tuple[str, Callable[..., bool]]] = [("credit_notes", sync_credit_notes), ("invoices", sync_invoices), ("payments", sync_payments)]
+    heavy_results: dict[str, bool] = {}
+    for resource, fetcher in heavy_specs:
+        if _should_skip_for_retry(resource, only_run_resources, tenant_record):
+            logger.info("Retry: skipping resource", tenant_id=tenant_id, resource=resource)
+            continue
+        heavy_results[resource] = fetcher(api, tenant_id, modified_since=modified_since)
+
+    specified_ok = all(heavy_results.values()) if heavy_results else True
+
+    # For a retry run we need to evaluate overall completeness across ALL
+    # resources (including ones we skipped because they were already complete).
+    # Re-read the tenant row so we don't rely on a stale snapshot.
+    if only_run_resources is not None:
+        fresh_record = TenantDataRepository.get_item(tenant_id) or {}
+        all_resources_complete = all(_resource_is_complete(fresh_record, r) for r in ("contacts", "credit_notes", "invoices", "payments"))
+        heavy_ok = specified_ok and all_resources_complete
+    else:
+        heavy_ok = specified_ok
 
     if heavy_ok:
         # Per-contact index is a view of the flat files — only safe when every

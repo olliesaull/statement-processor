@@ -474,3 +474,108 @@ class TestPerContactIndexProgress:
 
         index_writes = [w for w in progress_writes if w["resource"] == "per_contact_index"]
         assert "failed" in {w["status"] for w in index_writes}
+
+
+class TestSyncDataRetry:
+    """sync_data(only_run_resources=...) skips completed resources and triggers index rebuild on full success."""
+
+    def _complete_progress(self):
+        return {"status": "complete", "records_fetched": 10, "record_total": 10}
+
+    def test_only_run_resources_skips_resources_not_in_set(self, _sync_scaffold, monkeypatch):
+        """Resources outside the set must not be fetched, even if not yet complete."""
+        heavy_calls: list[str] = []
+
+        def make_recorder(name, ok=True):
+            def fn(api, tenant_id, modified_since=None):  # noqa: ARG001
+                heavy_calls.append(name)
+                return ok
+
+            return fn
+
+        monkeypatch.setattr(sync, "sync_contacts", make_recorder("contacts"))
+        monkeypatch.setattr(sync, "sync_credit_notes", make_recorder("credit_notes"))
+        monkeypatch.setattr(sync, "sync_invoices", make_recorder("invoices"))
+        monkeypatch.setattr(sync, "sync_payments", make_recorder("payments"))
+
+        # Pre-run: invoices failed, everything else already complete. Only invoices
+        # is in the retry set, and the "skip complete" guard means the other
+        # resources are skipped for two reasons (not in set + already complete).
+        pre_run = {
+            "ContactsProgress": self._complete_progress(),
+            "CreditNotesProgress": self._complete_progress(),
+            "InvoicesProgress": {"status": "failed", "records_fetched": 25, "record_total": 100},
+            "PaymentsProgress": self._complete_progress(),
+        }
+        post_run = {**pre_run, "InvoicesProgress": self._complete_progress()}
+        _sync_scaffold["existing_record"] = pre_run
+        # Ensure the final re-read (for all-complete evaluation) sees invoices as complete.
+        records = [pre_run, post_run]
+        _sync_scaffold["repo"].get_item.side_effect = lambda tid: records.pop(0) if len(records) > 1 else records[0]  # noqa: ARG005
+
+        sync.sync_data("tenant-retry", TenantStatus.SYNCING, only_run_resources={"invoices"})
+
+        # Only invoices must have been fetched; contacts and the others are scoped out.
+        assert heavy_calls == ["invoices"]
+
+    def test_only_run_resources_skips_already_complete_resource(self, _sync_scaffold, monkeypatch):
+        """Race safety: a resource listed in only_run but already complete must be skipped."""
+        heavy_calls: list[str] = []
+        monkeypatch.setattr(sync, "sync_invoices", lambda *a, **kw: heavy_calls.append("invoices") or True)
+        monkeypatch.setattr(sync, "sync_credit_notes", lambda *a, **kw: True)
+        monkeypatch.setattr(sync, "sync_payments", lambda *a, **kw: True)
+        monkeypatch.setattr(sync, "sync_contacts", lambda *a, **kw: True)
+
+        _sync_scaffold["existing_record"] = {"InvoicesProgress": self._complete_progress()}
+
+        sync.sync_data("tenant-already", TenantStatus.SYNCING, only_run_resources={"invoices"})
+
+        # invoices was already complete → skipped.
+        assert heavy_calls == []
+
+    def test_retry_full_success_triggers_index_and_mark_reconcile_ready(self, _sync_scaffold):
+        """After the retried resources succeed and all resources are complete, index + reconcile must fire."""
+        _sync_scaffold["existing_record"] = {"ContactsProgress": self._complete_progress(), "CreditNotesProgress": self._complete_progress(), "PaymentsProgress": self._complete_progress()}
+        # Simulate invoices landing as complete after the retry run: the repo re-read
+        # returns the in-progress snapshot above PLUS invoices now marked complete.
+        fresh_record = {**_sync_scaffold["existing_record"], "InvoicesProgress": self._complete_progress()}
+        get_item_calls: list[int] = []
+
+        def _get_item(tid):  # noqa: ARG001
+            get_item_calls.append(len(get_item_calls))
+            return _sync_scaffold["existing_record"] if not get_item_calls[:-1] else fresh_record
+
+        _sync_scaffold["repo"].get_item.side_effect = _get_item
+
+        sync.sync_data("tenant-retry-done", TenantStatus.SYNCING, only_run_resources={"invoices"})
+
+        # Index built, reconcile flipped (no prior ReconcileReadyAt).
+        assert _sync_scaffold["index_calls"] == ["tenant-retry-done"]
+        assert _sync_scaffold["mark_reconcile_calls"] == ["tenant-retry-done"]
+        # Final status FREE.
+        final = _sync_scaffold["status_calls"][-1]
+        assert final["status"] == TenantStatus.FREE
+
+    def test_retry_with_partial_failure_sets_load_incomplete(self, _sync_scaffold, monkeypatch):
+        """If the retried resource still fails, stay in LOAD_INCOMPLETE."""
+        monkeypatch.setattr(sync, "sync_invoices", lambda *a, **kw: False)
+
+        _sync_scaffold["existing_record"] = {
+            "ContactsProgress": self._complete_progress(),
+            "CreditNotesProgress": self._complete_progress(),
+            "PaymentsProgress": self._complete_progress(),
+            # invoices still missing/incomplete in the pre-run snapshot.
+        }
+        _sync_scaffold["repo"].get_item.side_effect = lambda tid: _sync_scaffold["existing_record"]  # noqa: ARG005
+
+        sync.sync_data("tenant-retry-fail", TenantStatus.SYNCING, only_run_resources={"invoices"})
+
+        final = _sync_scaffold["status_calls"][-1]
+        assert final["status"] == TenantStatus.LOAD_INCOMPLETE
+        assert _sync_scaffold["mark_reconcile_calls"] == []
+
+    def test_already_acquired_skips_try_acquire(self, _sync_scaffold):
+        """When the caller holds the lock already, try_acquire_sync must not be invoked."""
+        sync.sync_data("tenant-preheld", TenantStatus.SYNCING, already_acquired=True)
+
+        _sync_scaffold["repo"].try_acquire_sync.assert_not_called()
