@@ -7,6 +7,7 @@ Provides:
     xero_token_required  — validates token expiry; redirects or 401s.
     active_tenant_required — ensures a tenant is selected.
     block_when_loading   — blocks routes while the tenant is loading.
+    reconcile_ready_required — gates routes until the initial sync completes.
     route_handler_logging — structured audit-trail log entry.
 """
 
@@ -15,7 +16,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from flask import Response, current_app, jsonify, make_response, redirect, request, session, url_for
+from flask import Response, current_app, jsonify, make_response, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 from xero_python.accounting import AccountingApi
 from xero_python.api_client import ApiClient  # type: ignore
@@ -24,7 +25,7 @@ from xero_python.api_client.oauth2 import OAuth2Token  # type: ignore
 
 from config import CLIENT_ID, CLIENT_SECRET
 from logger import logger
-from tenant_data_repository import TenantStatus
+from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.tenant_status import get_tenant_status
 
 # region Constants
@@ -385,6 +386,55 @@ def block_when_loading(f: Callable[..., Any]) -> Callable[..., Any]:
                 session["tenant_error"] = "Please wait for the initial load to finish before navigating away."
                 return redirect(url_for("tenants.tenant_management"))
 
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
+def reconcile_ready_required(f: Callable[..., Any]) -> Callable[..., Any]:
+    """Gate a route until the tenant's initial sync has fully reconciled.
+
+    Reads ``ReconcileReadyAt`` from the TenantData row. When the attribute is
+    unset the tenant is still in the post-contacts heavy phase (or has never
+    completed a full sync), so we render ``statement.html`` in the "not ready"
+    branch — which embeds an HTMX poller that hits ``/statement/<id>/wait`` and
+    triggers an ``HX-Redirect`` once the data lands.
+
+    This decorator is deliberately the innermost of the route stack:
+
+        @route("/statement/<statement_id>")
+        @active_tenant_required(...)    # 1. tenant selection
+        @xero_token_required            # 2. OAuth token validity
+        @route_handler_logging          # 3. audit trail entry
+        @block_when_loading             # 4. LOADING / LOAD_INCOMPLETE gate
+        @reconcile_ready_required       # 5. reconcile-data gate (this one)
+        def statement(...): ...
+
+    Ordering matters: the outer decorators guarantee there is a session tenant
+    and a valid token before we touch ``TenantDataRepository``. ``block_when_loading``
+    continues to handle the initial contacts-phase gate, so this decorator only
+    fires while ``TenantStatus=SYNCING`` with no ``ReconcileReadyAt`` yet —
+    narrowly scoped to the heavy-phase window.
+
+    Args:
+        f: Route handler to wrap. Expected to accept ``statement_id`` as a kwarg.
+
+    Returns:
+        Wrapped route handler that short-circuits into the not-ready view
+        whenever reconciliation data is unavailable.
+    """
+
+    @wraps(f)
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
+        tenant_id = session.get("xero_tenant_id")
+        item = TenantDataRepository.get_item(tenant_id) if tenant_id else None
+        reconcile_ready_at = item.get("ReconcileReadyAt") if item else None
+        if reconcile_ready_at is None:
+            statement_id = kwargs.get("statement_id")
+            logger.info("Rendering reconcile-not-ready view", tenant_id=tenant_id, statement_id=statement_id, route=request.path)
+            return render_template(
+                "statement.html", reconcile_not_ready=True, statement_id=statement_id, tenant_id=tenant_id, page_heading=f"Statement {statement_id}" if statement_id else "Statement"
+            )
         return f(*args, **kwargs)
 
     return decorated_function

@@ -14,7 +14,7 @@ from config import S3_BUCKET_NAME
 from logger import logger
 from statement_view_cache import cache_statement_view, get_cached_statement_view, invalidate_statement_view_cache
 from tenant_billing_repository import TenantBillingRepository
-from utils.auth import active_tenant_required, block_when_loading, route_handler_logging, xero_token_required
+from utils.auth import active_tenant_required, block_when_loading, reconcile_ready_required, route_handler_logging, xero_token_required
 from utils.dynamo import (
     delete_statement_data,
     get_completed_statements,
@@ -320,6 +320,7 @@ def _handle_statement_post_actions(*, tenant_id: str, statement_id: str, form: A
 @xero_token_required
 @route_handler_logging
 @block_when_loading
+@reconcile_ready_required
 def statement(statement_id: str):
     """Render the statement detail view, handling actions and exports."""
     tenant_id = session.get("xero_tenant_id")

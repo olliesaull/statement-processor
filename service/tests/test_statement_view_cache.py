@@ -182,13 +182,15 @@ def _app():
 @pytest.fixture()
 def client(_app, monkeypatch):
     """Test client with auth bypass, stubbed data layer, and mocked cache."""
-    from tenant_data_repository import TenantStatus
+    from tenant_data_repository import TenantDataRepository, TenantStatus
 
     monkeypatch.setattr(utils.auth, "has_cookie_consent", lambda: True)
     monkeypatch.setattr(utils.auth, "get_xero_oauth2_token", lambda: {"expires_at": 9_999_999_999.0})
     monkeypatch.setattr(utils.auth, "set_session_is_set_cookie", lambda r: r)
     monkeypatch.setattr(utils.auth, "clear_session_is_set_cookie", lambda r: r)
     monkeypatch.setattr(utils.auth, "get_tenant_status", lambda tenant_id: TenantStatus.FREE)
+    # reconcile_ready_required reads ReconcileReadyAt from TenantDataRepository.get_item.
+    monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: {"TenantID": tid, "ReconcileReadyAt": 1_700_000_000_000}))
 
     # Stub data layer — route handlers now live in routes.statements module.
     monkeypatch.setattr(statements_module, "get_statement_record", lambda *a, **kw: SAMPLE_RECORD)

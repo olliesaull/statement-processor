@@ -27,6 +27,7 @@ from utils.auth import (
     clear_session_is_set_cookie,
     has_cookie_consent,
     raise_for_unauthorized,
+    reconcile_ready_required,
     route_handler_logging,
     set_session_is_set_cookie,
     xero_token_required,
@@ -577,3 +578,87 @@ class TestRouteHandlerLogging:
         with app.test_client() as client:
             resp = client.get("/logged-no-consent")
             assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# reconcile_ready_required decorator
+# ---------------------------------------------------------------------------
+
+
+class TestReconcileReadyRequired:
+    """Decorator gates a route until the tenant's ReconcileReadyAt is set."""
+
+    @staticmethod
+    def _register_gated_route(app):
+        @app.route("/gated/<statement_id>")
+        @reconcile_ready_required
+        def gated(statement_id):
+            return f"allowed-{statement_id}"
+
+        return app
+
+    def test_passes_through_when_reconcile_ready_at_is_set(self, app, monkeypatch):
+        """A tenant that has completed at least one full sync should hit the real handler."""
+        from tenant_data_repository import TenantDataRepository  # pylint: disable=import-outside-toplevel
+
+        self._register_gated_route(app)
+        monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: {"TenantID": tid, "ReconcileReadyAt": 1_700_000_000_000}))
+
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["xero_tenant_id"] = "tenant-abc"
+            resp = client.get("/gated/stmt-1")
+            assert resp.status_code == 200
+            assert b"allowed-stmt-1" in resp.data
+
+    def test_renders_not_ready_view_when_reconcile_ready_at_null(self, app, monkeypatch):
+        """Without ReconcileReadyAt we must render the wait view, not the real handler."""
+        from tenant_data_repository import TenantDataRepository  # pylint: disable=import-outside-toplevel
+
+        self._register_gated_route(app)
+        monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: {"TenantID": tid}))
+
+        captured: dict = {}
+
+        def fake_render(template, **ctx):
+            captured["template"] = template
+            captured["ctx"] = ctx
+            return "NOT-READY-VIEW"
+
+        monkeypatch.setattr(auth_module, "render_template", fake_render)
+
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["xero_tenant_id"] = "tenant-abc"
+            resp = client.get("/gated/stmt-1")
+            assert resp.status_code == 200
+            assert resp.data == b"NOT-READY-VIEW"
+
+        assert captured["template"] == "statement.html"
+        assert captured["ctx"]["reconcile_not_ready"] is True
+        assert captured["ctx"]["statement_id"] == "stmt-1"
+        assert captured["ctx"]["tenant_id"] == "tenant-abc"
+
+    def test_renders_not_ready_view_when_tenant_row_missing(self, app, monkeypatch):
+        """A missing tenant row must be treated as not-yet-reconciled."""
+        from tenant_data_repository import TenantDataRepository  # pylint: disable=import-outside-toplevel
+
+        self._register_gated_route(app)
+        monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: None))
+
+        captured: dict = {}
+
+        def fake_render(template, **ctx):
+            captured["template"] = template
+            captured["ctx"] = ctx
+            return "NOT-READY-VIEW"
+
+        monkeypatch.setattr(auth_module, "render_template", fake_render)
+
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["xero_tenant_id"] = "tenant-abc"
+            resp = client.get("/gated/stmt-missing")
+            assert resp.status_code == 200
+            assert captured["ctx"]["reconcile_not_ready"] is True
+            assert captured["ctx"]["statement_id"] == "stmt-missing"
