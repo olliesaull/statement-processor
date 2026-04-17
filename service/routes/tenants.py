@@ -29,8 +29,6 @@ tenants_bp = Blueprint("tenants", __name__)
 @xero_token_required
 def tenant_management():
     """Render tenant management, consuming one-time messages from session."""
-    from flask import render_template  # pylint: disable=import-outside-toplevel
-
     tenants = session.get("xero_tenants") or []
     current_tenant_id = session.get("xero_tenant_id")
     current_tenant = None
@@ -62,6 +60,17 @@ def tenant_management():
     subscription_state = TenantBillingRepository.get_subscription_state(current_tenant_id) if current_tenant_id else None
     subscription_tier = SUBSCRIPTION_TIERS.get(subscription_state.tier_id) if subscription_state else None
 
+    # Progress views for the sync-progress panel + Sync/Retry button conditional.
+    # Single BatchGetItem keeps this one network call even for large tenant lists.
+    try:
+        tenant_rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
+    except Exception as exc:
+        logger.exception("Failed to load tenant rows for progress panel", tenant_ids=tenant_ids, error=exc)
+        tenant_rows = {}
+    tenant_views = build_progress_view(tenants, tenant_rows)
+    tenant_views_by_id = {view.tenant_id: view for view in tenant_views}
+    polling = should_poll(tenant_views)
+
     logger.info("Rendering tenant_management page", current_tenant_id=current_tenant_id, tenant_ids=tenant_ids, current_tenant_token_balance=ct_token_balance)
 
     return render_template(
@@ -74,6 +83,10 @@ def tenant_management():
         error=error,
         subscription_state=subscription_state,
         subscription_tier=subscription_tier,
+        tenant_views=tenant_views,
+        tenant_views_by_id=tenant_views_by_id,
+        polling=polling,
+        TenantStatus=TenantStatus,
     )
 
 

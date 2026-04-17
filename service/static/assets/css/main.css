@@ -2757,4 +2757,114 @@ a:focus-visible {
   margin: 0;
 }
 
+/* Sync-progress panel on /tenant_management and /statement/<id> wait view.
+   One shared panel polls /tenants/sync-progress every 3s (HTMX trigger); per-
+   tenant rows group resources, and each row carries a state class so the CSS
+   below can paint done/active/pending/failed/indeterminate variants without
+   any JavaScript. */
+.sync-progress-panel {
+  margin-bottom: 1.5rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--slate-200);
+  border-radius: 0.5rem;
+  background: var(--surface, #fff);
+}
+
+.sync-progress-banner {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 0.9rem;
+}
+
+.sync-progress-banner-loading {
+  background: color-mix(in srgb, var(--primary, #3b82f6) 10%, transparent);
+  color: var(--slate-900);
+}
+
+.sync-progress-banner-heavy {
+  background: color-mix(in srgb, var(--info, #0ea5e9) 10%, transparent);
+  color: var(--slate-900);
+}
+
+.sync-progress-banner-failed {
+  background: color-mix(in srgb, var(--danger, #ef4444) 10%, transparent);
+  color: var(--slate-900);
+}
+
+.sync-progress-tenant {
+  margin-top: 0.5rem;
+}
+
+.sync-progress-tenant-name {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  color: var(--slate-900);
+}
+
+.sync-progress-compact {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.sync-progress-compact .sync-progress-row {
+  display: contents;
+}
+
+.sync-progress-compact .sync-progress-label {
+  color: var(--slate-700, #475569);
+}
+
+.sync-progress-compact .sync-progress-value {
+  color: var(--slate-900);
+}
+
+/* Status variants — class applied per .sync-progress-row by the partials. */
+.sync-progress-compact .sync-progress-row.done .sync-progress-value {
+  color: var(--success, #16a34a);
+}
+
+.sync-progress-compact .sync-progress-row.active .sync-progress-value {
+  color: var(--primary, #3b82f6);
+  font-weight: 500;
+}
+
+.sync-progress-compact .sync-progress-row.failed .sync-progress-value {
+  color: var(--danger, #ef4444);
+  font-weight: 500;
+}
+
+.sync-progress-compact .sync-progress-row.pending .sync-progress-value {
+  color: var(--slate-500, #64748b);
+}
+
+/* Indeterminate: pagination totals unknown — render a subtle animated barber
+   stripe in the value cell so the UI reads as "working" without guessing %. */
+@keyframes sync-progress-indeterminate {
+  0% { background-position: 0 0; }
+  100% { background-position: 1rem 0; }
+}
+
+.sync-progress-compact .sync-progress-row.indeterminate .sync-progress-value {
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--primary, #3b82f6) 20%, transparent) 0 0.25rem,
+    transparent 0.25rem 0.5rem
+  );
+  background-size: 1rem 100%;
+  animation: sync-progress-indeterminate 0.75s linear infinite;
+  padding: 0 0.375rem;
+  border-radius: 0.25rem;
+}
+
+/* Statement wait view uses the same compact list inside a centered panel. */
+.sync-progress-wait-panel .sync-progress-compact {
+  margin-top: 0.75rem;
+}
+
 /* endregion */
