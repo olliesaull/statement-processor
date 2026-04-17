@@ -31,12 +31,28 @@ from xero_repository import CONTACT_DOC_TYPES, XeroType, get_contacts_from_xero,
 
 
 def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., Any], resource: XeroType, start_message: str, done_message: str, modified_since: datetime | None = None) -> bool:
-    """Fetch, cache, and upload a single Xero dataset."""
+    """Fetch, cache, and upload a single Xero dataset.
+
+    Writes per-resource sync progress to DynamoDB around the work:
+
+    - ``in_progress`` with ``records_fetched=0, record_total=None`` at start.
+    - ``in_progress`` with live counts after each fetcher page (via callback).
+    - ``complete`` on success, ``failed`` on exception.
+
+    Progress is best-effort telemetry; a write failure is logged but does not
+    fail the sync. Otherwise a DynamoDB blip during a 60-minute sync could
+    leave a user permanently stuck on the not-ready page.
+    """
     if not tenant_id:
         logger.error("Missing TenantID")
         return False
 
     logger.info(start_message, tenant_id=tenant_id)
+
+    # Initial in_progress write so the UI renders a zeroed bar before the
+    # first Xero page lands (Xero calls can take 10+ seconds each).
+    last_counts: dict[str, int | None] = {"records_fetched": 0, "record_total": None}
+    _safe_update_progress(tenant_id, resource, "in_progress", records_fetched=0, record_total=None)
 
     resource_filename = f"{resource}.json"
 
@@ -45,8 +61,15 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., An
         local_path = os.path.join(local_dir, resource_filename)
         s3_key = f"{tenant_id}/data/{resource_filename}"
 
-        # Fetch the latest dataset from Xero.
-        data = fetcher(tenant_id, api=api, modified_since=modified_since)
+        def _on_page(records_fetched: int, record_total: int | None) -> None:
+            last_counts["records_fetched"] = records_fetched
+            last_counts["record_total"] = record_total
+            _safe_update_progress(tenant_id, resource, "in_progress", records_fetched=records_fetched, record_total=record_total)
+
+        # Fetch the latest dataset from Xero. Fetchers added progress_callback
+        # support in Step 3; legacy tests without that kwarg still work because
+        # it's optional on every fetcher.
+        data = fetcher(tenant_id, api=api, modified_since=modified_since, progress_callback=_on_page)
 
         existing_payload = None
         if os.path.exists(local_path):
@@ -71,11 +94,30 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., An
 
         record_count = len(payload) if isinstance(payload, (list, dict)) else None
         logger.info(done_message, tenant_id=tenant_id, records=record_count)
+
+        # Record counts on the final write: prefer the actual payload size
+        # because that's the authoritative post-merge total.
+        final_records_fetched = record_count if record_count is not None else last_counts["records_fetched"]
+        _safe_update_progress(tenant_id, resource, "complete", records_fetched=final_records_fetched, record_total=last_counts["record_total"])
         return True
 
     except Exception:
         logger.exception("Unexpected error syncing resource", tenant_id=tenant_id, resource=resource_filename)
+        _safe_update_progress(tenant_id, resource, "failed", records_fetched=last_counts["records_fetched"], record_total=last_counts["record_total"])
         return False
+
+
+def _safe_update_progress(tenant_id: str, resource: str, status: str, records_fetched: int | None = None, record_total: int | None = None) -> None:
+    """Write per-resource progress without letting DDB blips fail the sync.
+
+    Progress writes are telemetry, not a contract — a failed write at most
+    leaves the UI showing stale counts until the next heartbeat. Blocking the
+    sync on a DynamoDB timeout would be a much worse UX.
+    """
+    try:
+        TenantDataRepository.update_resource_progress(tenant_id, resource, status, records_fetched=records_fetched, record_total=record_total)
+    except Exception:
+        logger.exception("Failed to write sync progress", tenant_id=tenant_id, resource=resource, status=status)
 
 
 def _resolve_modified_since(record: dict[str, Any] | None) -> datetime | None:  # pylint: disable=too-many-return-statements
@@ -478,10 +520,13 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
         # Per-contact index is a view of the flat files — only safe when every
         # source file is current. Partial data would surface as missing rows
         # on the statement detail page.
+        _safe_update_progress(tenant_id, "per_contact_index", "in_progress")
         try:
             build_per_contact_index(tenant_id)
+            _safe_update_progress(tenant_id, "per_contact_index", "complete")
         except Exception:
             logger.exception("Failed to build per-contact index", tenant_id=tenant_id)
+            _safe_update_progress(tenant_id, "per_contact_index", "failed")
             heavy_ok = False
 
     # Bump the tenant cache generation so any Redis-cached statement views

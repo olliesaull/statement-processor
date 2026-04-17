@@ -351,3 +351,126 @@ class TestSyncDataOrchestration:
         assert _sync_scaffold["status_calls"] == []
         assert _sync_scaffold["index_calls"] == []
         assert _sync_scaffold["mark_reconcile_calls"] == []
+
+
+@pytest.fixture()
+def _progress_scaffold(monkeypatch, tmp_path):
+    """Scaffold for testing per-resource progress writes through _sync_resource.
+
+    Captures update_resource_progress calls so tests can assert on the
+    sequence of status + counts writes per resource.
+    """
+    progress_writes: list[dict] = []
+
+    class FakeRepo:
+        @staticmethod
+        def update_resource_progress(tenant_id, resource, status, records_fetched=None, record_total=None):
+            progress_writes.append({"tenant_id": tenant_id, "resource": resource, "status": status, "records_fetched": records_fetched, "record_total": record_total})
+
+    monkeypatch.setattr(sync, "TenantDataRepository", FakeRepo)
+
+    # Avoid S3 + filesystem side effects.
+    monkeypatch.setattr(sync, "LOCAL_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sync, "s3_client", MagicMock())
+    monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
+
+    return progress_writes
+
+
+class TestPerResourceProgressWrites:
+    """_sync_resource emits in_progress/complete/failed through update_resource_progress."""
+
+    def test_success_path_writes_in_progress_then_complete(self, _progress_scaffold):
+        """A successful page fetch fires in_progress with counts, then complete."""
+
+        def fetcher(tenant_id, api=None, modified_since=None, progress_callback=None):  # noqa: ARG001
+            # Simulate two pages.
+            if progress_callback is not None:
+                progress_callback(50, 100)
+                progress_callback(100, 100)
+            return [{"id": i} for i in range(100)]
+
+        result = sync._sync_resource(MagicMock(), "tenant-ok", fetcher, sync.XeroType.INVOICES, "start", "done")
+
+        assert result is True
+        statuses = [w["status"] for w in _progress_scaffold]
+        # Initial in_progress(0, None), two from callback, then complete.
+        assert statuses[0] == "in_progress"
+        assert _progress_scaffold[0]["records_fetched"] == 0
+        assert _progress_scaffold[0]["record_total"] is None
+        assert statuses[-1] == "complete"
+
+        # At least the two callback-driven in_progress writes happened.
+        in_progress_count = sum(1 for w in _progress_scaffold if w["status"] == "in_progress")
+        assert in_progress_count >= 3  # initial + 2 pages
+
+        # Final complete carries the accumulator + total.
+        final = _progress_scaffold[-1]
+        assert final["status"] == "complete"
+        assert final["records_fetched"] == 100
+        assert final["record_total"] == 100
+
+    def test_failure_path_writes_in_progress_then_failed(self, _progress_scaffold):
+        """When the fetcher raises, progress is marked failed (not complete)."""
+
+        def fetcher(tenant_id, api=None, modified_since=None, progress_callback=None):  # noqa: ARG001
+            raise RuntimeError("Xero 500")
+
+        result = sync._sync_resource(MagicMock(), "tenant-boom", fetcher, sync.XeroType.PAYMENTS, "start", "done")
+
+        assert result is False
+        statuses = [w["status"] for w in _progress_scaffold]
+        assert statuses[0] == "in_progress"
+        assert statuses[-1] == "failed"
+        assert _progress_scaffold[-1]["resource"] == sync.XeroType.PAYMENTS
+
+    def test_record_total_none_preserved_through_callback(self, _progress_scaffold):
+        """If pagination is absent, record_total=None must propagate (indeterminate)."""
+
+        def fetcher(tenant_id, api=None, modified_since=None, progress_callback=None):  # noqa: ARG001
+            if progress_callback is not None:
+                progress_callback(5, None)
+            return [{"id": 0}]
+
+        sync._sync_resource(MagicMock(), "tenant-indeterminate", fetcher, sync.XeroType.CONTACTS, "start", "done")
+
+        page_writes = [w for w in _progress_scaffold if w["status"] == "in_progress" and w["records_fetched"] == 5]
+        assert page_writes, "Expected in_progress write with records_fetched=5"
+        assert page_writes[0]["record_total"] is None
+
+
+class TestPerContactIndexProgress:
+    """build_per_contact_index is wrapped with PerContactIndexProgress writes."""
+
+    def test_index_build_writes_in_progress_and_complete(self, _sync_scaffold, monkeypatch):
+        progress_writes: list[dict] = []
+
+        fake_repo = _sync_scaffold["repo"]
+
+        def _record_progress(tenant_id, resource, status, records_fetched=None, record_total=None):
+            progress_writes.append({"tenant_id": tenant_id, "resource": resource, "status": status})
+
+        fake_repo.update_resource_progress = _record_progress
+
+        sync.sync_data("tenant-pci-ok", TenantStatus.LOADING)
+
+        index_writes = [w for w in progress_writes if w["resource"] == "per_contact_index"]
+        assert [w["status"] for w in index_writes] == ["in_progress", "complete"]
+
+    def test_index_build_writes_failed_when_exception_raised(self, _sync_scaffold, monkeypatch):
+        progress_writes: list[dict] = []
+
+        fake_repo = _sync_scaffold["repo"]
+        fake_repo.update_resource_progress = lambda tenant_id, resource, status, records_fetched=None, record_total=None: progress_writes.append(
+            {"tenant_id": tenant_id, "resource": resource, "status": status}
+        )
+
+        def boom(tenant_id):  # noqa: ARG001
+            raise RuntimeError("index crash")
+
+        monkeypatch.setattr(sync, "build_per_contact_index", boom)
+
+        sync.sync_data("tenant-pci-fail", TenantStatus.LOADING)
+
+        index_writes = [w for w in progress_writes if w["resource"] == "per_contact_index"]
+        assert "failed" in {w["status"] for w in index_writes}
