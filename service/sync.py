@@ -515,8 +515,16 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
 
     if not contacts_ok:
         # Heavy phase is skipped; partial contacts data would mislead the UI.
-        update_tenant_status(tenant_id, TenantStatus.LOAD_INCOMPLETE)
-        logger.warning("Contacts phase failed; sync aborted", tenant_id=tenant_id)
+        # A manual sync on an already reconcile-ready tenant must not downgrade
+        # them to LOAD_INCOMPLETE on a transient failure — that yanks the
+        # reconcile gate shut on a user who was able to use the app before the
+        # retry. Mirror the heavy-phase-failure rule: stay FREE with null
+        # last_sync_time so telemetry flags the unclean sync.
+        if operation_type == TenantStatus.SYNCING and reconcile_ready_before:
+            update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=None)
+        else:
+            update_tenant_status(tenant_id, TenantStatus.LOAD_INCOMPLETE)
+        logger.warning("Contacts phase failed; sync aborted", tenant_id=tenant_id, reconcile_ready_before=reconcile_ready_before)
         return
 
     # Contacts done — unblock the app before starting the heavy phase.

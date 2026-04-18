@@ -22,7 +22,10 @@ from utils.sync_progress import render_sync_progress_fragment
 api_bp = Blueprint("api", __name__)
 
 _RETRYABLE_STATUSES: frozenset[str] = frozenset({ProgressStatus.PENDING, ProgressStatus.FAILED})
-_RETRY_RESOURCES: tuple[str, ...] = ("contacts", "credit_notes", "invoices", "payments")
+# Includes ``per_contact_index`` so a tenant whose 4 fetchers all succeeded but
+# whose index build failed isn't silently stuck — retry-sync with
+# ``{"per_contact_index"}`` routes through sync_data's index-rebuild branch.
+_RETRY_RESOURCES: tuple[str, ...] = ("contacts", "credit_notes", "invoices", "payments", "per_contact_index")
 
 
 def _is_htmx_request() -> bool:
@@ -173,6 +176,13 @@ def retry_tenant_sync(tenant_id: str):
         logger.info("Retry sync triggered", tenant_id=tenant_id, resources=sorted(resources_to_retry))
     except Exception as exc:
         logger.exception("Failed to submit retry sync", tenant_id=tenant_id, error=exc)
+        # Release the lock we just acquired — without this the tenant would
+        # stay "SYNCING with fresh heartbeat" until the stale-threshold window
+        # elapses, blocking legitimate retries for 5 minutes.
+        try:
+            TenantDataRepository.release_sync_lock(tenant_id, fallback_status=TenantStatus.LOAD_INCOMPLETE)
+        except Exception:
+            logger.exception("Failed to release sync lock after submission failure", tenant_id=tenant_id)
         if _is_htmx_request():
             return _render_sync_progress_fragment(), 500
         return jsonify({"error": "Failed to trigger retry"}), 500

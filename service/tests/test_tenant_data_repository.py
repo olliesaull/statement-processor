@@ -515,3 +515,20 @@ class TestTryAcquireSync:
         result = TenantDataRepository.try_acquire_sync("tenant-busy", target_status=TenantStatus.LOADING, stale_threshold_ms=duration_ms)
 
         assert result is False
+
+
+class TestReleaseSyncLock:
+    """release_sync_lock must clear the heartbeat and reset TenantStatus."""
+
+    def test_clears_heartbeat_and_sets_fallback_status(self, monkeypatch):
+        calls = _fake_table_capturing_calls(monkeypatch)
+
+        TenantDataRepository.release_sync_lock("tenant-rollback", fallback_status=TenantStatus.LOAD_INCOMPLETE)
+
+        assert len(calls) == 1
+        expr = calls[0]["UpdateExpression"]
+        # Must SET TenantStatus and REMOVE LastHeartbeatAt so stale-threshold
+        # logic treats the slot as immediately available for retry.
+        assert "SET TenantStatus" in expr
+        assert "REMOVE LastHeartbeatAt" in expr
+        assert calls[0]["ExpressionAttributeValues"][":status"] == TenantStatus.LOAD_INCOMPLETE.value

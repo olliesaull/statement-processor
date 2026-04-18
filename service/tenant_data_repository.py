@@ -413,3 +413,21 @@ class TenantDataRepository:
                 return False
             raise
         return True
+
+    @classmethod
+    def release_sync_lock(cls, tenant_id: str, fallback_status: TenantStatus) -> None:
+        """Release a sync lock previously claimed via ``try_acquire_sync``.
+
+        Clears ``LastHeartbeatAt`` and sets ``TenantStatus`` to
+        ``fallback_status``. Intended for callers that acquired the lock
+        synchronously (e.g. the retry-sync endpoint) but failed to hand off to
+        the background worker — without this, the tenant would stay "locked in
+        flight" until ``SYNC_STALE_THRESHOLD_MS`` elapsed, blocking legitimate
+        retries for 5 minutes.
+
+        Args:
+            tenant_id: Tenant whose lock to release.
+            fallback_status: Status to set. Use ``LOAD_INCOMPLETE`` when the
+                lock was acquired to drive a retry and the retry never ran.
+        """
+        cls._table.update_item(Key={"TenantID": tenant_id}, UpdateExpression="SET TenantStatus = :status REMOVE LastHeartbeatAt", ExpressionAttributeValues={":status": fallback_status.value})

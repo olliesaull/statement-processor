@@ -94,6 +94,9 @@ class TestRetrySyncHappyPath:
         from tenant_data_repository import TenantDataRepository
 
         c, executor_stub = client
+        # Invoices failed during the heavy phase; the index never got a chance
+        # to run, so its progress map is pending — both must surface as
+        # retryable resources.
         monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: _row_with_failed_invoices()))
         monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, tid, target_status, stale_threshold_ms: True))
 
@@ -102,13 +105,13 @@ class TestRetrySyncHappyPath:
         assert response.status_code == 202
         payload = response.get_json()
         assert payload["started"] is True
-        assert payload["resources"] == ["invoices"]
+        assert payload["resources"] == ["invoices", "per_contact_index"]
 
         # sync_data must receive the retry subset + already_acquired flag.
         assert len(executor_stub.submitted) == 1
         args, kwargs = executor_stub.submitted[0]
         assert args[0] == TENANT_ID
-        assert kwargs.get("only_run_resources") == {"invoices"}
+        assert kwargs.get("only_run_resources") == {"invoices", "per_contact_index"}
         assert kwargs.get("already_acquired") is True
 
 
@@ -185,6 +188,65 @@ class TestRetrySyncHtmxResponse:
 
         assert response.status_code == 409
         assert 'id="sync-progress-panel"' in response.data.decode()
+
+    def test_index_only_failure_can_be_retried(self, client, monkeypatch):
+        """A tenant whose 4 fetchers all succeeded but whose index build failed must be retryable.
+
+        Regression for Codex finding: ``_RETRY_RESOURCES`` originally excluded
+        ``per_contact_index``, so an index-only failure returned 409 "Nothing
+        to retry" and trapped the tenant in LOAD_INCOMPLETE.
+        """
+        from tenant_data_repository import TenantDataRepository
+
+        c, executor_stub = client
+        index_failed_row = {
+            "TenantID": TENANT_ID,
+            "TenantStatus": "LOAD_INCOMPLETE",
+            "ContactsProgress": COMPLETE,
+            "CreditNotesProgress": COMPLETE,
+            "InvoicesProgress": COMPLETE,
+            "PaymentsProgress": COMPLETE,
+            "PerContactIndexProgress": {"status": "failed"},
+        }
+        monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: index_failed_row))
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, tid, target_status, stale_threshold_ms: True))
+
+        response = c.post(f"/api/tenants/{TENANT_ID}/retry-sync")
+
+        assert response.status_code == 202
+        payload = response.get_json()
+        assert payload["resources"] == ["per_contact_index"]
+        # Background sync must be invoked with per_contact_index in only_run_resources.
+        _, kwargs = executor_stub.submitted[0]
+        assert kwargs["only_run_resources"] == {"per_contact_index"}
+
+    def test_releases_lock_when_executor_submit_fails(self, client, monkeypatch):
+        """A failed executor.submit must roll back the acquired sync lock.
+
+        Regression for Codex finding: without this, the tenant stays
+        "SYNCING with fresh heartbeat" until the 5-minute stale window
+        elapses, blocking legitimate retries.
+        """
+        from tenant_data_repository import TenantDataRepository
+
+        c, _ = client
+        released: list[tuple[str, object]] = []
+
+        monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: _row_with_failed_invoices()))
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, tid, target_status, stale_threshold_ms: True))
+        monkeypatch.setattr(TenantDataRepository, "release_sync_lock", classmethod(lambda cls, tid, fallback_status: released.append((tid, fallback_status))))
+
+        def _boom(*args, **kwargs):  # noqa: ARG001
+            raise RuntimeError("executor down")
+
+        # Drop in a failing executor so submit raises synchronously.
+        api_module.executor.submit = _boom
+
+        response = c.post(f"/api/tenants/{TENANT_ID}/retry-sync")
+
+        assert response.status_code == 500
+        # The lock must have been rolled back to LOAD_INCOMPLETE.
+        assert released == [(TENANT_ID, api_module.TenantStatus.LOAD_INCOMPLETE)]
 
     def test_main_js_retains_htmx_response_error_toast_handler(self):
         """The 409 fragment body is only surfaced via the client-side htmx:responseError handler.

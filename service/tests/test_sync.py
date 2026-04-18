@@ -359,6 +359,25 @@ class TestSyncDataOrchestration:
         assert _sync_scaffold["mark_reconcile_calls"] == []
         assert _sync_scaffold["index_calls"] == []
 
+    def test_manual_syncing_contacts_failure_preserves_reconcile_ready_tenant(self, _sync_scaffold):
+        """Transient contacts failure during manual sync must not downgrade a reconcile-ready tenant.
+
+        A user who can reconcile today must still be able to reconcile tomorrow
+        if their manual sync hit a Xero blip on contacts — the LOAD_INCOMPLETE
+        transition would yank the reconcile gate shut mid-session. Mirror the
+        heavy-phase rule: FREE with null ``last_sync_time``.
+        """
+        _sync_scaffold["existing_record"] = {"ReconcileReadyAt": 1700000000000}
+        _sync_scaffold["contacts_ok"] = False
+
+        sync.sync_data("tenant-manual-contacts-fail", TenantStatus.SYNCING)
+
+        final_call = _sync_scaffold["status_calls"][-1]
+        assert final_call["status"] == TenantStatus.FREE
+        assert final_call["last_sync_time"] is None
+        assert _sync_scaffold["mark_reconcile_calls"] == []
+        assert _sync_scaffold["index_calls"] == []
+
     def test_try_acquire_rejects_second_concurrent_call(self, _sync_scaffold):
         """On False from try_acquire_sync, sync_data logs and returns early."""
         _sync_scaffold["try_acquire_results"] = [False]
@@ -602,6 +621,39 @@ class TestSyncDataRetry:
         # Final status FREE.
         final = _sync_scaffold["status_calls"][-1]
         assert final["status"] == TenantStatus.FREE
+
+    def test_retry_rebuilds_per_contact_index_when_only_index_was_failed(self, _sync_scaffold, monkeypatch):
+        """Retry with only_run_resources={'per_contact_index'} routes through the index-rebuild branch.
+
+        Regression for the Codex-flagged bug: a tenant whose 4 fetchers all
+        succeeded but whose index build failed could not be recovered —
+        ``_RETRY_RESOURCES`` now includes ``per_contact_index`` so the retry
+        endpoint can drive a pure index rebuild. Every heavy fetcher must be
+        skipped; only the index build runs.
+        """
+        heavy_calls: list[str] = []
+        monkeypatch.setattr(sync, "sync_contacts", lambda *a, **kw: heavy_calls.append("contacts") or True)
+        monkeypatch.setattr(sync, "sync_credit_notes", lambda *a, **kw: heavy_calls.append("credit_notes") or True)
+        monkeypatch.setattr(sync, "sync_invoices", lambda *a, **kw: heavy_calls.append("invoices") or True)
+        monkeypatch.setattr(sync, "sync_payments", lambda *a, **kw: heavy_calls.append("payments") or True)
+
+        _sync_scaffold["existing_record"] = {
+            "ContactsProgress": self._complete_progress(),
+            "CreditNotesProgress": self._complete_progress(),
+            "InvoicesProgress": self._complete_progress(),
+            "PaymentsProgress": self._complete_progress(),
+            "PerContactIndexProgress": {"status": "failed"},
+        }
+
+        sync.sync_data("tenant-index-retry", TenantStatus.SYNCING, only_run_resources={"per_contact_index"})
+
+        # No fetcher may re-run.
+        assert heavy_calls == []
+        # Index rebuild + reconcile-ready flip + final FREE.
+        assert _sync_scaffold["index_calls"] == ["tenant-index-retry"]
+        assert _sync_scaffold["mark_reconcile_calls"] == ["tenant-index-retry"]
+        final_call = _sync_scaffold["status_calls"][-1]
+        assert final_call["status"] == TenantStatus.FREE
 
     def test_retry_with_partial_failure_sets_load_incomplete(self, _sync_scaffold, monkeypatch):
         """If the retried resource still fails, stay in LOAD_INCOMPLETE."""
