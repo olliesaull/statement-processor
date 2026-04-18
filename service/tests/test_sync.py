@@ -341,6 +341,24 @@ class TestSyncDataOrchestration:
         # Reconcile gate untouched.
         assert _sync_scaffold["mark_reconcile_calls"] == []
 
+    def test_syncing_partial_failure_without_prior_reconcile_ready_sets_load_incomplete(self, _sync_scaffold):
+        """First-time sync (SYNCING) that fails mid-flight must land at LOAD_INCOMPLETE.
+
+        This is the primary recovery path that the retry-sync endpoint exists
+        to serve: ReconcileReadyAt has never been written, so a partial failure
+        must surface the Retry-sync affordance rather than quietly returning
+        the user to FREE.
+        """
+        _sync_scaffold["existing_record"] = None  # no prior ReconcileReadyAt
+        _sync_scaffold["invoices_ok"] = False
+
+        sync.sync_data("tenant-first-fail", TenantStatus.SYNCING)
+
+        final_call = _sync_scaffold["status_calls"][-1]
+        assert final_call["status"] == TenantStatus.LOAD_INCOMPLETE
+        assert _sync_scaffold["mark_reconcile_calls"] == []
+        assert _sync_scaffold["index_calls"] == []
+
     def test_try_acquire_rejects_second_concurrent_call(self, _sync_scaffold):
         """On False from try_acquire_sync, sync_data logs and returns early."""
         _sync_scaffold["try_acquire_results"] = [False]
@@ -437,6 +455,35 @@ class TestPerResourceProgressWrites:
         page_writes = [w for w in _progress_scaffold if w["status"] == "in_progress" and w["records_fetched"] == 5]
         assert page_writes, "Expected in_progress write with records_fetched=5"
         assert page_writes[0]["record_total"] is None
+
+    def test_progress_write_failure_is_swallowed_and_logged(self, monkeypatch, tmp_path):
+        """A DDB blip writing progress must NOT abort the sync (telemetry, not contract)."""
+        from botocore.exceptions import ClientError
+
+        # Filesystem + S3 no-ops, same as _progress_scaffold.
+        monkeypatch.setattr(sync, "LOCAL_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(sync, "s3_client", MagicMock())
+        monkeypatch.setattr(sync, "S3_BUCKET_NAME", "test-bucket")
+
+        class _FailingRepo:
+            @staticmethod
+            def update_resource_progress(*args, **kwargs):  # noqa: ARG004
+                raise ClientError({"Error": {"Code": "InternalServerError", "Message": "ddb blip"}}, "UpdateItem")
+
+        monkeypatch.setattr(sync, "TenantDataRepository", _FailingRepo)
+
+        exceptions_logged: list[str] = []
+        monkeypatch.setattr(sync.logger, "exception", lambda msg, **_: exceptions_logged.append(msg))
+
+        def fetcher(tenant_id, api=None, modified_since=None, progress_callback=None):  # noqa: ARG001
+            return [{"id": 1}]
+
+        # Should complete despite every update_resource_progress raising.
+        result = sync._sync_resource(MagicMock(), "tenant-blip", fetcher, sync.XeroType.INVOICES, "start", "done")
+
+        assert result is True
+        # At least one progress-write failure must have been logged for telemetry.
+        assert any("Failed to write sync progress" in msg for msg in exceptions_logged)
 
 
 class TestPerContactIndexProgress:

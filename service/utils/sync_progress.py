@@ -14,9 +14,12 @@ and the single-tenant ``/statement/<id>/wait`` endpoint (plus the
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
-from tenant_data_repository import TenantStatus
+from flask import render_template
+
+from tenant_data_repository import ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
 
 # Display order matches the sync order in ``sync.py`` — users see fetchers finish
 # in the same sequence the backend runs them.
@@ -24,9 +27,7 @@ RESOURCE_ORDER: tuple[str, ...] = ("contacts", "credit_notes", "invoices", "paym
 
 _RESOURCE_DISPLAY_NAMES: dict[str, str] = {"contacts": "Contacts", "credit_notes": "Credit notes", "invoices": "Invoices", "payments": "Payments"}
 
-_RESOURCE_ATTRIBUTES: dict[str, str] = {"contacts": "ContactsProgress", "credit_notes": "CreditNotesProgress", "invoices": "InvoicesProgress", "payments": "PaymentsProgress"}
-
-_PER_CONTACT_INDEX_ATTR = "PerContactIndexProgress"
+_PER_CONTACT_INDEX_RESOURCE = "per_contact_index"
 
 
 @dataclass(frozen=True)
@@ -47,23 +48,32 @@ class ResourceProgress:
 
     @property
     def indeterminate(self) -> bool:
-        return self.record_total is None and self.status == "in_progress"
+        """True when a fetcher is running but Xero didn't return a total.
+
+        Drives the striped progress bar in the partials; see plan Step 3 for
+        why ``record_total=None`` is preserved rather than coerced to 0.
+        """
+        return self.record_total is None and self.status == ProgressStatus.IN_PROGRESS
 
     @property
     def is_complete(self) -> bool:
-        return self.status == "complete"
+        """True when the fetcher finished successfully."""
+        return self.status == ProgressStatus.COMPLETE
 
     @property
     def is_failed(self) -> bool:
-        return self.status == "failed"
+        """True when the fetcher raised — retry-sync picks this up."""
+        return self.status == ProgressStatus.FAILED
 
     @property
     def is_active(self) -> bool:
-        return self.status == "in_progress"
+        """True while the fetcher is running (``in_progress``)."""
+        return self.status == ProgressStatus.IN_PROGRESS
 
     @property
     def is_pending(self) -> bool:
-        return self.status == "pending"
+        """True before the fetcher has started (``pending``)."""
+        return self.status == ProgressStatus.PENDING
 
 
 @dataclass(frozen=True)
@@ -75,15 +85,22 @@ class TenantProgressView:
     status: TenantStatus
     reconcile_ready: bool
     resources: list[ResourceProgress] = field(default_factory=list)
-    per_contact_index_status: str = "pending"
+    per_contact_index_status: str = ProgressStatus.PENDING
 
     @property
     def has_failure(self) -> bool:
-        return any(r.is_failed for r in self.resources) or self.per_contact_index_status == "failed"
+        """True when any resource or the per-contact index is in ``failed`` state."""
+        return any(r.is_failed for r in self.resources) or self.per_contact_index_status == ProgressStatus.FAILED
 
     @property
     def all_complete(self) -> bool:
-        return self.reconcile_ready and self.per_contact_index_status == "complete" and all(r.is_complete for r in self.resources)
+        """True when reconcile is ready and every sub-component has completed.
+
+        Used by the poll partial to decide whether to omit ``hx-trigger`` and
+        stop polling — a reconcile-ready tenant with a failed sub-component
+        still polls in case the user manages to drive a retry.
+        """
+        return self.reconcile_ready and self.per_contact_index_status == ProgressStatus.COMPLETE and all(r.is_complete for r in self.resources)
 
     @property
     def in_heavy_phase(self) -> bool:
@@ -109,19 +126,28 @@ def _parse_tenant_status(raw: Any) -> TenantStatus:
 
 
 def _resource_from_item(item: dict[str, Any], resource: str) -> ResourceProgress:
-    raw = item.get(_RESOURCE_ATTRIBUTES[resource]) or {}
-    status = str(raw.get("status") or "pending")
+    """Build a render-ready ``ResourceProgress`` from the raw DDB tenant item.
+
+    DynamoDB returns numeric attributes as ``Decimal``; those are normalised to
+    plain ``int`` here so the template can compare percentages with ``<`` and
+    ``>``. A missing or partial sub-map resolves to a ``pending`` row with null
+    counts — the same shape the UI renders before a sync has ever run.
+    """
+    raw = item.get(_progress_attribute_name(resource)) or {}
+    status = str(raw.get("status") or ProgressStatus.PENDING)
     records_fetched = raw.get("records_fetched")
     record_total = raw.get("record_total")
 
-    # Normalise ints; DynamoDB can store them as Decimal when read back.
-    records_fetched = int(records_fetched) if isinstance(records_fetched, (int, float)) else None
-    record_total = int(record_total) if isinstance(record_total, (int, float)) else None
+    # Normalise to int: DynamoDB stores numeric attributes as Decimal, which is
+    # not a subclass of int/float, so the bare (int, float) tuple used to miss
+    # every DDB-read value.
+    records_fetched = int(records_fetched) if isinstance(records_fetched, (int, float, Decimal)) else None
+    record_total = int(record_total) if isinstance(record_total, (int, float, Decimal)) else None
 
     percent: int | None = None
     if records_fetched is not None and record_total is not None and record_total > 0:
         percent = max(0, min(100, int(records_fetched / record_total * 100)))
-    elif status == "complete":
+    elif status == ProgressStatus.COMPLETE:
         # "complete" with unknown totals still reads as 100% visually.
         percent = 100
 
@@ -132,8 +158,8 @@ def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str,
     """Compose a progress view for one tenant."""
     item = item or {}
     resources = [_resource_from_item(item, r) for r in RESOURCE_ORDER]
-    per_index_raw = item.get(_PER_CONTACT_INDEX_ATTR)
-    per_index_status = str(per_index_raw.get("status") or "pending") if isinstance(per_index_raw, dict) else "pending"
+    per_index_raw = item.get(_progress_attribute_name(_PER_CONTACT_INDEX_RESOURCE))
+    per_index_status = str(per_index_raw.get("status") or ProgressStatus.PENDING) if isinstance(per_index_raw, dict) else ProgressStatus.PENDING
 
     return TenantProgressView(
         tenant_id=tenant_id,
@@ -173,3 +199,18 @@ def should_poll(views: list[TenantProgressView]) -> bool:
     if not views:
         return False
     return any(not view.all_complete for view in views)
+
+
+def render_sync_progress_fragment(session_tenants: list[Any]) -> str:
+    """Render the multi-tenant sync-progress fragment for the given session tenants.
+
+    One DynamoDB ``BatchGetItem`` per render; returns the pre-rendered HTML
+    string. Centralised so both the HTMX poll endpoint (``tenants.sync_progress``)
+    and the post-trigger return path in the API blueprint (``api.sync``,
+    ``api.retry-sync``) swap the exact same fragment shape into the panel.
+    """
+    tenant_ids = [t.get("tenantId") for t in session_tenants if isinstance(t, dict) and t.get("tenantId")]
+    rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
+    tenant_views = build_progress_view(session_tenants, rows)
+    polling = should_poll(tenant_views)
+    return render_template("partials/sync_progress_panel.html", tenant_views=tenant_views, polling=polling, TenantStatus=TenantStatus)

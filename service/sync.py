@@ -25,7 +25,7 @@ from billing_service import LAST_MUTATION_SOURCE_WELCOME_GRANT, WELCOME_GRANT_TO
 from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, s3_client, tenant_data_table
 from logger import logger
 from statement_view_cache import bump_tenant_generation
-from tenant_data_repository import TenantDataRepository, TenantStatus
+from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
 from utils.auth import get_xero_api_client
 from xero_repository import CONTACT_DOC_TYPES, XeroType, get_contacts_from_xero, get_credit_notes, get_invoices, get_payments
 
@@ -52,7 +52,7 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., An
     # Initial in_progress write so the UI renders a zeroed bar before the
     # first Xero page lands (Xero calls can take 10+ seconds each).
     last_counts: dict[str, int | None] = {"records_fetched": 0, "record_total": None}
-    _safe_update_progress(tenant_id, resource, "in_progress", records_fetched=0, record_total=None)
+    _safe_update_progress(tenant_id, resource, ProgressStatus.IN_PROGRESS, records_fetched=0, record_total=None)
 
     resource_filename = f"{resource}.json"
 
@@ -64,7 +64,7 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., An
         def _on_page(records_fetched: int, record_total: int | None) -> None:
             last_counts["records_fetched"] = records_fetched
             last_counts["record_total"] = record_total
-            _safe_update_progress(tenant_id, resource, "in_progress", records_fetched=records_fetched, record_total=record_total)
+            _safe_update_progress(tenant_id, resource, ProgressStatus.IN_PROGRESS, records_fetched=records_fetched, record_total=record_total)
 
         # Fetch the latest dataset from Xero. Fetchers added progress_callback
         # support in Step 3; legacy tests without that kwarg still work because
@@ -98,12 +98,12 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., An
         # Record counts on the final write: prefer the actual payload size
         # because that's the authoritative post-merge total.
         final_records_fetched = record_count if record_count is not None else last_counts["records_fetched"]
-        _safe_update_progress(tenant_id, resource, "complete", records_fetched=final_records_fetched, record_total=last_counts["record_total"])
+        _safe_update_progress(tenant_id, resource, ProgressStatus.COMPLETE, records_fetched=final_records_fetched, record_total=last_counts["record_total"])
         return True
 
     except Exception:
         logger.exception("Unexpected error syncing resource", tenant_id=tenant_id, resource=resource_filename)
-        _safe_update_progress(tenant_id, resource, "failed", records_fetched=last_counts["records_fetched"], record_total=last_counts["record_total"])
+        _safe_update_progress(tenant_id, resource, ProgressStatus.FAILED, records_fetched=last_counts["records_fetched"], record_total=last_counts["record_total"])
         return False
 
 
@@ -436,47 +436,12 @@ def build_per_contact_index(tenant_id: str) -> None:
     logger.info("Built per-contact index", tenant_id=tenant_id, contacts=len(by_contact), upload_failures=upload_failures)
 
 
-_SYNC_STALE_THRESHOLD_MS = 5 * 60 * 1000  # 5 minutes — recover from crashed workers.
-
-
-def sync_contacts_phase(api: AccountingApi, tenant_id: str, modified_since: datetime | None = None) -> bool:
-    """Run the contacts-only phase that gates app access during the initial load.
-
-    Extracted so ``sync_data`` can flip TenantStatus ``LOADING → SYNCING`` as
-    soon as contacts finish — unblocking navigation while the heavy phase keeps
-    running in the background.
-    """
-    return sync_contacts(api, tenant_id, modified_since=modified_since)
-
-
-def sync_heavy_phase(api: AccountingApi, tenant_id: str, modified_since: datetime | None = None) -> dict[str, bool]:
-    """Run invoices + credit notes + payments serially after contacts finish.
-
-    Serial (not parallel) because the real bottleneck is Xero's 60 rpm rate
-    limit per tenant, not local concurrency. Parallelism would just race into
-    HTTP 429s without improving wall-clock time — see the decision log entry
-    "Deferred parallelization" for rationale.
-
-    Returns:
-        Mapping of resource name → success flag. Downstream uses this to
-        decide whether per-contact index build + reconcile-ready flip runs.
-    """
-    return {
-        "credit_notes": sync_credit_notes(api, tenant_id, modified_since=modified_since),
-        "invoices": sync_invoices(api, tenant_id, modified_since=modified_since),
-        "payments": sync_payments(api, tenant_id, modified_since=modified_since),
-    }
-
-
-_RESOURCE_PROGRESS_ATTRS: dict[str, str] = {"contacts": "ContactsProgress", "credit_notes": "CreditNotesProgress", "invoices": "InvoicesProgress", "payments": "PaymentsProgress"}
-
-
 def _resource_is_complete(tenant_item: dict[str, Any] | None, resource: str) -> bool:
     """Return True when the stored ``*Progress.status`` is ``complete``."""
     if not tenant_item:
         return False
-    progress = tenant_item.get(_RESOURCE_PROGRESS_ATTRS[resource])
-    return isinstance(progress, dict) and progress.get("status") == "complete"
+    progress = tenant_item.get(_progress_attribute_name(resource))
+    return isinstance(progress, dict) and progress.get("status") == ProgressStatus.COMPLETE
 
 
 def _should_skip_for_retry(resource: str, only_run: set[str] | None, tenant_item: dict[str, Any] | None) -> bool:
@@ -525,7 +490,7 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
             failed subset without re-fetching all of Xero. ``None`` (default)
             runs a full sync as before.
     """
-    if not already_acquired and not TenantDataRepository.try_acquire_sync(tenant_id, target_status=operation_type, stale_threshold_ms=_SYNC_STALE_THRESHOLD_MS):
+    if not already_acquired and not TenantDataRepository.try_acquire_sync(tenant_id, target_status=operation_type, stale_threshold_ms=SYNC_STALE_THRESHOLD_MS):
         logger.warning("Sync already in flight; skipping overlapping start", tenant_id=tenant_id, target_status=str(operation_type))
         return
 
@@ -539,11 +504,14 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
     api = get_xero_api_client(oauth_token)
 
     # Contacts phase: run only on a full sync, or when explicitly retried.
+    # Extracted from the heavy loop so sync_data can flip LOADING → SYNCING as
+    # soon as contacts finish — unblocking navigation while the rest runs in
+    # the background.
     if _should_skip_for_retry("contacts", only_run_resources, tenant_record):
         contacts_ok = True
         logger.info("Retry: skipping contacts phase (already complete or out of scope)", tenant_id=tenant_id)
     else:
-        contacts_ok = sync_contacts_phase(api, tenant_id, modified_since=modified_since)
+        contacts_ok = sync_contacts(api, tenant_id, modified_since=modified_since)
 
     if not contacts_ok:
         # Heavy phase is skipped; partial contacts data would mislead the UI.
@@ -580,13 +548,13 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
         # Per-contact index is a view of the flat files — only safe when every
         # source file is current. Partial data would surface as missing rows
         # on the statement detail page.
-        _safe_update_progress(tenant_id, "per_contact_index", "in_progress")
+        _safe_update_progress(tenant_id, "per_contact_index", ProgressStatus.IN_PROGRESS)
         try:
             build_per_contact_index(tenant_id)
-            _safe_update_progress(tenant_id, "per_contact_index", "complete")
+            _safe_update_progress(tenant_id, "per_contact_index", ProgressStatus.COMPLETE)
         except Exception:
             logger.exception("Failed to build per-contact index", tenant_id=tenant_id)
-            _safe_update_progress(tenant_id, "per_contact_index", "failed")
+            _safe_update_progress(tenant_id, "per_contact_index", ProgressStatus.FAILED)
             heavy_ok = False
 
     # Bump the tenant cache generation so any Redis-cached statement views

@@ -463,6 +463,7 @@ def statement(statement_id: str):
 
 
 @statements_bp.route("/statement/<statement_id>/wait")
+@active_tenant_required("Please select a tenant to view statements.")
 @xero_token_required
 @route_handler_logging
 def statement_wait(statement_id: str):

@@ -31,8 +31,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -80,9 +81,7 @@ def needs_backfill(item: dict[str, Any]) -> bool:
         return False
     if item.get("LastSyncTime") in (None, ""):
         return False
-    if item.get("ReconcileReadyAt") is not None:
-        return False
-    return True
+    return item.get("ReconcileReadyAt") is None
 
 
 def iter_tenant_items(table, scan_kwargs: dict[str, Any] | None = None) -> Iterable[dict[str, Any]]:
@@ -95,8 +94,7 @@ def iter_tenant_items(table, scan_kwargs: dict[str, Any] | None = None) -> Itera
     kwargs = dict(scan_kwargs or {})
     while True:
         response = table.scan(**kwargs)
-        for item in response.get("Items", []) or []:
-            yield item
+        yield from response.get("Items", []) or []
         last_key = response.get("LastEvaluatedKey")
         if not last_key:
             return
@@ -137,23 +135,35 @@ def build_update_kwargs(tenant_id: str, last_sync_time: Any) -> dict[str, Any]:
     }
 
 
-def backfill_table(table, *, dry_run: bool, logger=print) -> tuple[int, int]:
-    """Scan the table and (optionally) write a backfill row per candidate.
+def collect_candidates(table: Any) -> list[dict[str, Any]]:
+    """Scan the table once and return every row that still needs backfilling.
+
+    Kept separate from ``backfill_table`` so ``main()`` can derive the
+    confirmation-prompt count from the same list it later writes — avoiding a
+    redundant second scan and the race window it would create.
+    """
+    # Narrow the scan to rows that at least have LastSyncTime + FREE. The final
+    # filter (needs_backfill) still runs in Python so the test suite can drive
+    # edge cases without hitting a filter-expression parser.
+    scan_kwargs = {"FilterExpression": "TenantStatus = :free AND attribute_exists(LastSyncTime) AND attribute_not_exists(ReconcileReadyAt)", "ExpressionAttributeValues": {":free": "FREE"}}
+    return [item for item in iter_tenant_items(table, scan_kwargs=scan_kwargs) if needs_backfill(item)]
+
+
+def backfill_table(table: Any, *, dry_run: bool, logger: Callable[[str], None] = print, candidates: list[dict[str, Any]] | None = None) -> tuple[int, int]:
+    """(Optionally) write a backfill row per candidate.
+
+    Args:
+        candidates: Pre-collected rows to backfill. When ``None`` the function
+            performs its own scan — kept as a convenience for ad-hoc callers
+            and existing tests, but ``main()`` collects once and injects.
 
     Returns:
         (candidate_count, written_count) — identical on a happy run; a gap
         means some writes hit the ``ConditionExpression`` (already-backfilled
         rows raced us) or raised and were skipped.
     """
-    # Narrow the scan to rows that at least have LastSyncTime + FREE. The final
-    # filter (needs_backfill) still runs in Python so the test suite can drive
-    # edge cases without hitting a filter-expression parser.
-    scan_kwargs = {"FilterExpression": "TenantStatus = :free AND attribute_exists(LastSyncTime) AND attribute_not_exists(ReconcileReadyAt)", "ExpressionAttributeValues": {":free": "FREE"}}
-
-    candidates: list[dict[str, Any]] = []
-    for item in iter_tenant_items(table, scan_kwargs=scan_kwargs):
-        if needs_backfill(item):
-            candidates.append(item)
+    if candidates is None:
+        candidates = collect_candidates(table)
 
     logger(f"Found {len(candidates)} tenant row(s) requiring backfill.")
     if candidates[:_SAMPLE_LIMIT]:
@@ -211,16 +221,16 @@ def main() -> int:
 
     from config import tenant_data_table  # pylint: disable=import-outside-toplevel
 
+    # One scan drives both the confirmation prompt and the writes, so the
+    # number in the prompt is exactly what gets written (no race window).
+    candidates = collect_candidates(tenant_data_table)
+
     if args.dry_run:
-        backfill_table(tenant_data_table, dry_run=True)
+        backfill_table(tenant_data_table, dry_run=True, candidates=candidates)
         return 0
 
-    # Short pre-count so the confirmation prompt has a number to show.
-    scan_kwargs = {"FilterExpression": "TenantStatus = :free AND attribute_exists(LastSyncTime) AND attribute_not_exists(ReconcileReadyAt)", "ExpressionAttributeValues": {":free": "FREE"}}
-    candidate_count = sum(1 for item in iter_tenant_items(tenant_data_table, scan_kwargs=scan_kwargs) if needs_backfill(item))
-    _confirm_or_abort(assume_yes=args.yes, count=candidate_count)
-
-    backfill_table(tenant_data_table, dry_run=False)
+    _confirm_or_abort(assume_yes=args.yes, count=len(candidates))
+    backfill_table(tenant_data_table, dry_run=False, candidates=candidates)
     return 0
 
 

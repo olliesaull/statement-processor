@@ -704,7 +704,7 @@ The initial post-connect sync is split into two phases. Contacts fetches first a
 #### Choreography (`service/sync.py::sync_data`)
 
 1. `try_acquire_sync` atomically claims the tenant via `UpdateItem` with a stale-heartbeat escape hatch (5 minutes). Rejection is a silent no-op unless the caller (e.g. `/api/tenants/<id>/retry-sync`) surfaces it as 409.
-2. **Contacts phase** — `sync_contacts_phase()` fetches contacts with per-page progress callbacks. On success, when this is an initial load (`TenantStatus=LOADING`), flip to `SYNCING` so the app unblocks.
+2. **Contacts phase** — `sync_contacts()` fetches contacts with per-page progress callbacks. On success, when this is an initial load (`TenantStatus=LOADING`), flip to `SYNCING` so the app unblocks.
 3. **Heavy phase** — credit notes → invoices → payments, serial. Parallelism is not worthwhile: Xero's 60 rpm per-tenant cap is the real bottleneck, not local concurrency.
 4. **Per-contact index build** — runs only when every heavy-phase resource succeeded. Partial data would mis-paint statement rows.
 5. **Completion**:

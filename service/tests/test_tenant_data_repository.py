@@ -313,6 +313,56 @@ class TestGetMany:
         # The batch_get_item must have been called (at most twice; 100 + 50).
         assert fake_client.batch_get_item.call_count >= 1
 
+    def test_deduplicates_input_tenant_ids(self, monkeypatch):
+        """BatchGetItem rejects duplicate keys — callers may pass duplicates."""
+        sent_keys: list[list[dict]] = []
+
+        def fake_batch_get(RequestItems):  # noqa: N803 - boto3 arg name
+            sent_keys.append(list(RequestItems["TenantData"]["Keys"]))
+            return {"Responses": {"TenantData": []}, "UnprocessedKeys": {}}
+
+        monkeypatch.setattr("tenant_data_repository.ddb", MagicMock(batch_get_item=fake_batch_get))
+
+        class FakeTable:
+            name = "TenantData"
+
+        monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+
+        result = TenantDataRepository.get_many(["t1", "t1", "t2", "t2", "t1"])
+
+        # Duplicates collapse on input, so only two unique keys reach DDB.
+        assert len(sent_keys) == 1
+        assert {k["TenantID"] for k in sent_keys[0]} == {"t1", "t2"}
+        # Result has one entry per unique tenant.
+        assert set(result) == {"t1", "t2"}
+
+    def test_retries_unprocessed_keys(self, monkeypatch):
+        """A partial BatchGetItem result must drive a follow-up request for the remainder."""
+        responses = [
+            {"Responses": {"TenantData": [{"TenantID": "t1", "TenantStatus": "FREE"}]}, "UnprocessedKeys": {"TenantData": {"Keys": [{"TenantID": "t2"}]}}},
+            {"Responses": {"TenantData": [{"TenantID": "t2", "TenantStatus": "SYNCING"}]}, "UnprocessedKeys": {}},
+        ]
+
+        call_count = {"n": 0}
+
+        def fake_batch_get(**_):
+            idx = call_count["n"]
+            call_count["n"] += 1
+            return responses[idx]
+
+        monkeypatch.setattr("tenant_data_repository.ddb", MagicMock(batch_get_item=fake_batch_get))
+
+        class FakeTable:
+            name = "TenantData"
+
+        monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+
+        result = TenantDataRepository.get_many(["t1", "t2"])
+
+        assert call_count["n"] == 2
+        assert result["t1"]["TenantStatus"] == "FREE"
+        assert result["t2"]["TenantStatus"] == "SYNCING"
+
 
 class TestTryAcquireSync:
     """try_acquire_sync uses ConditionExpression to prevent double-starts."""
@@ -398,3 +448,70 @@ class TestTryAcquireSync:
         # The condition must allow FREE and LOAD_INCOMPLETE.
         assert ":free" in values
         assert ":load_incomplete" in values
+
+    def test_rejects_on_erased_tenant(self, monkeypatch):
+        """ERASED must never be re-acquired even with a stale heartbeat.
+
+        Exercised end-to-end: the fake table raises ConditionalCheckFailedException
+        only when the target row has ``TenantStatus=ERASED``, so an accidental
+        widening of the ConditionExpression to include ERASED would be caught.
+        """
+        stored_status = "ERASED"
+
+        class FakeTable:
+            @staticmethod
+            def update_item(**_):
+                if stored_status == "ERASED":
+                    raise ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "ERASED"}}, "UpdateItem")
+
+        monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+
+        result = TenantDataRepository.try_acquire_sync("tenant-erased", target_status=TenantStatus.LOADING, stale_threshold_ms=300_000)
+
+        assert result is False
+
+    def test_acquires_when_heartbeat_is_stale(self, monkeypatch):
+        """An in-flight SYNCING with a heartbeat older than the threshold is recoverable."""
+        now = 1_700_000_000_000
+        duration_ms = 5 * 60 * 1000
+        monkeypatch.setattr("tenant_data_repository._now_ms", lambda: now)
+
+        # Fake table that applies the ConditionExpression semantics itself:
+        # it "sees" an item with SYNCING + stale heartbeat and lets the update land.
+        item = {"TenantStatus": "SYNCING", "LastHeartbeatAt": now - duration_ms - 1}
+
+        class FakeTable:
+            @staticmethod
+            def update_item(**kwargs):
+                values = kwargs["ExpressionAttributeValues"]
+                heartbeat_stale = item["LastHeartbeatAt"] < values[":stale_threshold"]
+                status_allows = item["TenantStatus"] in {values[":loading"], values[":syncing"]}
+                if not (heartbeat_stale and status_allows):
+                    raise ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "fresh"}}, "UpdateItem")
+
+        monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+
+        result = TenantDataRepository.try_acquire_sync("tenant-crashed", target_status=TenantStatus.LOADING, stale_threshold_ms=duration_ms)
+
+        assert result is True
+
+    def test_rejects_when_heartbeat_is_fresh(self, monkeypatch):
+        """A fresh heartbeat on SYNCING keeps the lock held — reject the second start."""
+        now = 1_700_000_000_000
+        duration_ms = 5 * 60 * 1000
+        monkeypatch.setattr("tenant_data_repository._now_ms", lambda: now)
+
+        item = {"TenantStatus": "SYNCING", "LastHeartbeatAt": now - 10_000}  # 10s old — well inside threshold
+
+        class FakeTable:
+            @staticmethod
+            def update_item(**kwargs):
+                values = kwargs["ExpressionAttributeValues"]
+                if item["LastHeartbeatAt"] >= values[":stale_threshold"]:
+                    raise ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "fresh"}}, "UpdateItem")
+
+        monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+
+        result = TenantDataRepository.try_acquire_sync("tenant-busy", target_status=TenantStatus.LOADING, stale_threshold_ms=duration_ms)
+
+        assert result is False

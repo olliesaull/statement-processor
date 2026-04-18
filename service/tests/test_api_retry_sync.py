@@ -12,6 +12,7 @@ Covers:
 from __future__ import annotations
 
 import tempfile
+from pathlib import Path
 
 import pytest
 from cachelib import FileSystemCache
@@ -184,6 +185,17 @@ class TestRetrySyncHtmxResponse:
 
         assert response.status_code == 409
         assert 'id="sync-progress-panel"' in response.data.decode()
+
+    def test_main_js_retains_htmx_response_error_toast_handler(self):
+        """The 409 fragment body is only surfaced via the client-side htmx:responseError handler.
+
+        HTMX ignores non-2xx bodies by default, so without this listener the
+        retry-conflict UX (error toast) silently regresses. Guard the contract
+        at the file level — the handler must stay wired up in ``main.js``.
+        """
+        main_js = Path(__file__).resolve().parents[1] / "static" / "assets" / "js" / "main.js"
+        content = main_js.read_text(encoding="utf-8")
+        assert 'addEventListener("htmx:responseError"' in content, f"htmx:responseError listener missing from {main_js}"
 
 
 class TestSyncEndpointHtmxResponse:

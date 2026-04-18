@@ -6,23 +6,23 @@ return the rendered ``sync_progress_panel.html`` fragment instead so the
 tenant management UI can swap the panel in place.
 """
 
-from flask import Blueprint, jsonify, render_template, request, session, url_for
+from typing import Any
+
+from flask import Blueprint, jsonify, request, session, url_for
 
 from logger import logger
 from sync import sync_data
 from tenant_activation import executor
 from tenant_billing_repository import TenantBillingRepository
-from tenant_data_repository import TenantDataRepository, TenantStatus
+from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
 from utils.auth import route_handler_logging, xero_token_required
 from utils.statement_upload_validation import build_statement_upload_preflight
-from utils.sync_progress import build_progress_view, should_poll
+from utils.sync_progress import render_sync_progress_fragment
 
 api_bp = Blueprint("api", __name__)
 
-_SYNC_STALE_THRESHOLD_MS = 5 * 60 * 1000
-_RETRYABLE_STATUSES = {"pending", "failed"}
-_RETRY_RESOURCES = ("contacts", "credit_notes", "invoices", "payments")
-_PROGRESS_ATTR_NAMES = {"contacts": "ContactsProgress", "credit_notes": "CreditNotesProgress", "invoices": "InvoicesProgress", "payments": "PaymentsProgress"}
+_RETRYABLE_STATUSES: frozenset[str] = frozenset({ProgressStatus.PENDING, ProgressStatus.FAILED})
+_RETRY_RESOURCES: tuple[str, ...] = ("contacts", "credit_notes", "invoices", "payments")
 
 
 def _is_htmx_request() -> bool:
@@ -30,22 +30,18 @@ def _is_htmx_request() -> bool:
     return request.headers.get("HX-Request") == "true"
 
 
-def _render_sync_progress_fragment():
-    """Render the sync-progress panel for session tenants.
+def _render_sync_progress_fragment() -> str:
+    """Render the sync-progress panel for the current session.
 
-    Shared by both sync endpoints so Sync and Retry-sync buttons return the
-    same HTMX-swap-target shape as the poll endpoint in
-    ``tenants.sync_progress``.
+    Thin wrapper around ``utils.sync_progress.render_sync_progress_fragment``
+    that pulls the session tenant list — Sync and Retry-sync both swap the
+    same HTMX-target shape as the poll endpoint.
     """
     session_tenants = session.get("xero_tenants") or []
-    tenant_ids = [t.get("tenantId") for t in session_tenants if isinstance(t, dict) and t.get("tenantId")]
-    rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
-    tenant_views = build_progress_view(session_tenants, rows)
-    polling = should_poll(tenant_views)
-    return render_template("partials/sync_progress_panel.html", tenant_views=tenant_views, polling=polling, TenantStatus=TenantStatus)
+    return render_sync_progress_fragment(session_tenants)
 
 
-def _collect_retry_resources(tenant_item: dict | None) -> set[str]:
+def _collect_retry_resources(tenant_item: dict[str, Any] | None) -> set[str]:
     """Return the set of resources that are pending or failed (retry candidates).
 
     Missing progress maps count as ``pending`` — e.g. legacy rows before the
@@ -55,12 +51,12 @@ def _collect_retry_resources(tenant_item: dict | None) -> set[str]:
     tenant_item = tenant_item or {}
     retryable: set[str] = set()
     for resource in _RETRY_RESOURCES:
-        progress = tenant_item.get(_PROGRESS_ATTR_NAMES[resource])
+        progress = tenant_item.get(_progress_attribute_name(resource))
         if not isinstance(progress, dict):
             # Missing entirely — treat as retryable.
             retryable.add(resource)
             continue
-        status = str(progress.get("status") or "pending")
+        status = str(progress.get("status") or ProgressStatus.PENDING)
         if status in _RETRYABLE_STATUSES:
             retryable.add(resource)
     return retryable
@@ -164,7 +160,7 @@ def retry_tenant_sync(tenant_id: str):
     # Acquire the sync lock synchronously so the endpoint can reflect a 409 on
     # overlap, then hand off to the executor with ``already_acquired=True`` so
     # the background thread doesn't double-claim the lock.
-    acquired = TenantDataRepository.try_acquire_sync(tenant_id, target_status=TenantStatus.SYNCING, stale_threshold_ms=_SYNC_STALE_THRESHOLD_MS)
+    acquired = TenantDataRepository.try_acquire_sync(tenant_id, target_status=TenantStatus.SYNCING, stale_threshold_ms=SYNC_STALE_THRESHOLD_MS)
     if not acquired:
         logger.info("Retry sync rejected; another sync in flight", tenant_id=tenant_id)
         if _is_htmx_request():

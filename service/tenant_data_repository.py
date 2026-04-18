@@ -11,12 +11,17 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final
 
 from botocore.exceptions import ClientError
 
 from config import ddb, tenant_data_table
 from repository_helpers import fetch_items_by_tenant_id
+
+SYNC_STALE_THRESHOLD_MS: Final[int] = 5 * 60 * 1000
+"""How old a ``LastHeartbeatAt`` must be before ``try_acquire_sync`` treats an
+in-flight sync as a crashed worker. Shared by the background sync path and
+the retry-sync API so both enforce one consistent timeout."""
 
 
 def _now_ms() -> int:
@@ -25,6 +30,21 @@ def _now_ms() -> int:
     Extracted so tests can monkey-patch the clock deterministically.
     """
     return int(time.time() * 1000)
+
+
+class ProgressStatus(StrEnum):
+    """States a single ``*Progress`` map can be in.
+
+    ``pending`` — not yet attempted on this sync cycle.
+    ``in_progress`` — fetcher is actively running; ``records_fetched`` grows.
+    ``complete`` — resource finished successfully.
+    ``failed`` — fetcher raised; the Retry-sync path picks this up.
+    """
+
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETE = "complete"
+    FAILED = "failed"
 
 
 class TenantStatus(StrEnum):
@@ -240,8 +260,10 @@ class TenantDataRepository:
             Mapping of every requested tenant_id to its item dict, or ``None``
             when the row does not exist.
         """
-        deduped = [tid.strip() for tid in tenant_ids if tid and isinstance(tid, str)]
-        result: dict[str, dict[str, Any] | None] = {tid: None for tid in deduped}
+        # BatchGetItem rejects duplicate keys with ValidationException, so
+        # dedup up-front. dict.fromkeys preserves first-seen order.
+        deduped = list(dict.fromkeys(tid.strip() for tid in tenant_ids if tid and isinstance(tid, str)))
+        result: dict[str, dict[str, Any] | None] = dict.fromkeys(deduped)
         if not deduped:
             return {}
 
@@ -266,7 +288,7 @@ class TenantDataRepository:
         return result
 
     @classmethod
-    def update_resource_progress(cls, tenant_id: str, resource: str, status: str, records_fetched: int | None = None, record_total: int | None = None) -> None:
+    def update_resource_progress(cls, tenant_id: str, resource: str, status: str | ProgressStatus, records_fetched: int | None = None, record_total: int | None = None) -> None:
         """Write per-resource sync progress plus a heartbeat timestamp.
 
         The progress map is written as a whole each time so readers always see
@@ -291,7 +313,9 @@ class TenantDataRepository:
         attribute_name = _progress_attribute_name(resource)
         now_ms = _now_ms()
 
-        progress: dict[str, Any] = {"status": status, "updated_at": now_ms}
+        # Coerce StrEnum → raw str so downstream DDB reads don't return an enum
+        # value (boto3 serialises StrEnum as str but normalise defensively).
+        progress: dict[str, Any] = {"status": str(status), "updated_at": now_ms}
         # per_contact_index is a bounded, single-step operation — no counts.
         if resource != "per_contact_index":
             progress["records_fetched"] = records_fetched

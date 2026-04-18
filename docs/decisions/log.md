@@ -298,6 +298,70 @@ Use this format for each entry:
 
 ---
 
+### [2026-04-18] convention | `ProgressStatus` StrEnum + shared resource→attribute mapping
+
+**Context:** Review of the contacts-first-unlock branch surfaced magic-string
+usage of `"pending"`, `"in_progress"`, `"complete"`, `"failed"` across
+`sync.py`, `routes/api.py`, `utils/sync_progress.py`, and a resource→attribute
+mapping dict duplicated across four files with no canonical source.
+
+**Decision:** Introduce ``ProgressStatus(StrEnum)`` in
+``tenant_data_repository.py`` adjacent to ``TenantStatus``; route all
+progress-status comparisons and writes through it. Delete the duplicate
+`_RESOURCE_PROGRESS_ATTRS` / `_PROGRESS_ATTR_NAMES` / `_RESOURCE_ATTRIBUTES`
+dicts and call ``_progress_attribute_name(resource)`` instead.
+
+**Rationale:** `python-style.md` mandates enums over string literals for small
+fixed vocabularies. A typo in one of the three magic-string sites silently
+misclassifies a sync outcome; an enum makes that class of bug a type error
+at import time. Similarly, DRY on the attribute map means adding a new
+resource touches one file, not four.
+
+**References:** `service/tenant_data_repository.py::ProgressStatus`,
+`service/utils/sync_progress.py`, `service/sync.py`, `service/routes/api.py`.
+
+---
+
+### [2026-04-18] convention | `SYNC_STALE_THRESHOLD_MS` centralised in `tenant_data_repository.py`
+
+**Context:** `_SYNC_STALE_THRESHOLD_MS = 5 * 60 * 1000` was defined
+independently in both `sync.py` and `routes/api.py`. `try_acquire_sync` is the
+only function that acts on it, so a drift between callers would split-brain
+the stale-heartbeat recovery window.
+
+**Decision:** Promote the constant to a module-level `Final[int]` in
+`tenant_data_repository.py` and import it from both `sync.py` and
+`routes/api.py`.
+
+**Rationale:** Single source of truth for a value that has load-bearing
+correctness implications. A tuning change (e.g. after observing real crash
+recovery in production) now affects both call sites atomically.
+
+**References:** `service/tenant_data_repository.py::SYNC_STALE_THRESHOLD_MS`.
+
+---
+
+### [2026-04-18] scope | Drop `sync_contacts_phase` / `sync_heavy_phase` wrapper functions
+
+**Context:** The plan introduced `sync_contacts_phase` and `sync_heavy_phase`
+as "phase helpers" in `sync.py`. In practice `sync_heavy_phase` was never
+called — `sync_data` inlines the heavy loop with retry-skip semantics that the
+helper can't express. `sync_contacts_phase` was a one-line wrapper with one
+caller (`sync_data`) and no extra logic.
+
+**Decision:** Delete both functions. Call `sync_contacts()` directly in
+`sync_data` with a comment explaining why contacts is extracted from the
+heavy loop.
+
+**Rationale:** Dead public functions rot — future edits to the inlined heavy
+loop would silently diverge from the unused `sync_heavy_phase` body. The
+phase-split design intent is preserved by the in-line comment and the README
+"Tenant sync lifecycle" section, which is where readers actually look.
+
+**References:** `service/sync.py::sync_data`.
+
+---
+
 ### [2026-04-17] convention | HTMX CSRF wired via `htmx:configRequest` global listener
 
 **Context:** Global `CSRFProtect(app)` requires an `X-CSRFToken` on every state-changing request. Old per-endpoint `buildCsrfUrlEncodedBody()` approach is deleted with `tenant-sync.js`.

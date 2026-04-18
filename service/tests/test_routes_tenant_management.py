@@ -119,8 +119,8 @@ class TestTenantManagementProgressPanel:
         assert response.status_code == 200
         html = response.data.decode()
         assert 'id="sync-progress-panel"' in html
-        # Ready state: polling stopped -> no hx-trigger.
-        assert "hx-trigger" not in html or '"hx-trigger"' not in html  # allow for any meta occurrences
+        # Ready state: polling stopped -> no hx-trigger attribute on the panel.
+        assert "hx-trigger" not in html
 
     def test_panel_keeps_hx_trigger_when_any_tenant_incomplete(self, client, monkeypatch):
         from tenant_data_repository import TenantDataRepository

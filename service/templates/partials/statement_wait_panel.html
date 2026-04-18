@@ -12,14 +12,26 @@
   The wrapper element shares an id with statement.html's not-ready branch so
   hx-swap="outerHTML" swaps in place without layout jump.
 #}
+{# Terminal failure: reconcile will never flip to ready without a retry on the
+   tenant-management page. Omit hx-trigger so the poll loop stops, and surface
+   an escape link so the user isn't trapped staring at a spinner. #}
+{% set terminal_failure = tenant_view and tenant_view.has_failure %}
 <div id="statement-reconcile-not-ready"
      class="page-panel page-panel-flat sync-progress-wait-panel text-center py-5"
      hx-get="/statement/{{ statement_id }}/wait"
-     hx-trigger="every 3s[(window.__userActive ?? true) && !document.hidden]"
+     {% if not terminal_failure %}hx-trigger="every 3s[(window.__userActive ?? true) && !document.hidden]"{% endif %}
      hx-swap="outerHTML">
-  <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
-  <p class="mb-1">Your Xero data is still syncing.</p>
-  <p class="text-muted mb-3">This page will open automatically once reconciliation data is ready.</p>
+  {% if terminal_failure %}
+    <p class="mb-1"><strong>Part of the Xero sync failed.</strong></p>
+    <p class="text-muted mb-3">
+      Reconciliation can't open until the missing data is fetched.
+      <a href="{{ url_for('tenants.tenant_management') }}">Go to tenant management</a> to retry.
+    </p>
+  {% else %}
+    <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
+    <p class="mb-1">Your Xero data is still syncing.</p>
+    <p class="text-muted mb-3">This page will open automatically once reconciliation data is ready.</p>
+  {% endif %}
 
   {% if tenant_view %}
     <ul class="sync-progress-compact text-start mx-auto" style="max-width: 420px;">

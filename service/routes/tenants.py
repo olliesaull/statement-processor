@@ -18,7 +18,7 @@ from tenant_activation import set_active_tenant
 from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import clear_session_is_set_cookie, route_handler_logging, xero_token_required
-from utils.sync_progress import build_progress_view, should_poll
+from utils.sync_progress import build_progress_view, render_sync_progress_fragment, should_poll
 from utils.tenant_status import get_tenant_status
 
 tenants_bp = Blueprint("tenants", __name__)
@@ -91,8 +91,8 @@ def tenant_management():
 
 
 @tenants_bp.route("/tenants/sync-progress")
-@xero_token_required
 @route_handler_logging
+@xero_token_required
 def sync_progress():
     """Return the multi-tenant sync-progress HTMX fragment for session tenants.
 
@@ -103,11 +103,8 @@ def sync_progress():
     """
     session_tenants = session.get("xero_tenants") or []
     tenant_ids = [t.get("tenantId") for t in session_tenants if isinstance(t, dict) and t.get("tenantId")]
-    rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
-    tenant_views = build_progress_view(session_tenants, rows)
-    polling = should_poll(tenant_views)
-    logger.info("Rendering sync-progress fragment", tenant_ids=tenant_ids, polling=polling)
-    return render_template("partials/sync_progress_panel.html", tenant_views=tenant_views, polling=polling, TenantStatus=TenantStatus)
+    logger.info("Rendering sync-progress fragment", tenant_ids=tenant_ids)
+    return render_sync_progress_fragment(session_tenants)
 
 
 @tenants_bp.route("/tenants/select", methods=["POST"])

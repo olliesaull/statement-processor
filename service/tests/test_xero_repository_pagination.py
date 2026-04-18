@@ -279,6 +279,66 @@ class TestFetcherProgressCallbacks:
         assert calls[0][0] == 3
         assert calls[0][1] is None
 
+    def _make_credit_note_items(self, n: int, start: int = 1) -> list:
+        return [
+            SimpleNamespace(
+                credit_note_id=f"cn-{i}",
+                credit_note_number="N",
+                type="ACCPAYCREDIT",
+                status="AUTHORISED",
+                date=None,
+                due_date=None,
+                reference=None,
+                total=0,
+                amount_credited=0,
+                remaining_credit=0,
+                contact=SimpleNamespace(contact_id="c1", name="c"),
+            )
+            for i in range(start, start + n)
+        ]
+
+    def _make_payment_items(self, n: int, start: int = 1) -> list:
+        return [
+            SimpleNamespace(
+                payment_id=f"pay-{i}", reference=None, amount=0, date=None, status="AUTHORISED", invoice=SimpleNamespace(invoice_id=f"inv-{i}", contact=SimpleNamespace(contact_id="c1", name="c"))
+            )
+            for i in range(start, start + n)
+        ]
+
+    def test_credit_notes_fires_callback_with_monotonic_records_fetched(self) -> None:
+        """Multi-page credit_notes callback grows records_fetched and keeps record_total stable."""
+        api = MagicMock()
+        first_batch = self._make_credit_note_items(CREDIT_NOTES_PAGE_SIZE)
+        second_batch = self._make_credit_note_items(3, start=CREDIT_NOTES_PAGE_SIZE + 1)
+        total = CREDIT_NOTES_PAGE_SIZE + 3
+        api.get_credit_notes.side_effect = [
+            _make_credit_note_result(credit_notes=first_batch, pagination=_make_pagination(item_count=total, page_count=2)),
+            _make_credit_note_result(credit_notes=second_batch, pagination=_make_pagination(item_count=total, page_count=2)),
+        ]
+
+        calls: list[tuple[int, int | None]] = []
+        get_credit_notes(tenant_id=TENANT_ID, api=api, progress_callback=lambda fetched, t: calls.append((fetched, t)))
+
+        assert [c[0] for c in calls] == [CREDIT_NOTES_PAGE_SIZE, total]
+        assert [c[1] for c in calls] == [total, total]
+
+    def test_payments_fires_callback_with_monotonic_records_fetched(self) -> None:
+        """Multi-page payments callback grows records_fetched and keeps record_total stable."""
+        api = MagicMock()
+        first_batch = self._make_payment_items(PAYMENTS_PAGE_SIZE)
+        second_batch = self._make_payment_items(7, start=PAYMENTS_PAGE_SIZE + 1)
+        total = PAYMENTS_PAGE_SIZE + 7
+        api.get_payments.side_effect = [
+            _make_payment_result(payments=first_batch, pagination=_make_pagination(item_count=total, page_count=2)),
+            _make_payment_result(payments=second_batch, pagination=_make_pagination(item_count=total, page_count=2)),
+        ]
+
+        calls: list[tuple[int, int | None]] = []
+        get_payments(tenant_id=TENANT_ID, api=api, progress_callback=lambda fetched, t: calls.append((fetched, t)))
+
+        assert [c[0] for c in calls] == [PAYMENTS_PAGE_SIZE, total]
+        assert [c[1] for c in calls] == [total, total]
+
     def test_credit_notes_fires_callback(self) -> None:
         api = MagicMock()
         batch = [
