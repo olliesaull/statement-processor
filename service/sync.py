@@ -25,18 +25,34 @@ from billing_service import LAST_MUTATION_SOURCE_WELCOME_GRANT, WELCOME_GRANT_TO
 from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, s3_client, tenant_data_table
 from logger import logger
 from statement_view_cache import bump_tenant_generation
-from tenant_data_repository import TenantDataRepository, TenantStatus
+from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
 from utils.auth import get_xero_api_client
 from xero_repository import CONTACT_DOC_TYPES, XeroType, get_contacts_from_xero, get_credit_notes, get_invoices, get_payments
 
 
 def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., Any], resource: XeroType, start_message: str, done_message: str, modified_since: datetime | None = None) -> bool:
-    """Fetch, cache, and upload a single Xero dataset."""
+    """Fetch, cache, and upload a single Xero dataset.
+
+    Writes per-resource sync progress to DynamoDB around the work:
+
+    - ``in_progress`` with ``records_fetched=0, record_total=None`` at start.
+    - ``in_progress`` with live counts after each fetcher page (via callback).
+    - ``complete`` on success, ``failed`` on exception.
+
+    Progress is best-effort telemetry; a write failure is logged but does not
+    fail the sync. Otherwise a DynamoDB blip during a 60-minute sync could
+    leave a user permanently stuck on the not-ready page.
+    """
     if not tenant_id:
         logger.error("Missing TenantID")
         return False
 
     logger.info(start_message, tenant_id=tenant_id)
+
+    # Initial in_progress write so the UI renders a zeroed bar before the
+    # first Xero page lands (Xero calls can take 10+ seconds each).
+    last_counts: dict[str, int | None] = {"records_fetched": 0, "record_total": None}
+    _safe_update_progress(tenant_id, resource, ProgressStatus.IN_PROGRESS, records_fetched=0, record_total=None)
 
     resource_filename = f"{resource}.json"
 
@@ -45,8 +61,15 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., An
         local_path = os.path.join(local_dir, resource_filename)
         s3_key = f"{tenant_id}/data/{resource_filename}"
 
-        # Fetch the latest dataset from Xero.
-        data = fetcher(tenant_id, api=api, modified_since=modified_since)
+        def _on_page(records_fetched: int, record_total: int | None) -> None:
+            last_counts["records_fetched"] = records_fetched
+            last_counts["record_total"] = record_total
+            _safe_update_progress(tenant_id, resource, ProgressStatus.IN_PROGRESS, records_fetched=records_fetched, record_total=record_total)
+
+        # Fetch the latest dataset from Xero. Fetchers added progress_callback
+        # support in Step 3; legacy tests without that kwarg still work because
+        # it's optional on every fetcher.
+        data = fetcher(tenant_id, api=api, modified_since=modified_since, progress_callback=_on_page)
 
         existing_payload = None
         if os.path.exists(local_path):
@@ -71,11 +94,30 @@ def _sync_resource(api: AccountingApi, tenant_id: str, fetcher: Callable[..., An
 
         record_count = len(payload) if isinstance(payload, (list, dict)) else None
         logger.info(done_message, tenant_id=tenant_id, records=record_count)
+
+        # Record counts on the final write: prefer the actual payload size
+        # because that's the authoritative post-merge total.
+        final_records_fetched = record_count if record_count is not None else last_counts["records_fetched"]
+        _safe_update_progress(tenant_id, resource, ProgressStatus.COMPLETE, records_fetched=final_records_fetched, record_total=last_counts["record_total"])
         return True
 
     except Exception:
         logger.exception("Unexpected error syncing resource", tenant_id=tenant_id, resource=resource_filename)
+        _safe_update_progress(tenant_id, resource, ProgressStatus.FAILED, records_fetched=last_counts["records_fetched"], record_total=last_counts["record_total"])
         return False
+
+
+def _safe_update_progress(tenant_id: str, resource: str, status: str, records_fetched: int | None = None, record_total: int | None = None) -> None:
+    """Write per-resource progress without letting DDB blips fail the sync.
+
+    Progress writes are telemetry, not a contract — a failed write at most
+    leaves the UI showing stale counts until the next heartbeat. Blocking the
+    sync on a DynamoDB timeout would be a much worse UX.
+    """
+    try:
+        TenantDataRepository.update_resource_progress(tenant_id, resource, status, records_fetched=records_fetched, record_total=record_total)
+    except Exception:
+        logger.exception("Failed to write sync progress", tenant_id=tenant_id, resource=resource, status=status)
 
 
 def _resolve_modified_since(record: dict[str, Any] | None) -> datetime | None:  # pylint: disable=too-many-return-statements
@@ -394,35 +436,158 @@ def build_per_contact_index(tenant_id: str) -> None:
     logger.info("Built per-contact index", tenant_id=tenant_id, contacts=len(by_contact), upload_failures=upload_failures)
 
 
-def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[str, Any] | None = None) -> None:
-    """Sync all datasets for a tenant and update tenant status."""
+def _resource_is_complete(tenant_item: dict[str, Any] | None, resource: str) -> bool:
+    """Return True when the stored ``*Progress.status`` is ``complete``."""
+    if not tenant_item:
+        return False
+    progress = tenant_item.get(_progress_attribute_name(resource))
+    return isinstance(progress, dict) and progress.get("status") == ProgressStatus.COMPLETE
+
+
+def _should_skip_for_retry(resource: str, only_run: set[str] | None, tenant_item: dict[str, Any] | None) -> bool:
+    """Decide whether to skip a resource on a retry run.
+
+    ``only_run=None`` is a full sync — never skip. Otherwise skip when the
+    resource is outside the retry set, or when it's already ``complete``
+    (race-safe: a user double-clicking Retry must not re-fetch a resource
+    that finished while the second click was in flight).
+    """
+    if only_run is None:
+        return False
+    if resource not in only_run:
+        return True
+    return _resource_is_complete(tenant_item, resource)
+
+
+def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[str, Any] | None = None, only_run_resources: set[str] | None = None, *, already_acquired: bool = False) -> None:
+    """Sync all Xero datasets for a tenant and transition tenant status.
+
+    Choreography (see contacts-first unlock plan for rationale):
+
+    1. ``try_acquire_sync`` — atomically claim the tenant; return early if
+       another sync is already in flight and its heartbeat is fresh. Callers
+       that already acquired the lock (e.g. the retry-sync API endpoint that
+       needs to return 409 on rejection) can skip this with
+       ``already_acquired=True``.
+    2. Contacts phase — once complete, flip ``LOADING → SYNCING`` so the user
+       can use the app while the heavy phase runs.
+    3. Heavy phase — invoices + credit notes + payments serial.
+    4. Per-contact index build — only if every heavy-phase resource succeeded,
+       otherwise the index would misrepresent partial data.
+    5. On full success — ``mark_reconcile_ready`` + ``FREE`` with the start
+       timestamp as ``LastSyncTime``.
+    6. On any failure — ``LOAD_INCOMPLETE`` so the UI offers a Retry button,
+       except for a manual ``SYNCING`` run on a tenant whose
+       ``ReconcileReadyAt`` is already set — that stays ``FREE`` with
+       ``LastSyncTime=None`` so reconcile access is not pulled out from under
+       the user mid-session.
+
+    Args:
+        only_run_resources: When set, limit execution to the named resources
+            (``contacts``, ``credit_notes``, ``invoices``, ``payments``) and
+            treat the others as "already done" for index+reconcile-ready
+            evaluation. Used by the Retry-sync endpoint to re-run only the
+            failed subset without re-fetching all of Xero. ``None`` (default)
+            runs a full sync as before.
+    """
+    if not already_acquired and not TenantDataRepository.try_acquire_sync(tenant_id, target_status=operation_type, stale_threshold_ms=SYNC_STALE_THRESHOLD_MS):
+        logger.warning("Sync already in flight; skipping overlapping start", tenant_id=tenant_id, target_status=str(operation_type))
+        return
+
     tenant_record = TenantDataRepository.get_item(tenant_id)
+    reconcile_ready_before = bool(tenant_record and tenant_record.get("ReconcileReadyAt"))
     modified_since: datetime | None = None
     if operation_type != TenantStatus.LOADING and tenant_record:
         modified_since = _resolve_modified_since(tenant_record)
 
     start_time_ms = int(time.time() * 1000)
-    update_tenant_status(tenant_id, operation_type)
     api = get_xero_api_client(oauth_token)
-    all_ok = True
-    sync_tasks = (sync_contacts, sync_credit_notes, sync_invoices, sync_payments)
-    for sync_func in sync_tasks:
-        if not sync_func(api, tenant_id, modified_since=modified_since):
-            all_ok = False
 
-    # Build per-contact index files for fast statement page lookups.
-    try:
-        build_per_contact_index(tenant_id)
-    except Exception:
-        logger.exception("Failed to build per-contact index", tenant_id=tenant_id)
+    # Contacts phase: run only on a full sync, or when explicitly retried.
+    # Extracted from the heavy loop so sync_data can flip LOADING → SYNCING as
+    # soon as contacts finish — unblocking navigation while the rest runs in
+    # the background.
+    if _should_skip_for_retry("contacts", only_run_resources, tenant_record):
+        contacts_ok = True
+        logger.info("Retry: skipping contacts phase (already complete or out of scope)", tenant_id=tenant_id)
+    else:
+        contacts_ok = sync_contacts(api, tenant_id, modified_since=modified_since)
 
-    # Bump the tenant cache generation so that any Redis-cached statement
-    # views (which embed Xero reconciliation data) become unreachable.
-    # This ensures a user who syncs and immediately opens a statement
-    # sees fresh data rather than stale cached results.
+    if not contacts_ok:
+        # Heavy phase is skipped; partial contacts data would mislead the UI.
+        # A manual sync on an already reconcile-ready tenant must not downgrade
+        # them to LOAD_INCOMPLETE on a transient failure — that yanks the
+        # reconcile gate shut on a user who was able to use the app before the
+        # retry. Mirror the heavy-phase-failure rule: stay FREE with null
+        # last_sync_time so telemetry flags the unclean sync.
+        if operation_type == TenantStatus.SYNCING and reconcile_ready_before:
+            update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=None)
+        else:
+            update_tenant_status(tenant_id, TenantStatus.LOAD_INCOMPLETE)
+        logger.warning("Contacts phase failed; sync aborted", tenant_id=tenant_id, reconcile_ready_before=reconcile_ready_before)
+        return
+
+    # Contacts done — unblock the app before starting the heavy phase.
+    # Only fires on a full initial load; retry runs are already past LOADING.
+    if operation_type == TenantStatus.LOADING and only_run_resources is None:
+        update_tenant_status(tenant_id, TenantStatus.SYNCING)
+
+    heavy_specs: list[tuple[str, Callable[..., bool]]] = [("credit_notes", sync_credit_notes), ("invoices", sync_invoices), ("payments", sync_payments)]
+    heavy_results: dict[str, bool] = {}
+    for resource, fetcher in heavy_specs:
+        if _should_skip_for_retry(resource, only_run_resources, tenant_record):
+            logger.info("Retry: skipping resource", tenant_id=tenant_id, resource=resource)
+            continue
+        heavy_results[resource] = fetcher(api, tenant_id, modified_since=modified_since)
+
+    specified_ok = all(heavy_results.values()) if heavy_results else True
+
+    # For a retry run we need to evaluate overall completeness across ALL
+    # resources (including ones we skipped because they were already complete).
+    # Re-read the tenant row so we don't rely on a stale snapshot.
+    if only_run_resources is not None:
+        fresh_record = TenantDataRepository.get_item(tenant_id) or {}
+        all_resources_complete = all(_resource_is_complete(fresh_record, r) for r in ("contacts", "credit_notes", "invoices", "payments"))
+        heavy_ok = specified_ok and all_resources_complete
+    else:
+        heavy_ok = specified_ok
+
+    if heavy_ok:
+        # Per-contact index is a view of the flat files — only safe when every
+        # source file is current. Partial data would surface as missing rows
+        # on the statement detail page.
+        _safe_update_progress(tenant_id, "per_contact_index", ProgressStatus.IN_PROGRESS)
+        try:
+            build_per_contact_index(tenant_id)
+            _safe_update_progress(tenant_id, "per_contact_index", ProgressStatus.COMPLETE)
+        except Exception:
+            logger.exception("Failed to build per-contact index", tenant_id=tenant_id)
+            _safe_update_progress(tenant_id, "per_contact_index", ProgressStatus.FAILED)
+            heavy_ok = False
+
+    # Bump the tenant cache generation so any Redis-cached statement views
+    # (which embed Xero reconciliation data) become unreachable. Runs on
+    # both success and partial failure — stale data is never correct.
     try:
         bump_tenant_generation(tenant_id)
     except Exception:
         logger.exception("Failed to bump tenant cache generation after sync", tenant_id=tenant_id)
 
-    update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=start_time_ms if all_ok else None)
+    if heavy_ok:
+        # Only flip the gate on the first successful full load. A manual
+        # incremental sync on an already-ready tenant must leave ReconcileReadyAt
+        # (and LastFullLoadCompletedAt) untouched — rewriting them would look
+        # like a fresh initial load in telemetry.
+        if not reconcile_ready_before:
+            TenantDataRepository.mark_reconcile_ready(tenant_id)
+        update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=start_time_ms)
+        return
+
+    if operation_type == TenantStatus.SYNCING and reconcile_ready_before:
+        # Manual incremental sync on an already reconcile-ready tenant: a
+        # partial failure mustn't yank the user out of the app. Keep them at
+        # FREE but signal "not a clean sync" by clearing LastSyncTime.
+        update_tenant_status(tenant_id, TenantStatus.FREE, last_sync_time=None)
+        return
+
+    update_tenant_status(tenant_id, TenantStatus.LOAD_INCOMPLETE)

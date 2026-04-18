@@ -56,9 +56,14 @@ def client(_app, monkeypatch):
     # Bypass block_when_loading — it calls get_tenant_status which hits DynamoDB.
     # Patching in utils.auth namespace because that's where it's imported.
     # TenantStatus.FREE is the normal post-load state that allows route access.
-    from tenant_data_repository import TenantStatus
+    from tenant_data_repository import TenantDataRepository, TenantStatus
 
     monkeypatch.setattr(utils.auth, "get_tenant_status", lambda tenant_id: TenantStatus.FREE)
+
+    # Bypass reconcile_ready_required — returns a row with ReconcileReadyAt set
+    # so the decorator passes through on the happy path. Individual tests that
+    # need the not-ready branch override this monkeypatch.
+    monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: {"TenantID": tid, "ReconcileReadyAt": 1_700_000_000_000}))
 
     # Stub data layer calls used by the statement route.
     # Route handlers now live in routes.statements, so patches target that module.
@@ -166,6 +171,43 @@ class TestDeleteStatementHtmxResponse:
         assert response.status_code == 200
         assert response.headers.get("HX-Trigger") == "listUpdated"
         assert response.data == b""
+
+
+class TestStatementReconcileNotReady:
+    """When ReconcileReadyAt is null, the statement route renders the wait view."""
+
+    def _not_ready(self, monkeypatch):
+        from tenant_data_repository import TenantDataRepository  # pylint: disable=import-outside-toplevel
+
+        # Row present but without ReconcileReadyAt — initial heavy phase still running.
+        monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: {"TenantID": tid}))
+
+    def test_get_renders_wait_view(self, client, monkeypatch):
+        """Not-ready tenants must see the wait panel, not the statement content."""
+        self._not_ready(monkeypatch)
+        response = client.get(f"/statement/{STATEMENT_ID}")
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert 'id="statement-reconcile-not-ready"' in html
+        assert 'id="statement-content"' not in html
+
+    def test_wait_view_polls_wait_endpoint(self, client, monkeypatch):
+        """Wait view must embed an HTMX poller targeting the wait endpoint."""
+        self._not_ready(monkeypatch)
+        response = client.get(f"/statement/{STATEMENT_ID}")
+        html = response.data.decode()
+        assert f"/statement/{STATEMENT_ID}/wait" in html
+        assert "hx-trigger" in html
+
+    def test_xlsx_download_blocked_when_not_ready(self, client, monkeypatch):
+        """Gate the xlsx branch too — the decorator short-circuits before the handler runs."""
+        self._not_ready(monkeypatch)
+        response = client.get(f"/statement/{STATEMENT_ID}?download=xlsx")
+        assert response.status_code == 200
+        # The decorator returns the HTML wait view, not an xlsx payload.
+        assert response.content_type.startswith("text/html")
+        assert "application/vnd.openxmlformats" not in response.content_type
+        assert 'id="statement-reconcile-not-ready"' in response.data.decode()
 
 
 class TestStatementsCountEndpoint:

@@ -683,20 +683,75 @@ At sync time, `build_per_contact_index()` in `sync.py` groups the flat dataset f
 - **Rebuilt every sync**: Both full and incremental syncs rebuild all per-contact files from the updated flat files. The cost is negligible (in-memory JSON grouping + a few S3 PUTs).
 - **Tenant erasure**: No changes needed — the erasure Lambda deletes by `{tenant_id}/` prefix, which covers `xero_by_contact/`.
 
+### Tenant sync lifecycle
+
+The initial post-connect sync is split into two phases. Contacts fetches first and unblocks navigation as soon as it finishes; invoices + credit notes + payments (the "heavy phase") continue in the background. `/statement/<id>` remains gated until the heavy phase plus the per-contact index build complete — that combined "ready" signal is captured by a single DynamoDB attribute: `TenantData.ReconcileReadyAt`.
+
+#### State machine
+
+| `TenantStatus` | `ReconcileReadyAt` | Meaning | User impact |
+|---|---|---|---|
+| `LOADING` | null | Initial contacts phase | Whole app gated — redirects to `/tenant_management`. |
+| `SYNCING` | null | Post-contacts heavy phase of first sync | App navigable; `/statement/<id>` renders the wait view (HTMX-polls `/statement/<id>/wait`). |
+| `SYNCING` | set | Manual / incremental sync on an already-reconciled tenant | App fully usable; reconciliation stays available throughout. |
+| `FREE` | set | Idle and reconcile-ready | Normal operation. |
+| `FREE` | null | Legacy row pre-`ReconcileReadyAt` schema | Back-fill via `scripts/backfill_reconcile_ready/`. |
+| `LOAD_INCOMPLETE` | null | A sync attempt failed before the gate flipped | Tenant-management panel shows per-resource `failed` state and swaps the Sync button to "Retry sync" (`/api/tenants/<id>/retry-sync`). |
+| `ERASED` | null | Disconnected tenant past grace period | All routes redirect. |
+
+`TenantStatus.SYNCING` is intentionally overloaded: **`ReconcileReadyAt` is the load-bearing signal**, not the enum value. See `docs/decisions/log.md` entry "Overload TenantStatus.SYNCING rather than add LOADING_HEAVY" for rationale.
+
+#### Choreography (`service/sync.py::sync_data`)
+
+1. `try_acquire_sync` atomically claims the tenant via `UpdateItem` with a stale-heartbeat escape hatch (5 minutes). Rejection is a silent no-op unless the caller (e.g. `/api/tenants/<id>/retry-sync`) surfaces it as 409.
+2. **Contacts phase** — `sync_contacts()` fetches contacts with per-page progress callbacks. On success, when this is an initial load (`TenantStatus=LOADING`), flip to `SYNCING` so the app unblocks.
+3. **Heavy phase** — credit notes → invoices → payments, serial. Parallelism is not worthwhile: Xero's 60 rpm per-tenant cap is the real bottleneck, not local concurrency.
+4. **Per-contact index build** — runs only when every heavy-phase resource succeeded. Partial data would mis-paint statement rows.
+5. **Completion**:
+   - All-OK and `ReconcileReadyAt` previously null → `TenantDataRepository.mark_reconcile_ready()` + `FREE` with `LastSyncTime = start`.
+   - All-OK and `ReconcileReadyAt` already set → `FREE` with `LastSyncTime = start`; `ReconcileReadyAt` is not rewritten (preserves "first full load" telemetry).
+   - Any failure on an initial load → `LOAD_INCOMPLETE`.
+   - Any failure on a manual sync for an already-reconciled tenant → `FREE` with `LastSyncTime=None` (do not yank reconciliation access mid-session).
+
+#### Per-resource progress
+
+Each fetcher writes `{Contacts,Invoices,CreditNotes,Payments,PerContactIndex}Progress` maps to `TenantData` via `TenantDataRepository.update_resource_progress()`:
+
+```json
+{
+  "status": "pending|in_progress|complete|failed",
+  "records_fetched": 250,
+  "record_total": 1000,
+  "updated_at": 1712345678901
+}
+```
+
+`record_total` is `null` whenever Xero doesn't return a `pagination.item_count` — the UI treats this as "indeterminate" and renders a striped bar rather than guessing a percentage. Progress writes are best-effort telemetry: a DDB blip during a 60-minute sync logs a warning but does not fail the sync.
+
+#### UI surfaces (HTMX polling)
+
+- **`/tenant_management`**: server-renders the `partials/sync_progress_panel.html` fragment (multi-tenant) on load. An HTMX poll against `GET /tenants/sync-progress` refreshes it every 3 s, gated on `window.__userActive && !document.hidden`. Once every session tenant is reconcile-ready, the fragment is returned without `hx-trigger` and polling stops.
+- **`/statement/<id>` (not-ready)**: when `reconcile_ready_required` finds `ReconcileReadyAt` is null, it renders `partials/statement_wait_panel.html` which HTMX-polls `GET /statement/<id>/wait`. Once `ReconcileReadyAt` flips, the wait endpoint returns an empty body with `HX-Redirect: /statement/<id>` and HTMX navigates the browser to the real statement view.
+- **Retry-sync button** (`LOAD_INCOMPLETE` tenants): HTMX `POST /api/tenants/<id>/retry-sync` inspects per-resource `*Progress.status`, atomically acquires the sync lock, and submits `sync_data(only_run_resources=<pending+failed>, already_acquired=True)` to the background executor. Returns 409 when another sync is in flight (fresh heartbeat).
+
+#### Known issues
+
+- **Token refresh during long sync thread**: when a sync exceeds the 30-minute OAuth token lifetime, the Xero SDK triggers a refresh inside a background thread. The refreshed token cannot be written back to the Flask session from outside the request context, so the user's browser session ends up with a stale token even after the refresh succeeds. Logging is in place (`token_saver` fire lines) to measure incidence; a distributed lock + session-less token storage fix is deferred to its own PR.
+
 ### JS module structure
 
 The frontend JavaScript is split into focused ES modules under `service/static/assets/js/`, all loaded without a build step via `<script type="module">`:
 
 | File | Responsibility |
 |---|---|
-| `main.js` | Entry point. Bootstraps all page-level behaviour (navbar, cookies, toasts, sticky docks, scroll-reveal, pagination) and registers HTMX event handlers. Imports from the modules below. |
+| `main.js` | Entry point. Bootstraps all page-level behaviour (navbar, cookies, toasts, sticky docks, scroll-reveal, pagination) and registers HTMX event handlers, including a global `htmx:configRequest` listener that forwards the CSRF token from the `<meta name="csrf-token">` tag in `base.html`. Imports from the modules below. |
 | `scroll-proxy.js` | Sticky horizontal scrollbar proxy for the wide statement comparison table. Bidirectionally syncs scroll position between the fixed proxy bar and the table wrapper. |
-| `tenant-sync.js` | Tenant sync polling and AFK detection for `/tenant_management`. Polls `/api/tenant-statuses` every 30 seconds; pauses polling after 60 seconds of user inactivity. |
-| `csrf.js` | Shared CSRF helpers (`getCsrfToken`, `appendCsrfTokenToFormData`, `buildCsrfUrlEncodedBody`). |
+| `afk.js` | Sets `window.__userActive` based on recent mouse/keyboard/scroll activity (60 s inactivity threshold). The sync-progress partials reference this variable in their `hx-trigger` expression so HTMX polling automatically pauses when the user walks away or hides the tab. Replaces the pre-contacts-first-unlock `tenant-sync.js` module. |
+| `csrf.js` | Shared CSRF helpers (`getCsrfToken`, `appendCsrfTokenToFormData`, `buildCsrfUrlEncodedBody`) — used by `upload-statements.js`; HTMX flows use the global listener in `main.js` instead. |
 | `upload-statements.js` | Upload page logic — row management, client-side PDF page-count estimation, and server-side preflight gating. |
 | `modal.js` | Thin Bootstrap 5 modal wrapper (`appModal.show(id)`). |
 
-`main.js` is the only file referenced in `base.html` via `<script type="module" src="...">`. The browser fetches `scroll-proxy.js` and `tenant-sync.js` automatically as ES module imports — no extra `<script>` tags are needed.
+`main.js` is the only file referenced in `base.html` via `<script type="module" src="...">`. The browser fetches `scroll-proxy.js` and `afk.js` automatically as ES module imports — no extra `<script>` tags are needed.
 
 ### JS re-initialisation
 
@@ -824,16 +879,28 @@ The script downloads files into `service/static/assets/vendor/` and generates
 - **Writers**
   - `service/sync.py:update_tenant_status` (sets `TenantStatus`, `LastSyncTime`).
   - `service/sync.py:check_load_required` (seeds a row with `TenantStatus=LOADING`; also grants welcome tokens via `BillingService.adjust_token_balance` so new tenants can try the system immediately).
+  - `service/tenant_data_repository.py:update_resource_progress` (writes per-resource `{Resource}Progress` maps + `LastHeartbeatAt`).
+  - `service/tenant_data_repository.py:mark_reconcile_ready` (sets `ReconcileReadyAt` + `LastFullLoadCompletedAt` atomically on first successful full load).
+  - `service/tenant_data_repository.py:try_acquire_sync` (conditional `UpdateItem` to claim the sync lock).
 - **Readers**
-  - `service/tenant_data_repository.py` and `service/app.py` (tenant status APIs/UI gating only).
-- **Example item**:
+  - `service/tenant_data_repository.py`, `service/utils/sync_progress.py`, and `service/utils/auth.py` (tenant status + reconcile gate + per-resource progress for the sync-progress HTMX partials).
+- **Example item** (fully synced, reconcile-ready):
 ```json
 {
   "TenantID": "<tenant_id>",
-  "TenantStatus": "LOADING",
-  "LastSyncTime": 1706448896000
+  "TenantStatus": "FREE",
+  "LastSyncTime": 1706448896000,
+  "ReconcileReadyAt": 1706448896000,
+  "LastFullLoadCompletedAt": 1706448896000,
+  "LastHeartbeatAt": 1706448896000,
+  "ContactsProgress":    {"status": "complete", "records_fetched": 1200, "record_total": 1200, "updated_at": 1706448890000},
+  "InvoicesProgress":    {"status": "complete", "records_fetched": 45000, "record_total": 45000, "updated_at": 1706448896000},
+  "CreditNotesProgress": {"status": "complete", "records_fetched": 300,   "record_total": 300,   "updated_at": 1706448892000},
+  "PaymentsProgress":    {"status": "complete", "records_fetched": 28000, "record_total": 28000, "updated_at": 1706448894000},
+  "PerContactIndexProgress": {"status": "complete", "updated_at": 1706448896000}
 }
 ```
+  Legacy rows written before the contacts-first-unlock change carry only `TenantStatus` + `LastSyncTime`; run `scripts/backfill_reconcile_ready/backfill_reconcile_ready.py` to seed `ReconcileReadyAt` + `*Progress` for those. See the "Tenant sync lifecycle" section above for the full state machine.
 
 **TenantBillingTable** (`cdk/stacks/statement_processor.py`)
 - **Keys**

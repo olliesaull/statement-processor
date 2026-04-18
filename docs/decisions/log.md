@@ -185,3 +185,212 @@ Use this format for each entry:
 **Rationale:** Stripe sends `null` for many fields that logically "should" be dicts. The `dict.get("key", {})` default only applies when the key is missing, not when it's present-but-None. A helper eliminates the entire class of bug: `_dig(obj, "a", "b", "c", default={})` handles None at any level. Scoped to the webhook handler module — not a shared utility — since this is the only file that traverses raw Stripe event JSON.
 
 **References:** `service/stripe_webhook_handler.py` `_dig()`
+
+---
+
+### [2026-04-17] architecture | Per-resource progress fields over richer TenantStatus enum
+
+**Context:** Planning contacts-first unlock: need to represent "contacts done, heavy phase still running" state. Three candidates for the schema.
+
+**Options considered:**
+- Option A: Richer `TenantStatus` enum — split `LOADING` into `LOADING_CONTACTS` / `LOADING_REST`.
+- Option B: Keep coarse `TenantStatus`, add single `ReconcileReadyAt` boolean/timestamp.
+- Option C: Per-resource fields (`ContactsProgress`, `InvoicesProgress`, `CreditNotesProgress`, `PaymentsProgress`, `PerContactIndexProgress`) + `ReconcileReadyAt` timestamp.
+
+**Decision:** Option C.
+
+**Rationale:** Only C gives us real per-resource % progress in the UI (`Invoices 47%`), which is the UX payoff that justifies doing the refactor at all. A/B leave the user staring at a spinner for 30 minutes. C is additive to the DDB row — existing readers keep working. `ReconcileReadyAt` is retained from B as a single authoritative gate for `/statement/<id>`, keeping guard-decorator logic simple (one field read, not five). The Xero SDK exposes `result.pagination.item_count` on list-response models, so real % is wire-supported (confirmed against `xero_python` source).
+
+**References:** `plans/2026-04-17-contacts-first-unlock-plan.md`
+
+---
+
+### [2026-04-17] convention | Overload `TenantStatus.SYNCING` rather than add `LOADING_HEAVY`
+
+**Context:** After splitting initial load into contacts-phase + heavy-phase, the post-contacts state could be a new enum value (`LOADING_HEAVY`) or reuse existing `SYNCING`.
+
+**Options considered:**
+- Option A: New `LOADING_HEAVY` enum value. Clearer naming. Affects ~6 touch-points (enum, `block_when_loading`, `schedule_erasure` transitions, `check_load_required`, API serialization, UI state handling, test suite).
+- Option B: Reuse `SYNCING`. `SYNCING` becomes overloaded: either "post-contacts heavy phase of initial load" or "manual incremental sync". Documented in enum docstring + README + decision log.
+
+**Decision:** Option B — overload + document.
+
+**Rationale:** `ReconcileReadyAt` is the load-bearing distinction (null = initial load never completed; set = reconcile is available). `TenantStatus` is only a navigation gate indicator. Overload is a naming imperfection, not a logic imperfection. ~6 touch-points of enum churn isn't justified when documentation can fully convey the nuance.
+
+**References:** `service/tenant_data_repository.py::TenantStatus`, README "Tenant sync lifecycle", `plans/2026-04-17-contacts-first-unlock-plan.md`
+
+---
+
+### [2026-04-17] architecture | HTMX polling over SSE for sync progress
+
+**Context:** How to deliver live sync-progress updates to the tenant_management page.
+
+**Options considered:**
+- Option A: Faster HTMX polling (3s) with AFK gate and auto-stop on completion.
+- Option B: Server-Sent Events via Redis pub/sub.
+- Option C: WebSockets.
+
+**Decision:** Option A.
+
+**Rationale:** Runtime is gunicorn `gthread` (2 workers × 8 threads) behind nginx behind CloudFront on App Runner. SSE and WebSockets both require switching worker class to gevent/async and tuning nginx `proxy_read_timeout` + sending heartbeats. HTMX polling at 3s cadence with `[window.__userActive && !document.hidden]` gating is declarative (no custom JS beyond the AFK shim), auto-stops when `ReconcileReadyAt` flips (fragment returned without `hx-trigger`), and reuses patterns already present in the codebase. Latency improvement from SSE (~2s) does not justify the infra change.
+
+**References:** `plans/2026-04-17-contacts-first-unlock-plan.md`
+
+---
+
+### [2026-04-17] architecture | Deploy-time migration script for ReconcileReadyAt backfill
+
+**Context:** New `ReconcileReadyAt` attribute doesn't exist on any current DDB row. Existing fully-synced tenants need it set on deploy, otherwise every `/statement/<id>` request hits the not-ready gate.
+
+**Options considered:**
+- Option A: One-shot migration script scanning `TenantData`, setting `ReconcileReadyAt = LastSyncTime` for FREE + synced tenants. Runs during deploy.
+- Option B: Runtime lazy backfill inside `reconcile_ready_required` decorator — first request per tenant triggers the write.
+- Option C: Both.
+
+**Decision:** Option A.
+
+**Rationale:** Migration is a one-time operation; permanent runtime code to handle it is pollution. Script is idempotent and re-runnable (dry-run supported). Lazy backfill (B) forces the gate decorator to contain conditional legacy-compat logic, muddying `ReconcileReadyAt` as the single source of truth. Script pattern follows existing `scripts/manual_token_adjustment/`.
+
+**References:** `scripts/backfill_reconcile_ready/` (planned), `plans/2026-04-17-contacts-first-unlock-plan.md`
+
+---
+
+### [2026-04-17] scope | Defer parallelization, Valkey caching, SSE, token-refresh lock
+
+**Context:** Several adjacent optimizations were considered alongside the contacts-first unlock work.
+
+**Deferred items + rationale:**
+- **Parallel heavy-phase resource fetches**: Xero's 60 rpm per-tenant limit is the real ceiling; concurrency doesn't improve wall-time for large tenants (5 concurrent calls finish in 1/5 the time but consume 5 slots from the 60/min bucket, so total throughput is unchanged).
+- **Token-refresh distributed lock**: required IF parallelization is enabled (concurrent refreshes race and Xero may revoke the token family). Not needed today (single-threaded sync per tenant).
+- **SSE for sync progress**: requires gunicorn worker-class change + Redis pub/sub + nginx proxy-buffering tuning; HTMX polling at 3s is sufficient UX.
+- **Valkey caching of `/tenants/sync-progress`**: single-tab users see ~30% cache hit rate at 2s TTL with 3s polling; per-request DDB cost is already negligible after the `BatchGetItem` fix.
+- **Token refresh during long sync thread**: pre-existing bug (refreshed token lost because background thread cannot write Flask session). Not made worse by this change. Observability (log line on `token_saver` fire) added as part of this plan; actual fix deferred to its own PR.
+
+**References:** `plans/2026-04-17-contacts-first-unlock-plan.md` ("Deferred" section)
+
+---
+
+### [2026-04-17] design | Drop nav sync-indicator dot
+
+**Context:** Phase 4 critique of `plans/2026-04-17-contacts-first-unlock-plan.md`. Original Step 10 planned a passive "sync in progress" dot on the nav tenant-management link, driven by a Flask context processor reading DynamoDB on each full-page render.
+
+**Options considered:**
+- A: Keep the dot with layered caching (Flask.g memoization + session-flag flip + auto-heal on read). ~40 extra lines; ~20–50 DDB reads/user/year.
+- B: Drop the dot entirely. Rely on the progress panel on `/tenant_management` and the not-ready view on `/statement/<id>` for sync visibility.
+
+**Decision:** B — drop the dot.
+
+**Rationale:** The dot is a discoverability enhancement, not a required signal. The progress panel already lives on the dedicated management page (which is also the only page that can trigger sync), and the not-ready view surfaces the state wherever a user would otherwise be blocked. Zero per-request DDB cost in steady state. Users who ignore the progress panel on `/tenant_management` are not the target case — manual-sync triggering is a deliberate action on that page.
+
+**References:** `plans/2026-04-17-contacts-first-unlock-plan.md` (Step 10 — marked DROPPED).
+
+---
+
+### [2026-04-17] convention | Retry vs Sync button rendered server-side, not via JS switching
+
+**Context:** Step 9 tenant-management row now has a single action button that must present as either "Sync" or "Retry sync" depending on the tenant's current state (`LOAD_INCOMPLETE` or any resource `failed` → Retry).
+
+**Decision:** Render the button conditionally in the Jinja template based on server-side state. Do not toggle label/URL in JavaScript after load.
+
+**Rationale:** Eliminates a hydration/flicker class where the row first renders "Sync" then swaps to "Retry" on next poll. The HTMX panel already re-fetches on polling, so a post-state-change label swap arrives naturally via the fragment swap. Keeps button semantics in one place (the template), not split across template + JS.
+
+**References:** `plans/2026-04-17-contacts-first-unlock-plan.md` (Step 9).
+
+---
+
+### [2026-04-18] convention | `ProgressStatus` StrEnum + shared resource→attribute mapping
+
+**Context:** Review of the contacts-first-unlock branch surfaced magic-string
+usage of `"pending"`, `"in_progress"`, `"complete"`, `"failed"` across
+`sync.py`, `routes/api.py`, `utils/sync_progress.py`, and a resource→attribute
+mapping dict duplicated across four files with no canonical source.
+
+**Decision:** Introduce ``ProgressStatus(StrEnum)`` in
+``tenant_data_repository.py`` adjacent to ``TenantStatus``; route all
+progress-status comparisons and writes through it. Delete the duplicate
+`_RESOURCE_PROGRESS_ATTRS` / `_PROGRESS_ATTR_NAMES` / `_RESOURCE_ATTRIBUTES`
+dicts and call ``_progress_attribute_name(resource)`` instead.
+
+**Rationale:** `python-style.md` mandates enums over string literals for small
+fixed vocabularies. A typo in one of the three magic-string sites silently
+misclassifies a sync outcome; an enum makes that class of bug a type error
+at import time. Similarly, DRY on the attribute map means adding a new
+resource touches one file, not four.
+
+**References:** `service/tenant_data_repository.py::ProgressStatus`,
+`service/utils/sync_progress.py`, `service/sync.py`, `service/routes/api.py`.
+
+---
+
+### [2026-04-18] convention | `SYNC_STALE_THRESHOLD_MS` centralised in `tenant_data_repository.py`
+
+**Context:** `_SYNC_STALE_THRESHOLD_MS = 5 * 60 * 1000` was defined
+independently in both `sync.py` and `routes/api.py`. `try_acquire_sync` is the
+only function that acts on it, so a drift between callers would split-brain
+the stale-heartbeat recovery window.
+
+**Decision:** Promote the constant to a module-level `Final[int]` in
+`tenant_data_repository.py` and import it from both `sync.py` and
+`routes/api.py`.
+
+**Rationale:** Single source of truth for a value that has load-bearing
+correctness implications. A tuning change (e.g. after observing real crash
+recovery in production) now affects both call sites atomically.
+
+**References:** `service/tenant_data_repository.py::SYNC_STALE_THRESHOLD_MS`.
+
+---
+
+### [2026-04-18] scope | Drop `sync_contacts_phase` / `sync_heavy_phase` wrapper functions
+
+**Context:** The plan introduced `sync_contacts_phase` and `sync_heavy_phase`
+as "phase helpers" in `sync.py`. In practice `sync_heavy_phase` was never
+called — `sync_data` inlines the heavy loop with retry-skip semantics that the
+helper can't express. `sync_contacts_phase` was a one-line wrapper with one
+caller (`sync_data`) and no extra logic.
+
+**Decision:** Delete both functions. Call `sync_contacts()` directly in
+`sync_data` with a comment explaining why contacts is extracted from the
+heavy loop.
+
+**Rationale:** Dead public functions rot — future edits to the inlined heavy
+loop would silently diverge from the unused `sync_heavy_phase` body. The
+phase-split design intent is preserved by the in-line comment and the README
+"Tenant sync lifecycle" section, which is where readers actually look.
+
+**References:** `service/sync.py::sync_data`.
+
+---
+
+### [2026-04-18] convention | Hardening of sync-lock primitives
+
+**Context:** Sharp-edges audit flagged footgun signatures on the new sync-lock
+APIs — `try_acquire_sync` accepted `stale_threshold_ms <= 0` (which made the
+"older than" comparison trivially true, clobbering an active sync) and
+`update_resource_progress` accepted raw strings for `status`, letting a typo
+silently stall the UI progress bar.
+
+**Decision:**
+- `try_acquire_sync` now raises ``ValueError`` on non-positive
+  ``stale_threshold_ms``.
+- `update_resource_progress.status` type narrowed to ``ProgressStatus``.
+
+**Rationale:** Sync locks are a correctness-critical primitive — a zero
+threshold can silently drop a live sync's data. Type-tightening and positional
+validation shift a future-caller footgun into an import-time / call-time
+error. Neither change affects current callsites.
+
+**References:** `service/tenant_data_repository.py::try_acquire_sync`,
+`service/tenant_data_repository.py::update_resource_progress`.
+
+---
+
+### [2026-04-17] convention | HTMX CSRF wired via `htmx:configRequest` global listener
+
+**Context:** Global `CSRFProtect(app)` requires an `X-CSRFToken` on every state-changing request. Old per-endpoint `buildCsrfUrlEncodedBody()` approach is deleted with `tenant-sync.js`.
+
+**Decision:** One global `htmx:configRequest` listener in `main.js` injects `X-CSRFToken` into every HTMX request from a `<meta name="csrf-token">` tag in `base.html`.
+
+**Rationale:** Alternative (per-button `hx-headers`) repeats the CSRF token on every HTMX element. Global listener is one registration and covers all present and future HTMX POSTs. CSRF token in meta tag is already the Flask-WTF recommended pattern.
+
+**References:** `plans/2026-04-17-contacts-first-unlock-plan.md` (Step 9).

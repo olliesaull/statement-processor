@@ -68,6 +68,12 @@
       </div>
       {% from "macros/landscape_tip.html" import landscape_tip %}
       {{ landscape_tip() }}
+
+      {# Consolidated sync-progress panel — one instance polls /tenants/sync-progress
+         and owns the tenant_views for every session tenant. Per-row Sync / Retry
+         buttons target this element so clicks re-render the panel in place. #}
+      {% include "partials/sync_progress_panel.html" %}
+
       <div class="table-responsive">
         <table class="tenant-table-refined">
           <thead>
@@ -81,6 +87,8 @@
           <tbody>
             {% for tenant in tenants %}
               {% set is_active = current_tenant is not none and tenant.tenantId == current_tenant.tenantId %}
+              {% set view = tenant_views_by_id.get(tenant.tenantId) if tenant_views_by_id is defined else none %}
+              {% set needs_retry = view is not none and (view.status == TenantStatus.LOAD_INCOMPLETE or view.has_failure) %}
               <tr id="row-{{ tenant.tenantId }}">
                 <td class="tenant-name-cell">{{ tenant.tenantName or tenant.tenantId }}</td>
                 <td>
@@ -92,14 +100,24 @@
                   {% else %}
                     <span class="text-muted">Not in use</span>
                   {% endif %}
-                  <div class="tenant-sync-status d-none mt-2" data-tenant-id="{{ tenant.tenantId }}">
-                    <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
-                    <span>Syncing</span>
-                  </div>
                 </td>
                 <td>
                   <div class="tenant-actions">
-                    <button class="btn btn-outline-secondary btn-sm sync-btn" type="button" data-tenant-id="{{ tenant.tenantId }}">Sync</button>
+                    {% if needs_retry %}
+                      <button class="btn btn-outline-warning btn-sm"
+                              type="button"
+                              data-tenant-id="{{ tenant.tenantId }}"
+                              hx-post="{{ url_for('api.retry_tenant_sync', tenant_id=tenant.tenantId) }}"
+                              hx-target="#sync-progress-panel"
+                              hx-swap="outerHTML">Retry sync</button>
+                    {% else %}
+                      <button class="btn btn-outline-secondary btn-sm"
+                              type="button"
+                              data-tenant-id="{{ tenant.tenantId }}"
+                              hx-post="{{ url_for('api.trigger_tenant_sync', tenant_id=tenant.tenantId) }}"
+                              hx-target="#sync-progress-panel"
+                              hx-swap="outerHTML">Sync</button>
+                    {% endif %}
                     <a class="btn btn-outline-success btn-sm" href="{{ url_for('billing.buy_tokens', tenant_id=tenant.tenantId) }}">Buy Pages</a>
                     {% if not is_active %}
                       <form method="post" action="{{ url_for('tenants.select_tenant') }}">

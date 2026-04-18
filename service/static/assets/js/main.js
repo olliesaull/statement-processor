@@ -8,18 +8,19 @@
  *   - Sticky action docks
  *   - Scroll-reveal animations
  *   - Pagination jump popover
- *   - Tenant sync polling (tenant management page only)
  *
- * Also registers global HTMX event handlers that run for every content swap.
+ * Also registers global HTMX event handlers that run for every content swap,
+ * including a CSRF-token injector so HTMX POSTs authenticate like form posts.
  *
  * Extracted sub-modules (imported as ES modules):
  *   - scroll-proxy.js  — sticky horizontal scrollbar proxy
- *   - tenant-sync.js   — sync polling and AFK detection
+ *   - afk.js           — sets window.__userActive for HTMX hx-trigger gating
  */
 
-import { buildCsrfUrlEncodedBody } from "./csrf.js";
 import { setupScrollProxy } from "./scroll-proxy.js";
-import { initTenantSync } from "./tenant-sync.js";
+// afk.js has no exports; importing it wires the document listeners that toggle
+// window.__userActive, which sync-progress hx-trigger expressions gate on.
+import "./afk.js";
 
 // ---------- Constants ----------
 
@@ -58,15 +59,6 @@ const getCookie = (cookieName) => {
 const setCookie = (cookieName, value, maxAgeSeconds) => {
     const secure = window.location.protocol === "https:" ? "; Secure" : "";
     document.cookie = `${cookieName}=${value}; path=/; max-age=${maxAgeSeconds}; SameSite=Lax${secure}`;
-};
-
-/**
- * Immediately expire a cookie by setting max-age=0.
- *
- * @param {string} cookieName
- */
-const clearCookie = (cookieName) => {
-    document.cookie = `${cookieName}=; path=/; max-age=0; SameSite=Lax`;
 };
 
 // ---------- Navbar ----------
@@ -118,46 +110,6 @@ const setupCookieConsentButton = () => {
         setCookie(COOKIE_CONSENT_COOKIE_NAME, "true", ONE_YEAR_SECONDS);
         window.location.href = consentButton.href;
     });
-};
-
-// ---------- Auth redirect helper ----------
-
-/**
- * Check a fetch Response for auth failures and redirect when necessary.
- * Handles two cases:
- *   1. The server redirected to /login (e.g. session expired).
- *   2. A 401 with a cookie_consent_required payload — redirect to /cookies.
- *
- * Also exposed on window so tenant-sync.js can call it without a circular import.
- *
- * @param {Response} response
- * @param {string} fallbackUrl - Login URL to redirect to if no specific URL is found.
- * @returns {Promise<boolean>} true if a redirect was triggered (caller should stop).
- */
-const redirectForUnauthorizedResponse = async (response, fallbackUrl) => {
-    if (response.redirected && response.url.includes("/login")) {
-        clearCookie(SESSION_IS_SET_COOKIE_NAME);
-        window.location.href = response.url;
-        return true;
-    }
-
-    if (response.status !== 401) {
-        return false;
-    }
-
-    clearCookie(SESSION_IS_SET_COOKIE_NAME);
-    try {
-        const payload = await response.clone().json();
-        if (payload && payload.error === "cookie_consent_required") {
-            window.location.href = payload.redirect || `${window.location.origin}/cookies`;
-            return true;
-        }
-    } catch (_error) {
-        // Ignore JSON parse errors and fall through to the default auth redirect.
-    }
-
-    window.location.href = fallbackUrl;
-    return true;
 };
 
 
@@ -366,10 +318,6 @@ window.addEventListener("load", () => {
         ).observe(el);
     });
 
-    // Tenant sync is only active on the tenant management page.
-    if (window.location.pathname === "/tenant_management") {
-        initTenantSync(redirectForUnauthorizedResponse, buildCsrfUrlEncodedBody);
-    }
 });
 
 // ---------- HTMX event handlers ----------
@@ -386,6 +334,16 @@ document.addEventListener("htmx:afterSwap", () => {
 // Show a toast when an HTMX request fails.
 document.addEventListener("htmx:responseError", () => {
     showToast("Something went wrong — please refresh the page.", "danger");
+});
+
+// Forward the server-issued CSRF token on every HTMX-originated request. The
+// meta tag is emitted in base.html; swap targets behind @csrf_protect (sync +
+// retry-sync) rely on this without per-template plumbing.
+document.body.addEventListener("htmx:configRequest", (event) => {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta && event.detail && event.detail.headers) {
+        event.detail.headers["X-CSRFToken"] = meta.content;
+    }
 });
 
 // After a statement is deleted, refresh the count chips from the server.

@@ -5,7 +5,23 @@
 
 {% block content %}
 <div class="page-main">
-  {% if is_processing %}
+  {% if reconcile_not_ready %}
+    {#
+      Tenant is still in the post-contacts heavy phase: contacts are available,
+      but reconciliation data (invoices + credit notes + payments + per-contact
+      index) has not completed. The partial below polls /statement/<id>/wait;
+      once ReconcileReadyAt is set, the endpoint returns HX-Redirect and HTMX
+      navigates the browser to this URL again for a fresh render.
+    #}
+    <div class="page-header statement-page-header d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+      <div class="page-header-content">
+        <p class="page-kicker mb-1">Statement Detail</p>
+        <h1 class="mb-2 mb-md-0">{{ page_heading }}</h1>
+      </div>
+    </div>
+
+    {% include "partials/statement_wait_panel.html" %}
+  {% elif is_processing %}
     {# Page header shown inline for the processing state (no filters or download needed) #}
     <div class="page-header statement-page-header d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
       <div class="page-header-content">

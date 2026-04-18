@@ -25,4 +25,5 @@ openshell/secrets/*
 screenshots/
 snapshots/
 static_analysis_semgrep_1/
+security_audit_*/
 uv.lock
