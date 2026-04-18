@@ -288,7 +288,7 @@ class TenantDataRepository:
         return result
 
     @classmethod
-    def update_resource_progress(cls, tenant_id: str, resource: str, status: str | ProgressStatus, records_fetched: int | None = None, record_total: int | None = None) -> None:
+    def update_resource_progress(cls, tenant_id: str, resource: str, status: ProgressStatus, records_fetched: int | None = None, record_total: int | None = None) -> None:
         """Write per-resource sync progress plus a heartbeat timestamp.
 
         The progress map is written as a whole each time so readers always see
@@ -380,7 +380,12 @@ class TenantDataRepository:
             ClientError: Any non-conditional DynamoDB error (throttling,
                 permission denied, etc.) propagates unchanged — callers should
                 log and surface these rather than swallow them.
+            ValueError: When ``stale_threshold_ms`` is not strictly positive.
+                A zero or negative threshold would clobber a fresh in-flight
+                sync by making the "older than" comparison trivially true.
         """
+        if stale_threshold_ms <= 0:
+            raise ValueError(f"stale_threshold_ms must be positive; got {stale_threshold_ms}")
         now_ms = _now_ms()
         stale_threshold = now_ms - stale_threshold_ms
 

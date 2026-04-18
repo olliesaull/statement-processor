@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
-from tenant_data_repository import TenantDataRepository, TenantStatus
+from tenant_data_repository import ProgressStatus, TenantDataRepository, TenantStatus
 
 
 def test_get_tenant_statuses_defaults_missing_rows_to_free(monkeypatch) -> None:
@@ -203,7 +203,7 @@ class TestUpdateResourceProgress:
 
     def test_writes_progress_map_with_counts(self, monkeypatch):
         calls = _fake_table_capturing_calls(monkeypatch)
-        TenantDataRepository.update_resource_progress("tenant-1", "invoices", "in_progress", records_fetched=100, record_total=500)
+        TenantDataRepository.update_resource_progress("tenant-1", "invoices", ProgressStatus.IN_PROGRESS, records_fetched=100, record_total=500)
 
         assert len(calls) == 1
         call = calls[0]
@@ -222,7 +222,7 @@ class TestUpdateResourceProgress:
 
     def test_per_contact_index_resource_maps_to_pascal_case(self, monkeypatch):
         calls = _fake_table_capturing_calls(monkeypatch)
-        TenantDataRepository.update_resource_progress("tenant-1", "per_contact_index", "in_progress")
+        TenantDataRepository.update_resource_progress("tenant-1", "per_contact_index", ProgressStatus.IN_PROGRESS)
 
         assert len(calls) == 1
         call = calls[0]
@@ -240,7 +240,7 @@ class TestUpdateResourceProgress:
         Downstream UI relies on record_total=null to render indeterminate progress.
         """
         calls = _fake_table_capturing_calls(monkeypatch)
-        TenantDataRepository.update_resource_progress("tenant-1", "invoices", "in_progress", records_fetched=50, record_total=None)
+        TenantDataRepository.update_resource_progress("tenant-1", "invoices", ProgressStatus.IN_PROGRESS, records_fetched=50, record_total=None)
 
         progress = calls[0]["ExpressionAttributeValues"][":progress"]
         assert progress["records_fetched"] == 50
@@ -494,6 +494,18 @@ class TestTryAcquireSync:
         result = TenantDataRepository.try_acquire_sync("tenant-crashed", target_status=TenantStatus.LOADING, stale_threshold_ms=duration_ms)
 
         assert result is True
+
+    def test_rejects_non_positive_stale_threshold(self, monkeypatch):
+        """A zero or negative threshold would clobber any active sync; reject at the door."""
+        calls = self._install_fake_table(monkeypatch, raise_on_conditional=False)
+
+        with pytest.raises(ValueError):
+            TenantDataRepository.try_acquire_sync("tenant-1", target_status=TenantStatus.LOADING, stale_threshold_ms=0)
+        with pytest.raises(ValueError):
+            TenantDataRepository.try_acquire_sync("tenant-1", target_status=TenantStatus.LOADING, stale_threshold_ms=-1)
+
+        # No DDB call was ever issued.
+        assert calls == []
 
     def test_rejects_when_heartbeat_is_fresh(self, monkeypatch):
         """A fresh heartbeat on SYNCING keeps the lock held — reject the second start."""

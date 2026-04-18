@@ -362,6 +362,29 @@ phase-split design intent is preserved by the in-line comment and the README
 
 ---
 
+### [2026-04-18] convention | Hardening of sync-lock primitives
+
+**Context:** Sharp-edges audit flagged footgun signatures on the new sync-lock
+APIs — `try_acquire_sync` accepted `stale_threshold_ms <= 0` (which made the
+"older than" comparison trivially true, clobbering an active sync) and
+`update_resource_progress` accepted raw strings for `status`, letting a typo
+silently stall the UI progress bar.
+
+**Decision:**
+- `try_acquire_sync` now raises ``ValueError`` on non-positive
+  ``stale_threshold_ms``.
+- `update_resource_progress.status` type narrowed to ``ProgressStatus``.
+
+**Rationale:** Sync locks are a correctness-critical primitive — a zero
+threshold can silently drop a live sync's data. Type-tightening and positional
+validation shift a future-caller footgun into an import-time / call-time
+error. Neither change affects current callsites.
+
+**References:** `service/tenant_data_repository.py::try_acquire_sync`,
+`service/tenant_data_repository.py::update_resource_progress`.
+
+---
+
 ### [2026-04-17] convention | HTMX CSRF wired via `htmx:configRequest` global listener
 
 **Context:** Global `CSRFProtect(app)` requires an `X-CSRFToken` on every state-changing request. Old per-endpoint `buildCsrfUrlEncodedBody()` approach is deleted with `tenant-sync.js`.
