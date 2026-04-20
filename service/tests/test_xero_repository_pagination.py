@@ -222,6 +222,65 @@ class TestPaginationMetadataLogging:
         assert entry["item_count"] is None
 
 
+class TestPaginationMetadataTenantIdKwarg:
+    """Background sync runs off the request thread, so the powertools logger's
+    request-scoped ``tenant_id`` context leaks the HTTP-session tenant rather
+    than the tenant actually being synced. Every ``Xero pagination metadata``
+    log must therefore carry ``tenant_id`` as an explicit kwarg matching the
+    fetcher argument — regression guard for the Case 2 Stage 3 smoke finding.
+    """
+
+    SYNC_TENANT = "sync-tenant-id"
+    SESSION_TENANT = "session-tenant-id-which-should-not-leak"
+
+    def _collect_pagination_logs(self, monkeypatch) -> list[dict]:
+        logged_calls: list[dict] = []
+
+        def spy(msg: str, **kwargs):  # noqa: ARG001
+            if msg == "Xero pagination metadata":
+                logged_calls.append(kwargs)
+
+        # Set a different tenant_id on the logger context to simulate request-thread leakage.
+        monkeypatch.setattr(xero_module.logger, "info", spy)
+        return logged_calls
+
+    def test_invoices_log_has_explicit_tenant_id_kwarg(self, monkeypatch) -> None:
+        api = MagicMock()
+        api.get_invoices.return_value = _make_invoice_result(invoices=[], pagination=_make_pagination(item_count=1, page_count=1))
+        logged = self._collect_pagination_logs(monkeypatch)
+
+        get_invoices(tenant_id=self.SYNC_TENANT, api=api)
+
+        assert logged[0].get("tenant_id") == self.SYNC_TENANT
+
+    def test_credit_notes_log_has_explicit_tenant_id_kwarg(self, monkeypatch) -> None:
+        api = MagicMock()
+        api.get_credit_notes.return_value = _make_credit_note_result(credit_notes=[], pagination=_make_pagination(item_count=1, page_count=1))
+        logged = self._collect_pagination_logs(monkeypatch)
+
+        get_credit_notes(tenant_id=self.SYNC_TENANT, api=api)
+
+        assert logged[0].get("tenant_id") == self.SYNC_TENANT
+
+    def test_payments_log_has_explicit_tenant_id_kwarg(self, monkeypatch) -> None:
+        api = MagicMock()
+        api.get_payments.return_value = _make_payment_result(payments=[], pagination=_make_pagination(item_count=1, page_count=1))
+        logged = self._collect_pagination_logs(monkeypatch)
+
+        get_payments(tenant_id=self.SYNC_TENANT, api=api)
+
+        assert logged[0].get("tenant_id") == self.SYNC_TENANT
+
+    def test_contacts_log_has_explicit_tenant_id_kwarg(self, monkeypatch) -> None:
+        api = MagicMock()
+        api.get_contacts.return_value = _make_contacts_result(contacts=[], pagination=_make_pagination(item_count=1, page_count=1))
+        logged = self._collect_pagination_logs(monkeypatch)
+
+        get_contacts_from_xero(tenant_id=self.SYNC_TENANT, api=api)
+
+        assert logged[0].get("tenant_id") == self.SYNC_TENANT
+
+
 class TestFetcherProgressCallbacks:
     """Each fetcher fires progress_callback after every page with monotonic counts."""
 
