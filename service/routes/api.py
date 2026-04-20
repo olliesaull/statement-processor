@@ -21,7 +21,18 @@ from utils.sync_progress import render_sync_progress_fragment
 
 api_bp = Blueprint("api", __name__)
 
-_RETRYABLE_STATUSES: frozenset[str] = frozenset({ProgressStatus.PENDING, ProgressStatus.FAILED})
+_RETRYABLE_STATUSES: frozenset[str] = frozenset(
+    {
+        ProgressStatus.PENDING,
+        ProgressStatus.FAILED,
+        # Crashed-mid-fetch resources stay stuck in_progress because sync_data
+        # never reached the "complete"/"failed" write. Safety: try_acquire_sync's
+        # stale-heartbeat gate runs first, so a live sync's in_progress entry
+        # is never reachable here — only crashed (stale-heartbeat) tenants
+        # clear the lock and reach retry-resource selection.
+        ProgressStatus.IN_PROGRESS,
+    }
+)
 # Includes ``per_contact_index`` so a tenant whose 4 fetchers all succeeded but
 # whose index build failed isn't silently stuck — retry-sync with
 # ``{"per_contact_index"}`` routes through sync_data's index-rebuild branch.

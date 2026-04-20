@@ -189,6 +189,66 @@ class TestRetrySyncHtmxResponse:
         assert response.status_code == 409
         assert 'id="sync-progress-panel"' in response.data.decode()
 
+    def test_crashed_mid_fetch_in_progress_is_retryable(self, client, monkeypatch):
+        """Crashed worker leaves a resource as in_progress with a partial count — retry must pick it up.
+
+        Case 3 Stage 3 smoke (2026-04-20): payments fetcher crashed at
+        34000/36219 records, PaymentsProgress stayed ``in_progress`` because
+        sync_data never reached the ``complete`` update. Before the fix,
+        ``_RETRYABLE_STATUSES`` only included pending/failed, so retry-sync
+        silently dropped payments from ``only_run_resources`` and the tenant
+        was stuck in a loop on the downstream index-build failure. Safety
+        against racing a live sync comes from ``try_acquire_sync``'s
+        stale-heartbeat gate, not from excluding in_progress here.
+        """
+        from tenant_data_repository import TenantDataRepository
+
+        c, executor_stub = client
+        payments_crashed_row = {
+            "TenantID": TENANT_ID,
+            "TenantStatus": "SYNCING",
+            "ContactsProgress": COMPLETE,
+            "CreditNotesProgress": COMPLETE,
+            "InvoicesProgress": COMPLETE,
+            "PaymentsProgress": {"status": "in_progress", "records_fetched": 34000, "record_total": 36219},
+            "PerContactIndexProgress": {"status": "pending"},
+        }
+        monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: payments_crashed_row))
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, tid, target_status, stale_threshold_ms: True))
+
+        response = c.post(f"/api/tenants/{TENANT_ID}/retry-sync")
+
+        assert response.status_code == 202
+        payload = response.get_json()
+        assert set(payload["resources"]) == {"payments", "per_contact_index"}
+        _, kwargs = executor_stub.submitted[0]
+        assert kwargs["only_run_resources"] == {"payments", "per_contact_index"}
+
+    def test_mixed_states_includes_all_retry_candidates(self, client, monkeypatch):
+        """complete/failed/in_progress/pending/missing combo resolves to the right retry set."""
+        from tenant_data_repository import TenantDataRepository
+
+        c, executor_stub = client
+        mixed_row = {
+            "TenantID": TENANT_ID,
+            "TenantStatus": "SYNCING",
+            "ContactsProgress": COMPLETE,
+            "CreditNotesProgress": FAILED,
+            "InvoicesProgress": {"status": "in_progress", "records_fetched": 500, "record_total": 2000},
+            "PaymentsProgress": PENDING,
+            # PerContactIndexProgress intentionally omitted — missing should count as retryable.
+        }
+        monkeypatch.setattr(TenantDataRepository, "get_item", classmethod(lambda cls, tid: mixed_row))
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, tid, target_status, stale_threshold_ms: True))
+
+        response = c.post(f"/api/tenants/{TENANT_ID}/retry-sync")
+
+        assert response.status_code == 202
+        payload = response.get_json()
+        assert set(payload["resources"]) == {"credit_notes", "invoices", "payments", "per_contact_index"}
+        _, kwargs = executor_stub.submitted[0]
+        assert kwargs["only_run_resources"] == {"credit_notes", "invoices", "payments", "per_contact_index"}
+
     def test_index_only_failure_can_be_retried(self, client, monkeypatch):
         """A tenant whose 4 fetchers all succeeded but whose index build failed must be retryable.
 
