@@ -1,2 +1,3 @@
--r ../../service/requirements.txt
--e ../../common
+boto3
+redis
+dotenv

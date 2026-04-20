@@ -394,3 +394,28 @@ error. Neither change affects current callsites.
 **Rationale:** Alternative (per-button `hx-headers`) repeats the CSRF token on every HTMX element. Global listener is one registration and covers all present and future HTMX POSTs. CSRF token in meta tag is already the Flask-WTF recommended pattern.
 
 **References:** `plans/2026-04-17-contacts-first-unlock-plan.md` (Step 9).
+
+---
+
+### [2026-04-18] convention | Ops scripts declare their own minimal deps
+
+**Context:** `scripts/backfill_reconcile_ready/requirements.txt` chained
+`-r ../../service/requirements.txt`, which in turn has `-e ../common`. Pip 26
+resolves `-e` paths relative to the invoking CWD, not the requirements file,
+so running `pip install -r requirements.txt` from the script directory (as
+the README instructs) failed: `../common` resolved to `scripts/common`.
+
+**Decision:** Ops scripts under `scripts/` declare the minimal deps they
+actually need rather than reusing `service/requirements.txt`. For the
+reconcile-ready backfill this is `boto3`, `redis`, `dotenv` — exactly what
+`service/config.py` imports. `sp_common` and the full service web stack
+(Flask, Authlib, Stripe, openpyxl, etc.) are not pulled in because neither
+the script nor `config.py` imports them.
+
+**Rationale:** Decouples ops scripts from the service's full dependency set
+(lighter venvs, fewer pip-version footguns), and makes each script's
+dependency surface auditable on its own. Consistent with Python-style
+"one module, one concept": a backfill script shouldn't need Flask.
+
+**References:** `scripts/backfill_reconcile_ready/requirements.txt`,
+`service/config.py`.
