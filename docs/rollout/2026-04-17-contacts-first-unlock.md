@@ -30,7 +30,8 @@ Must hit these user flows manually with a real Xero tenant on staging before pro
 - **Index-only retry** — new path: if only `PerContactIndexProgress=failed`, Retry sync rebuilds the index without re-fetching (added during review).
 - **Wait → HX-Redirect** — navigate to `/statement/<id>` during heavy phase → not-ready view → auto-redirect on completion without manual reload.
 - **Multi-tenant** — two tenants in session, one synced, one mid-sync → panel renders both correctly.
-- **Concurrent sync 409** — second Sync click before the first completes → 409 + error toast via `htmx:responseError`.
+- **Concurrent sync (no 409)** — second `/api/tenants/<id>/sync` POST before the first completes returns 200 with the panel fragment; the worker-side `try_acquire_sync` inside `sync_data` silently drops the overlap with `WARNING sync_data:494 "Sync already in flight; skipping overlapping start"`. The user sees no error toast. This is the intended UX: benign double-clicks and background retries must not surface as errors.
+- **Concurrent retry-sync 409** — overlap on `/api/tenants/<id>/retry-sync` IS rejected with 409 + `htmx:responseError` toast, because retry-sync synchronously acquires the lock before executor submission. Retry is an explicit recovery action the caller expects to observe the outcome of.
 - **`HX-Redirect` through CloudFront** — `curl -i` `/statement/<id>/wait` as an authed user against the staging CloudFront domain; `HX-Redirect` header must reach the client.
 
 ## 4. Production
