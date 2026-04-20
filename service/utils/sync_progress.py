@@ -13,6 +13,7 @@ and the single-tenant ``/statement/<id>/wait`` endpoint (plus the
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -204,7 +205,7 @@ def should_poll(views: list[TenantProgressView]) -> bool:
 _ALL_RESOURCES: tuple[str, ...] = RESOURCE_ORDER + (_PER_CONTACT_INDEX_RESOURCE,)
 
 
-def is_retry_recommended(tenant_item: dict[str, Any] | None, *, now_ms: int, stale_threshold_ms: int = SYNC_STALE_THRESHOLD_MS) -> bool:
+def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, stale_threshold_ms: int = SYNC_STALE_THRESHOLD_MS) -> bool:
     """Return True when the operator should see "Retry sync" instead of "Sync".
 
     Retry is recommended when:
@@ -219,13 +220,18 @@ def is_retry_recommended(tenant_item: dict[str, Any] | None, *, now_ms: int, sta
     ``LastHeartbeatAt`` also keeps Sync — without a stale signal we can't
     prove the sync is dead, so we don't flip the button speculatively.
 
-    The clock is injected via ``now_ms`` so callers are pure and tests
-    don't need to monkeypatch ``time.time``.
+    Args:
+        tenant_item: DynamoDB row for the tenant (or ``None`` for legacy rows).
+        now_ms: injected wall clock in epoch milliseconds so callers stay pure
+            and tests don't need to monkeypatch ``time.time``.
+        stale_threshold_ms: heartbeat age (ms) past which an ``in_progress``
+            resource counts as crashed. Defaults to ``SYNC_STALE_THRESHOLD_MS``
+            to match ``try_acquire_sync``'s lock-acquire gate.
     """
-    if not tenant_item:
+    if tenant_item is None:
         return False
 
-    if str(tenant_item.get("TenantStatus") or "").upper() == TenantStatus.LOAD_INCOMPLETE:
+    if _parse_tenant_status(tenant_item.get("TenantStatus")) == TenantStatus.LOAD_INCOMPLETE:
         return True
 
     heartbeat = tenant_item.get("LastHeartbeatAt")

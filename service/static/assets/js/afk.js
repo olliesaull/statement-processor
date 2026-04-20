@@ -1,19 +1,19 @@
 /**
  * afk.js — Gate HTMX polling on user activity and tab visibility.
  *
- * The prior implementation used an hx-trigger bracket filter
- * ("every 3s[(window.__userActive ?? true) && !document.hidden]") which htmx
- * compiles via `new Function()`. Our CSP forbids 'unsafe-eval', so every poll
- * tick raised a CSP EvalError and — worse — the gate silently fail-opened,
- * leaving polling running unconditionally.
+ * Toggles the `hx-disable` attribute on the polling panels whenever visibility
+ * or activity state changes. htmx checks `hx-disable` at every trigger fire,
+ * so a disabled panel cleanly skips its 3s tick; removing the attribute
+ * resumes polling on the next natural tick.
  *
- * This module instead toggles the `hx-disable` attribute on the polling panels
- * whenever visibility or activity state changes. htmx checks `hx-disable` at
- * every trigger fire, so a disabled panel cleanly skips its 3s tick; removing
- * the attribute resumes polling on the next natural tick.
+ * History: the prior hx-trigger bracket filter relied on `new Function()`,
+ * which our CSP forbids — see `docs/decisions/log.md` entry dated 2026-04-20
+ * ("AFK / visibility gating via `hx-disable`...").
  */
 
 const INACTIVITY_MS = 60_000;
+// Add any new polling panel IDs here when introducing them — elements outside
+// this selector stay ungated and will poll through visibility/AFK changes.
 const POLL_PANEL_SELECTOR = "#sync-progress-panel, #statement-reconcile-not-ready";
 
 window.__userActive = true;
@@ -61,7 +61,14 @@ document.addEventListener("touchstart", markActive, { passive: true });
 
 document.addEventListener("visibilitychange", updatePollingState);
 
-// Initial sync + re-apply after every HTMX swap (outerHTML swaps wipe the
-// attribute since the panel element is replaced wholesale).
+// Initial sync + re-apply after every HTMX swap of a polling panel (outerHTML
+// swaps wipe the attribute since the panel element is replaced wholesale).
+// Scoped to the polling panels so unrelated HTMX swaps elsewhere on the page
+// don't trigger a full selector query.
 document.addEventListener("DOMContentLoaded", updatePollingState);
-document.addEventListener("htmx:afterSwap", updatePollingState);
+document.addEventListener("htmx:afterSwap", (evt) => {
+    const target = evt.detail && evt.detail.target;
+    if (target && target.matches && target.matches(POLL_PANEL_SELECTOR)) {
+        updatePollingState();
+    }
+});

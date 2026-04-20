@@ -7,6 +7,7 @@ sync-progress panel on initial load.
 from __future__ import annotations
 
 import tempfile
+import time
 
 import pytest
 from cachelib import FileSystemCache
@@ -115,7 +116,7 @@ class TestTenantManagementSyncButton:
         """
         from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, TenantDataRepository
 
-        now_ms = int(__import__("time").time() * 1000)
+        now_ms = int(time.time() * 1000)
         stuck_syncing_row = {
             "TenantID": TENANT_ID,
             "TenantStatus": "SYNCING",

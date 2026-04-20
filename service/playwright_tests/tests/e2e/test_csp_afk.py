@@ -34,20 +34,32 @@ def test_tenant_management_polling_emits_no_csp_eval_errors(page: Page) -> None:
     Before fix: htmx compiled the ``every 3s[expr]`` bracket filter via
     ``new Function()``, and every 3s tick raised a CSP ``EvalError`` under the
     finance-app CSP (no ``'unsafe-eval'``).
+
+    Listens to ``pageerror`` AND ``console`` because browsers typically surface
+    CSP ``EvalError`` as a console-level error rather than an uncaught
+    exception — pageerror alone would stay green while the regression is
+    present.
     """
     errors: list[str] = []
-    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+    page.on("console", lambda msg: errors.append(f"console.{msg.type}: {msg.text}") if msg.type == "error" else None)
 
     _login(page)
     page.wait_for_url("**/tenant_management", timeout=10_000)
     page.wait_for_timeout(6_000)  # observe at least two 3s ticks
 
-    eval_errors = [e for e in errors if "EvalError" in e or "unsafe-eval" in e]
-    assert eval_errors == [], f"Expected zero CSP EvalErrors; got: {eval_errors}"
+    csp_errors = [e for e in errors if "EvalError" in e or "unsafe-eval" in e or "Content Security Policy" in e]
+    assert csp_errors == [], f"Expected zero CSP eval violations; got: {csp_errors}"
 
 
 def test_polling_pauses_when_tab_becomes_hidden(page: Page) -> None:
-    """Tab visibility must gate polling within one 3s cycle (4s grace)."""
+    """Tab visibility must gate polling. Observe at least two poll cycles of silence.
+
+    Waits ~7 s after the visibility change (more than two 3 s poll cycles) and
+    asserts zero new poll requests. The prior ``<= 1`` threshold over a 4 s
+    window could pass trivially because an unpaused poller could happen to fire
+    exactly once in that span — the stricter window cannot.
+    """
     requests: list[str] = []
     page.on("request", lambda req: requests.append(req.url) if "/tenants/sync-progress" in req.url else None)
 
@@ -66,8 +78,15 @@ def test_polling_pauses_when_tab_becomes_hidden(page: Page) -> None:
         "document.dispatchEvent(new Event('visibilitychange')); }"
     )
 
-    # Wait beyond one poll cycle + grace. Polling should stop.
+    # Mark the boundary: any request in `requests` after this index was fired
+    # after the visibility change. Use the current length rather than elapsed
+    # time so we don't race the network event queue.
+    hidden_boundary = len(requests)
+
+    # Wait beyond two 3s poll cycles so any unpaused poll would fire at least
+    # twice — a single stray in-flight request can no longer mask a regression.
     paused_start = time.monotonic()
-    page.wait_for_timeout(4_000)
-    hidden_requests = len(requests) - baseline
-    assert hidden_requests <= 1, f"Expected polling to pause within one 3s cycle after visibility change; observed {hidden_requests} extra requests in {time.monotonic() - paused_start:.1f}s."
+    page.wait_for_timeout(7_000)
+
+    extra_requests = requests[hidden_boundary:]
+    assert extra_requests == [], f"Polling did not pause after visibility change; got {len(extra_requests)} requests in {time.monotonic() - paused_start:.1f}s: {extra_requests}"

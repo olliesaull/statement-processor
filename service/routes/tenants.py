@@ -68,7 +68,6 @@ def tenant_management():
         logger.exception("Failed to load tenant rows for progress panel", tenant_ids=tenant_ids, error=exc)
         tenant_rows = {}
     tenant_views = build_progress_view(tenants, tenant_rows)
-    tenant_views_by_id = {view.tenant_id: view for view in tenant_views}
     polling = should_poll(tenant_views)
 
     # Compute Retry-sync visibility per tenant against a single "now" so the UI
@@ -89,7 +88,6 @@ def tenant_management():
         subscription_state=subscription_state,
         subscription_tier=subscription_tier,
         tenant_views=tenant_views,
-        tenant_views_by_id=tenant_views_by_id,
         needs_retry_by_id=needs_retry_by_id,
         polling=polling,
         TenantStatus=TenantStatus,

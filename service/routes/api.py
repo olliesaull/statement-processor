@@ -21,18 +21,11 @@ from utils.sync_progress import render_sync_progress_fragment
 
 api_bp = Blueprint("api", __name__)
 
-_RETRYABLE_STATUSES: frozenset[str] = frozenset(
-    {
-        ProgressStatus.PENDING,
-        ProgressStatus.FAILED,
-        # Crashed-mid-fetch resources stay stuck in_progress because sync_data
-        # never reached the "complete"/"failed" write. Safety: try_acquire_sync's
-        # stale-heartbeat gate runs first, so a live sync's in_progress entry
-        # is never reachable here — only crashed (stale-heartbeat) tenants
-        # clear the lock and reach retry-resource selection.
-        ProgressStatus.IN_PROGRESS,
-    }
-)
+# ``IN_PROGRESS`` is retryable because crashed-mid-fetch resources never reach
+# the complete/failed write. Safe because ``try_acquire_sync``'s stale-heartbeat
+# gate runs first — see decision log entry 2026-04-20 ("_RETRYABLE_STATUSES
+# includes IN_PROGRESS") for the full rationale.
+_RETRYABLE_STATUSES: frozenset[str] = frozenset({ProgressStatus.PENDING, ProgressStatus.FAILED, ProgressStatus.IN_PROGRESS})
 # Includes ``per_contact_index`` so a tenant whose 4 fetchers all succeeded but
 # whose index build failed isn't silently stuck — retry-sync with
 # ``{"per_contact_index"}`` routes through sync_data's index-rebuild branch.
@@ -61,6 +54,13 @@ def _collect_retry_resources(tenant_item: dict[str, Any] | None) -> set[str]:
     Missing progress maps count as ``pending`` — e.g. legacy rows before the
     schema additions landed. Empty set means nothing to retry, which the
     endpoint translates to 409.
+
+    No staleness guard on ``IN_PROGRESS`` here: the retry-sync endpoint calls
+    ``try_acquire_sync`` before this function, and that DDB condition rejects
+    a live sync's fresh heartbeat. By the time we select resources, the tenant
+    has already cleared the lock — so every ``IN_PROGRESS`` entry is crashed.
+    ``is_retry_recommended`` (the UI button gate) is separate and does need
+    an explicit staleness check because it runs without touching the lock.
     """
     tenant_item = tenant_item or {}
     retryable: set[str] = set()
