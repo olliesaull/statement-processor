@@ -15,7 +15,10 @@
 <div id="sync-progress-panel"
      class="sync-progress-panel"
      hx-get="/tenants/sync-progress"
-     {% if polling %}hx-trigger="every 3s[(window.__userActive ?? true) && !document.hidden]"{% endif %}
+     {# Visibility / AFK gating is done via afk.js toggling hx-disable on this
+        element — an hx-trigger bracket filter would require CSP unsafe-eval
+        (htmx compiles the expression with new Function()). #}
+     {% if polling %}hx-trigger="every 3s"{% endif %}
      hx-swap="outerHTML">
   {% set any_loading = tenant_views | selectattr('status', 'equalto', TenantStatus.LOADING) | list %}
   {% set any_heavy_phase = tenant_views | selectattr('in_heavy_phase') | list %}
