@@ -394,3 +394,51 @@ error. Neither change affects current callsites.
 **Rationale:** Alternative (per-button `hx-headers`) repeats the CSRF token on every HTMX element. Global listener is one registration and covers all present and future HTMX POSTs. CSRF token in meta tag is already the Flask-WTF recommended pattern.
 
 **References:** `plans/2026-04-17-contacts-first-unlock-plan.md` (Step 9).
+
+---
+
+### [2026-04-20] convention | `_RETRYABLE_STATUSES` includes `IN_PROGRESS`
+
+**Context:** Stage 3 smoke (Case 3, 2026-04-20) killed a gunicorn worker mid-payments fetch. `PaymentsProgress` stayed at `status=in_progress` (the worker never reached the `complete`/`failed` write), `payments.json` was missing in S3, and retry-sync selected only `["per_contact_index"]` which then failed on the missing object in a loop — the tenant was orphaned, unable to recover without manual intervention.
+
+**Decision:** Add `ProgressStatus.IN_PROGRESS` to `_RETRYABLE_STATUSES` in `service/routes/api.py` so retry-sync picks up crashed-mid-fetch resources.
+
+**Rationale:** Protection against racing a live sync does not come from excluding `IN_PROGRESS` from the retry set — it comes from `try_acquire_sync`'s stale-heartbeat gate, which runs first. A live sync's fresh heartbeat returns 409 before any retry-resource selection happens; only crashed (stale-heartbeat) tenants reach the expanded retryable set. Without this change, worker-crash recovery is not a supported path.
+
+**References:** `service/routes/api.py::_RETRYABLE_STATUSES`, `service/tenant_data_repository.py::try_acquire_sync`, `plans/2026-04-20-contacts-first-unlock-stage3-fixes.md` (Step 3).
+
+---
+
+### [2026-04-20] convention | AFK / visibility gating via `hx-disable`, not `hx-trigger` bracket filter
+
+**Context:** The polling partials used `hx-trigger="every 3s[(window.__userActive ?? true) && !document.hidden]"` to pause polling when the tab was hidden or the user was idle. htmx compiles the bracket filter via `new Function(expr)`, which our finance-app CSP refuses (`'unsafe-eval'` is not allowed). The filter silently fail-opened — polling ran 100% of the time — and also raised a console `EvalError` on every 3s tick.
+
+**Decision:** Use plain `hx-trigger="every 3s"` and have `afk.js` toggle the `hx-disable` attribute on `#sync-progress-panel` and `#statement-reconcile-not-ready` via `visibilitychange` + throttled activity events.
+
+**Rationale:** `hx-disable` is evaluated dynamically per trigger fire, so a disabled panel cleanly skips its 3s tick. Kept the existing `window.__userActive` signal so future consumers (if any) have a stable contract. Weakening CSP to allow `'unsafe-eval'` was not considered — this is a finance app, and the cost-benefit of eval permissions for a cosmetic polling filter is negative.
+
+**References:** `service/static/assets/js/afk.js`, `service/templates/partials/sync_progress_panel.html`, `service/templates/partials/statement_wait_panel.html`, `plans/2026-04-20-contacts-first-unlock-stage3-fixes.md` (Step 5).
+
+---
+
+### [2026-04-20] design | `/sync` stays fire-and-forget; `/retry-sync` keeps synchronous acquire
+
+**Context:** The rollout doc originally described `POST /api/tenants/<id>/sync` as returning 409 on concurrent clicks with an `htmx:responseError` toast. Actual behaviour: both POSTs return 200 with the panel fragment, and the worker-side `try_acquire_sync` inside `sync_data` silently drops the overlap with a WARNING log. Only `POST /api/tenants/<id>/retry-sync` synchronously acquires the lock before executor submission, and therefore returns 409 on concurrent calls.
+
+**Decision:** Correct the runbook to match actual behaviour. Do not add symmetric 409 behaviour to `/sync`.
+
+**Rationale:** Worker-side dedup on `/sync` is the right UX: benign double-clicks and background retries must not surface as errors. `/retry-sync` keeps the synchronous 409 because it is an explicit recovery action — the caller expects to observe the outcome of its invocation. Making `/sync` symmetric would add error-toast noise for no user benefit. Revisit if product signals confusion.
+
+**References:** `service/routes/api.py::trigger_tenant_sync`, `service/routes/api.py::retry_tenant_sync`, `service/sync.py::sync_data`, `docs/rollout/2026-04-17-contacts-first-unlock.md`, `plans/2026-04-20-contacts-first-unlock-stage3-fixes.md` (Step 2).
+
+---
+
+### [2026-04-20] design | Stuck-SYNCING tenants surface Retry sync based on heartbeat staleness
+
+**Context:** `TenantStatus=SYNCING` alone does not distinguish "live work in progress" from "crashed thread, heartbeat frozen". Case 3 Stage 3 smoke showed operators the plain `Sync` button against a worker whose heartbeat was already past the 5-minute stale threshold; clicking Sync silently no-ops because `sync_data` bails in the worker thread before touching any resources. Retry sync succeeds in the same state.
+
+**Decision:** The tenant-management action button uses the pure helper `is_retry_recommended(tenant_item, now_ms=..., stale_threshold_ms=SYNC_STALE_THRESHOLD_MS)` to pick Sync vs Retry sync. Retry is recommended on `LOAD_INCOMPLETE`, any failed resource, or any `in_progress` resource whose `LastHeartbeatAt` is older than the stale threshold.
+
+**Rationale:** The same heartbeat threshold is already the lock-acquire gate, so reusing it for the UI means the button the operator sees maps directly to whether retry-sync will succeed. `in_progress` with a fresh heartbeat (or missing heartbeat — defensive) keeps the Sync button to avoid flipping speculatively while a live sync is still making progress. `now_ms` is injected so the helper is pure and tests don't monkeypatch time.
+
+**References:** `service/utils/sync_progress.py::is_retry_recommended`, `service/routes/tenants.py::tenant_management`, `service/tenant_data_repository.py::SYNC_STALE_THRESHOLD_MS`, `plans/2026-04-20-contacts-first-unlock-stage3-fixes.md` (Step 4).
