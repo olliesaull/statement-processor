@@ -13,13 +13,14 @@ and the single-tenant ``/statement/<id>/wait`` endpoint (plus the
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
 from flask import render_template
 
-from tenant_data_repository import ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
+from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
 
 # Display order matches the sync order in ``sync.py`` — users see fetchers finish
 # in the same sequence the backend runs them.
@@ -199,6 +200,55 @@ def should_poll(views: list[TenantProgressView]) -> bool:
     if not views:
         return False
     return any(not view.all_complete for view in views)
+
+
+_ALL_RESOURCES: tuple[str, ...] = RESOURCE_ORDER + (_PER_CONTACT_INDEX_RESOURCE,)
+
+
+def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, stale_threshold_ms: int = SYNC_STALE_THRESHOLD_MS) -> bool:
+    """Return True when the operator should see "Retry sync" instead of "Sync".
+
+    Retry is recommended when:
+    - ``TenantStatus == LOAD_INCOMPLETE`` — an earlier sync bailed before
+      reconcile prep finished.
+    - Any per-resource progress map is ``failed``.
+    - Any per-resource progress map is ``in_progress`` AND ``LastHeartbeatAt``
+      is older than ``stale_threshold_ms`` — the worker crashed mid-fetch.
+
+    ``in_progress`` with a fresh heartbeat keeps the Sync button (no Retry
+    noise while a live sync is still making progress). A missing
+    ``LastHeartbeatAt`` also keeps Sync — without a stale signal we can't
+    prove the sync is dead, so we don't flip the button speculatively.
+
+    Args:
+        tenant_item: DynamoDB row for the tenant (or ``None`` for legacy rows).
+        now_ms: injected wall clock in epoch milliseconds so callers stay pure
+            and tests don't need to monkeypatch ``time.time``.
+        stale_threshold_ms: heartbeat age (ms) past which an ``in_progress``
+            resource counts as crashed. Defaults to ``SYNC_STALE_THRESHOLD_MS``
+            to match ``try_acquire_sync``'s lock-acquire gate.
+    """
+    if tenant_item is None:
+        return False
+
+    if _parse_tenant_status(tenant_item.get("TenantStatus")) == TenantStatus.LOAD_INCOMPLETE:
+        return True
+
+    heartbeat = tenant_item.get("LastHeartbeatAt")
+    heartbeat_ms = int(heartbeat) if isinstance(heartbeat, (int, float, Decimal)) else None
+    stale = heartbeat_ms is not None and (heartbeat_ms + stale_threshold_ms) < now_ms
+
+    for resource in _ALL_RESOURCES:
+        progress = tenant_item.get(_progress_attribute_name(resource))
+        if not isinstance(progress, dict):
+            continue
+        status = str(progress.get("status") or "")
+        if status == ProgressStatus.FAILED:
+            return True
+        if status == ProgressStatus.IN_PROGRESS and stale:
+            return True
+
+    return False
 
 
 def render_sync_progress_fragment(session_tenants: list[Any]) -> str:

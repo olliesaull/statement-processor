@@ -126,8 +126,12 @@ def get_contacts_from_xero(
             batch = result.contacts or []
             if page == 1:
                 pagination = getattr(result, "pagination", None)
+                # Pass tenant_id explicitly: the powertools logger's request-scoped
+                # context leaks the HTTP-session tenant into this background thread
+                # (see rollout log, 2026-04-20). Kwargs override context.
                 logger.info(
                     "Xero pagination metadata",
+                    tenant_id=tenant_id,
                     resource="contacts",
                     has_pagination=pagination is not None,
                     item_count=getattr(pagination, "item_count", None) if pagination else None,
@@ -226,6 +230,7 @@ def get_invoices(tenant_id: str | None = None, modified_since: datetime | None =
                 pagination = getattr(result, "pagination", None)
                 logger.info(
                     "Xero pagination metadata",
+                    tenant_id=tenant_id,
                     resource="invoices",
                     has_pagination=pagination is not None,
                     item_count=getattr(pagination, "item_count", None) if pagination else None,
@@ -311,6 +316,7 @@ def get_credit_notes(tenant_id: str | None = None, modified_since: datetime | No
                 pagination = getattr(result, "pagination", None)
                 logger.info(
                     "Xero pagination metadata",
+                    tenant_id=tenant_id,
                     resource="credit_notes",
                     has_pagination=pagination is not None,
                     item_count=getattr(pagination, "item_count", None) if pagination else None,
@@ -405,6 +411,7 @@ def get_payments(tenant_id: str | None = None, modified_since: datetime | None =
                 pagination = getattr(result, "pagination", None)
                 logger.info(
                     "Xero pagination metadata",
+                    tenant_id=tenant_id,
                     resource="payments",
                     has_pagination=pagination is not None,
                     item_count=getattr(pagination, "item_count", None) if pagination else None,

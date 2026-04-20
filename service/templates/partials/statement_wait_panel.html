@@ -19,7 +19,9 @@
 <div id="statement-reconcile-not-ready"
      class="page-panel page-panel-flat sync-progress-wait-panel text-center py-5"
      hx-get="/statement/{{ statement_id }}/wait"
-     {% if not terminal_failure %}hx-trigger="every 3s[(window.__userActive ?? true) && !document.hidden]"{% endif %}
+     {# Visibility / AFK gating is done via afk.js toggling hx-disable on this
+        element — a bracket filter on hx-trigger would require CSP unsafe-eval. #}
+     {% if not terminal_failure %}hx-trigger="every 3s"{% endif %}
      hx-swap="outerHTML">
   {% if terminal_failure %}
     <p class="mb-1"><strong>Part of the Xero sync failed.</strong></p>

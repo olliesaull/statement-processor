@@ -18,7 +18,7 @@ from tenant_activation import set_active_tenant
 from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import clear_session_is_set_cookie, route_handler_logging, xero_token_required
-from utils.sync_progress import build_progress_view, render_sync_progress_fragment, should_poll
+from utils.sync_progress import build_progress_view, is_retry_recommended, render_sync_progress_fragment, should_poll
 from utils.tenant_status import get_tenant_status
 
 tenants_bp = Blueprint("tenants", __name__)
@@ -68,8 +68,12 @@ def tenant_management():
         logger.exception("Failed to load tenant rows for progress panel", tenant_ids=tenant_ids, error=exc)
         tenant_rows = {}
     tenant_views = build_progress_view(tenants, tenant_rows)
-    tenant_views_by_id = {view.tenant_id: view for view in tenant_views}
     polling = should_poll(tenant_views)
+
+    # Compute Retry-sync visibility per tenant against a single "now" so the UI
+    # matches what try_acquire_sync would see if the operator clicked Retry.
+    now_ms = int(time.time() * 1000)
+    needs_retry_by_id = {tid: is_retry_recommended(tenant_rows.get(tid), now_ms=now_ms) for tid in tenant_ids}
 
     logger.info("Rendering tenant_management page", current_tenant_id=current_tenant_id, tenant_ids=tenant_ids, current_tenant_token_balance=ct_token_balance)
 
@@ -84,7 +88,7 @@ def tenant_management():
         subscription_state=subscription_state,
         subscription_tier=subscription_tier,
         tenant_views=tenant_views,
-        tenant_views_by_id=tenant_views_by_id,
+        needs_retry_by_id=needs_retry_by_id,
         polling=polling,
         TenantStatus=TenantStatus,
     )
