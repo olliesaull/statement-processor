@@ -6,8 +6,8 @@ and multi-tenant view composition from session tenants + DynamoDB rows.
 
 from __future__ import annotations
 
-from tenant_data_repository import TenantStatus
-from utils.sync_progress import RESOURCE_ORDER, build_progress_view, build_tenant_progress_view, should_poll
+from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, TenantStatus
+from utils.sync_progress import RESOURCE_ORDER, build_progress_view, build_tenant_progress_view, is_retry_recommended, should_poll
 
 
 class TestBuildTenantProgressView:
@@ -177,3 +177,85 @@ class TestShouldPoll:
     def test_polls_on_empty_list(self):
         """No session tenants shouldn't keep polling forever — stop immediately."""
         assert should_poll([]) is False
+
+
+class TestIsRetryRecommended:
+    """Surface Retry sync when (and only when) the tenant can't progress without operator intervention.
+
+    ``is_retry_recommended`` gates the Sync vs Retry-sync button on
+    ``/tenant_management``. Heartbeat staleness is the same gate used by
+    ``try_acquire_sync`` — keeping them aligned means the button the user
+    sees maps directly to whether retry-sync will succeed.
+    """
+
+    NOW_MS = 1_700_000_000_000
+    COMPLETE = {"status": "complete", "records_fetched": 10, "record_total": 10}
+
+    def _fully_complete_row(self) -> dict:
+        return {
+            "TenantStatus": "FREE",
+            "ReconcileReadyAt": 1,
+            "ContactsProgress": self.COMPLETE,
+            "CreditNotesProgress": self.COMPLETE,
+            "InvoicesProgress": self.COMPLETE,
+            "PaymentsProgress": self.COMPLETE,
+            "PerContactIndexProgress": {"status": "complete"},
+        }
+
+    def test_reconcile_ready_tenant_returns_false(self):
+        """A FREE tenant that finished reconcile prep must not suggest a retry."""
+        assert is_retry_recommended(self._fully_complete_row(), now_ms=self.NOW_MS) is False
+
+    def test_load_incomplete_returns_true(self):
+        """LOAD_INCOMPLETE is the canonical retry signal — always recommend Retry."""
+        item = {"TenantStatus": "LOAD_INCOMPLETE"}
+        assert is_retry_recommended(item, now_ms=self.NOW_MS) is True
+
+    def test_any_failed_progress_returns_true(self):
+        """A failed resource map should surface Retry even when TenantStatus looks benign."""
+        item = {"TenantStatus": "SYNCING", "InvoicesProgress": {"status": "failed"}}
+        assert is_retry_recommended(item, now_ms=self.NOW_MS) is True
+
+    def test_in_progress_with_fresh_heartbeat_returns_false(self):
+        """A live sync with a recent heartbeat must keep the Sync button (no Retry noise)."""
+        item = {
+            "TenantStatus": "SYNCING",
+            "LastHeartbeatAt": self.NOW_MS - 1_000,  # 1s ago
+            "InvoicesProgress": {"status": "in_progress"},
+        }
+        assert is_retry_recommended(item, now_ms=self.NOW_MS) is False
+
+    def test_in_progress_with_stale_heartbeat_returns_true(self):
+        """Stale heartbeat is the crashed-worker signal — retry is safe and recommended."""
+        item = {
+            "TenantStatus": "SYNCING",
+            "LastHeartbeatAt": self.NOW_MS - (SYNC_STALE_THRESHOLD_MS + 1_000),
+            "PaymentsProgress": {"status": "in_progress", "records_fetched": 34000, "record_total": 36219},
+        }
+        assert is_retry_recommended(item, now_ms=self.NOW_MS) is True
+
+    def test_in_progress_without_heartbeat_returns_false(self):
+        """Defensive: no LastHeartbeatAt means we can't be sure the sync is dead — don't flip the button."""
+        item = {"TenantStatus": "SYNCING", "InvoicesProgress": {"status": "in_progress"}}
+        assert is_retry_recommended(item, now_ms=self.NOW_MS) is False
+
+    def test_erased_returns_false(self):
+        """ERASED is a terminal state; offering Retry is nonsensical."""
+        item = {"TenantStatus": "ERASED"}
+        assert is_retry_recommended(item, now_ms=self.NOW_MS) is False
+
+    def test_none_item_returns_false(self):
+        """A missing row is a legacy tenant — render Sync, not Retry."""
+        assert is_retry_recommended(None, now_ms=self.NOW_MS) is False
+
+    def test_custom_stale_threshold_respected(self):
+        """Callers can override the staleness cut-off (used in tests / future tuning)."""
+        item = {
+            "TenantStatus": "SYNCING",
+            "LastHeartbeatAt": self.NOW_MS - 90_000,  # 90s old
+            "InvoicesProgress": {"status": "in_progress"},
+        }
+        # Default threshold (5 min) treats this as fresh.
+        assert is_retry_recommended(item, now_ms=self.NOW_MS) is False
+        # Caller-provided 60s threshold treats this as stale.
+        assert is_retry_recommended(item, now_ms=self.NOW_MS, stale_threshold_ms=60_000) is True

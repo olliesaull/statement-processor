@@ -87,8 +87,7 @@
           <tbody>
             {% for tenant in tenants %}
               {% set is_active = current_tenant is not none and tenant.tenantId == current_tenant.tenantId %}
-              {% set view = tenant_views_by_id.get(tenant.tenantId) if tenant_views_by_id is defined else none %}
-              {% set needs_retry = view is not none and (view.status == TenantStatus.LOAD_INCOMPLETE or view.has_failure) %}
+              {% set needs_retry = needs_retry_by_id.get(tenant.tenantId, False) if needs_retry_by_id is defined else false %}
               <tr id="row-{{ tenant.tenantId }}">
                 <td class="tenant-name-cell">{{ tenant.tenantName or tenant.tenantId }}</td>
                 <td>

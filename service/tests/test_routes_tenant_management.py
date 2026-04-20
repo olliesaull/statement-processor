@@ -105,6 +105,36 @@ class TestTenantManagementSyncButton:
         # Plain sync button must not be rendered simultaneously.
         assert f'hx-post="/api/tenants/{TENANT_ID}/sync"' not in html
 
+    def test_renders_retry_button_for_stuck_syncing_with_stale_heartbeat(self, client, monkeypatch):
+        """Stuck-SYNCING (crashed worker, stale heartbeat) must surface Retry sync.
+
+        Regression for Case 3 Stage 3 smoke — without this, operators saw the
+        plain Sync button against a worker whose heartbeat was already past
+        the stale threshold; clicking it silently no-ops because sync_data
+        bails before touching any resources.
+        """
+        from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, TenantDataRepository
+
+        now_ms = int(__import__("time").time() * 1000)
+        stuck_syncing_row = {
+            "TenantID": TENANT_ID,
+            "TenantStatus": "SYNCING",
+            "LastHeartbeatAt": now_ms - (SYNC_STALE_THRESHOLD_MS + 60_000),  # 1 min past stale
+            "ContactsProgress": COMPLETE_PROGRESS,
+            "InvoicesProgress": COMPLETE_PROGRESS,
+            "CreditNotesProgress": COMPLETE_PROGRESS,
+            "PaymentsProgress": {"status": "in_progress", "records_fetched": 34000, "record_total": 36219},
+            "PerContactIndexProgress": {"status": "pending"},
+        }
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: stuck_syncing_row for tid in ids}))
+
+        response = client.get("/tenant_management")
+
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert f'hx-post="/api/tenants/{TENANT_ID}/retry-sync"' in html
+        assert ">Retry sync<" in html
+
 
 class TestTenantManagementProgressPanel:
     """Initial render embeds the sync-progress panel so polling starts immediately."""
