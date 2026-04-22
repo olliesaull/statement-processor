@@ -87,6 +87,7 @@ class TenantProgressView:
     reconcile_ready: bool
     resources: list[ResourceProgress] = field(default_factory=list)
     per_contact_index_status: str = ProgressStatus.PENDING
+    last_sync_time_ms: int | None = None
 
     @property
     def has_failure(self) -> bool:
@@ -162,6 +163,9 @@ def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str,
     per_index_raw = item.get(_progress_attribute_name(_PER_CONTACT_INDEX_RESOURCE))
     per_index_status = str(per_index_raw.get("status") or ProgressStatus.PENDING) if isinstance(per_index_raw, dict) else ProgressStatus.PENDING
 
+    last_sync_raw = item.get("LastSyncTime")
+    last_sync_ms = int(last_sync_raw) if isinstance(last_sync_raw, (int, float, Decimal)) else None
+
     return TenantProgressView(
         tenant_id=tenant_id,
         tenant_name=tenant_name,
@@ -169,6 +173,7 @@ def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str,
         reconcile_ready=item.get("ReconcileReadyAt") is not None,
         resources=resources,
         per_contact_index_status=per_index_status,
+        last_sync_time_ms=last_sync_ms,
     )
 
 

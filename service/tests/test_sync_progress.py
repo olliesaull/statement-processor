@@ -111,6 +111,29 @@ class TestBuildTenantProgressView:
         assert view.reconcile_ready is True
         assert view.all_complete is False
 
+    def test_reads_last_sync_time_ms(self):
+        """LastSyncTime is surfaced on the view for the card's Last sync metric."""
+        item = {"LastSyncTime": 1_712_000_000_000}
+
+        view = build_tenant_progress_view("tenant-1", "Acme", item)
+
+        assert view.last_sync_time_ms == 1_712_000_000_000
+
+    def test_last_sync_time_ms_is_none_when_missing(self):
+        """First-ever sync: LastSyncTime absent -> field is None (UI renders muted 'First sync...')."""
+        view = build_tenant_progress_view("tenant-1", "Acme", {})
+
+        assert view.last_sync_time_ms is None
+
+    def test_last_sync_time_ms_normalises_decimal(self):
+        """DynamoDB numeric attributes come back as Decimal; coerce to int so the filter can format it."""
+        from decimal import Decimal
+
+        view = build_tenant_progress_view("tenant-1", "Acme", {"LastSyncTime": Decimal("1712000000000")})
+
+        assert view.last_sync_time_ms == 1_712_000_000_000
+        assert isinstance(view.last_sync_time_ms, int)
+
 
 class TestBuildProgressView:
     """Assemble a list of tenant views from session tenants + BatchGetItem rows."""
