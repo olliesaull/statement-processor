@@ -467,3 +467,80 @@ dependency surface auditable on its own. Consistent with Python-style
 **Rationale:** The same heartbeat threshold is already the lock-acquire gate, so reusing it for the UI means the button the operator sees maps directly to whether retry-sync will succeed. `in_progress` with a fresh heartbeat (or missing heartbeat — defensive) keeps the Sync button to avoid flipping speculatively while a live sync is still making progress. `now_ms` is injected so the helper is pure and tests don't monkeypatch time.
 
 **References:** `service/utils/sync_progress.py::is_retry_recommended`, `service/routes/tenants.py::tenant_management`, `service/tenant_data_repository.py::SYNC_STALE_THRESHOLD_MS`, `plans/2026-04-20-contacts-first-unlock-stage3-fixes.md` (Step 4).
+
+---
+
+### [2026-04-21] architecture | Dedicated AWS Organization for Statement Processor
+
+**Context:** Statement Processor was deployed in a single standalone AWS account (`dotelastic-production`, `747310139457`) with no dev environment. Needed to split dev/prod and move off the standalone account for better isolation, SSO, and consolidated billing.
+
+**Options considered:**
+- A. Add `sp-dev` and `sp-prod` to the existing gwd-hub Organization (shared management account).
+- B. Create a brand-new Organization for Statement Processor (new empty `sp-management` account, two member accounts).
+- C. Convert `dotelastic-production` into an Organization and use it as management.
+
+**Decision:** B — new dedicated Organization.
+
+**Rationale:** A would couple Statement Processor's blast radius to gwd-hub's management account (billing lock, SCP changes, IAM admin errors). C is explicitly counter to AWS best practice, which advises keeping the management account empty. B has ~30 min extra setup cost but gives clean legal/operational separation (e.g., if Statement Processor is ever sold or split into its own entity) and leaves the door open for other dexero apps to join this Org later.
+
+**References:** `plans/2026-04-21-aws-org-migration-plan.md`.
+
+---
+
+### [2026-04-21] infrastructure | App Runner stub deploy in both new accounts before 2026-04-30
+
+**Context:** AWS blocks creation of new App Runner services after 2026-04-30. Existing services continue to work and can be updated. The new prod environment is blocked on domain naming (out of scope), which pushes the real cutover past the deadline. Without mitigation, `sp-prod` would never become App-Runner-eligible.
+
+**Decision:** Deploy a stub App Runner service to both `sp-dev` (full) and `sp-prod` (empty data, no domain, paused immediately) before 2026-04-30. Real prod cutover happens later, on the user's timeline, by updating the stub service rather than creating a new one.
+
+**Rationale:** App Runner service updates continue working post-deadline — only creation is blocked. The stub in `sp-prod` can sit paused (zero compute cost) until the real domain is chosen and LIVE Stripe is ready. Requires the CDK to tolerate `PROD_DOMAIN_NAME=""` (gate CloudFront on `apex_domain`) and `service/oauth_client.py` to tolerate blank `DOMAIN_NAME` in non-local stages (fall back to `request.host`). Both changes land in the pre-deadline refactor.
+
+**References:** `plans/2026-04-21-aws-org-migration-plan.md` (Task A.26 stub; B.7 full re-deploy).
+
+---
+
+### [2026-04-21] security-tradeoff | `X_STATEMENT_CF` rotated and moved to SSM at new-prod launch
+
+**Context:** The CloudFront→AppRunner origin-protection shared secret (`X_STATEMENT_CF`) was hardcoded as a plaintext constant in `cdk/stacks/statement_processor.py` and has been in git history since the CDK was first committed. During the fresh new-prod deploy, there's no downside to rotating.
+
+**Decision:** Rotate the secret for `sp-prod` only (a fresh random value), move the value from a CDK constant to SSM Parameter Store at `/StatementProcessor/X_STATEMENT_CF`, and have CDK resolve it at CloudFormation deploy time via `ssm.StringParameter.value_for_string_parameter`. Dev keeps the current value (doesn't go through CloudFront, so the secret is unused). The SSM parameter is `String` type, not `SecureString`, because `value_for_string_parameter` compiles to the plain `{{resolve:ssm:...}}` dynamic reference which does not support SecureString.
+
+**Rationale:** Free security posture improvement — the migration already involves a fresh CDK deploy, so rotation cost is zero. SecureString would not materially improve protection because the value lands in the CloudFormation template plaintext regardless; rotation on each fresh environment is the meaningful mitigation. Dev's CloudFront absence makes rotation there pointless.
+
+**References:** `plans/2026-04-21-aws-org-migration-plan.md` (A.15 Step 7, B.5 Step 2).
+
+---
+
+### [2026-04-21] convention | Local Flask dev defaults `AWS_PROFILE=sp-dev`; ops scripts default `sp-prod`
+
+**Context:** Pre-migration, ops scripts and local Flask `.env` both defaulted to `AWS_PROFILE=dotelastic-production`. This meant running `make run-app` on a laptop read from and wrote to production DDB/S3 — a subtle data-integrity antipattern.
+
+**Decision:** After migration, local Flask `service/.env` defaults `AWS_PROFILE=sp-dev` (so local dev hits the dedicated dev environment). Ops scripts (`scripts/replace_textract_test`, `scripts/backfill_processing_stage`, etc.) continue to default to the prod profile — `sp-prod` in the new world — because their semantic is "operate against prod". README documents the pattern: local dev is dev-by-default, prod inspection requires explicit override (`AWS_PROFILE=sp-prod make run-app`).
+
+**Rationale:** The new dev environment exists exactly so local testing can run against dev without risk. Keeping ops-script defaults as prod preserves current semantics (those tools are explicitly for prod maintenance). Split defaults plus documentation is cheaper than forcing `AWS_PROFILE` to be set explicitly on every command.
+
+**References:** `plans/2026-04-21-aws-org-migration-plan.md` (A.17, A.18).
+
+---
+
+### [2026-04-21] scope | No DNS cutover from old prod — fresh launch on new domain
+
+**Context:** `cloudcathode.com` was a placeholder domain. User wants to pick a new production domain as part of the migration. Original plan considered a DNS cutover (lower TTL, flip records) but with a placeholder domain being replaced anyway, that machinery is unnecessary.
+
+**Decision:** New prod launches on a brand-new domain (user picks later, registered in Route 53 `sp-prod`). Old `cloudcathode.com` is not redirected or migrated — it's decommissioned after the 30-day retention. The beta tester is notified of the new URL directly.
+
+**Rationale:** With 1 beta tester, the "smooth DNS cutover" value is near-zero. A single clean transition to the new domain is simpler than drop-TTL-then-flip mechanics. The domain registration for `cloudcathode.com` transfers from old prod to `sp-prod` before old-prod teardown, purely to keep it as a backup asset — no active services on it.
+
+**References:** `plans/2026-04-21-aws-org-migration-plan.md` (B.14 for cloudcathode.com transfer; no DNS cutover task).
+
+---
+
+### [2026-04-21] infrastructure | `sp-prod` S3 buckets include account-ID suffix
+
+**Context:** S3 bucket names are globally unique. Old-prod `747310139457` owns `dexero-statement-processor-prod`, `-prod-assets`, and `dexero-bedrock-invocation-logs-prod`. A plain `cdk deploy` into `sp-prod` would fail because CloudFormation can't create buckets with those global names while old prod still holds them.
+
+**Decision:** For `stage == "prod"`, append `-{env.account}` to all three bucket names in the CDK stack. `sp-dev` keeps the un-suffixed names (old prod holds no `-dev` buckets). The suffix is kept after old-prod teardown — removing it would require destroy-and-recreate of the new-prod buckets (S3 has no rename), which isn't worth the churn for cosmetic cleanliness.
+
+**Rationale:** Unblocks stub-prod deploy before old-prod is destroyed, which the 2026-04-30 App Runner deadline requires. The cosmetic cost (a long bucket name with an account ID suffix) is tolerable.
+
+**References:** `plans/2026-04-21-aws-org-migration-plan.md` (A.15 Step 8).
