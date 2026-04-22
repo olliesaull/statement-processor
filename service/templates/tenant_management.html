@@ -62,92 +62,14 @@
       <div class="alert alert-danger" role="alert">{{ error }}</div>
     {% endif %}
 
-    {% if tenants %}
-      <div class="tenant-section-heading">
-        <h2>Connected Tenants</h2>
-      </div>
-      {% from "macros/landscape_tip.html" import landscape_tip %}
-      {{ landscape_tip() }}
+    <div class="tenant-section-heading">
+      <h2>Connected Tenants</h2>
+    </div>
 
-      {# Consolidated sync-progress panel — one instance polls /tenants/sync-progress
-         and owns the tenant_views for every session tenant. Per-row Sync / Retry
-         buttons target this element so clicks re-render the panel in place. #}
-      {% include "partials/sync_progress_panel.html" %}
-
-      <div class="table-responsive">
-        <table class="tenant-table-refined">
-          <thead>
-            <tr>
-              <th scope="col">Tenant Name</th>
-              <th scope="col">Pages</th>
-              <th scope="col">Status</th>
-              <th scope="col">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for tenant in tenants %}
-              {% set is_active = current_tenant is not none and tenant.tenantId == current_tenant.tenantId %}
-              {% set needs_retry = needs_retry_by_id.get(tenant.tenantId, False) if needs_retry_by_id is defined else false %}
-              <tr id="row-{{ tenant.tenantId }}">
-                <td class="tenant-name-cell">{{ tenant.tenantName or tenant.tenantId }}</td>
-                <td>
-                  <span class="tenant-token-balance">{{ tenant_token_balances.get(tenant.tenantId, 0) }}</span>
-                </td>
-                <td>
-                  {% if is_active %}
-                    <span class="badge bg-success">Current Tenant</span>
-                  {% else %}
-                    <span class="text-muted">Not in use</span>
-                  {% endif %}
-                </td>
-                <td>
-                  <div class="tenant-actions">
-                    {% if needs_retry %}
-                      <button class="btn btn-outline-warning btn-sm"
-                              type="button"
-                              data-tenant-id="{{ tenant.tenantId }}"
-                              hx-post="{{ url_for('api.retry_tenant_sync', tenant_id=tenant.tenantId) }}"
-                              hx-target="#sync-progress-panel"
-                              hx-swap="outerHTML">Retry sync</button>
-                    {% else %}
-                      <button class="btn btn-outline-secondary btn-sm"
-                              type="button"
-                              data-tenant-id="{{ tenant.tenantId }}"
-                              hx-post="{{ url_for('api.trigger_tenant_sync', tenant_id=tenant.tenantId) }}"
-                              hx-target="#sync-progress-panel"
-                              hx-swap="outerHTML">Sync</button>
-                    {% endif %}
-                    <a class="btn btn-outline-success btn-sm" href="{{ url_for('billing.buy_tokens', tenant_id=tenant.tenantId) }}">Buy Pages</a>
-                    {% if not is_active %}
-                      <form method="post" action="{{ url_for('tenants.select_tenant') }}">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
-                        <button class="btn btn-outline-primary btn-sm" type="submit">Switch to Tenant</button>
-                      </form>
-                    {% endif %}
-                    {# Subscription warning only checks the current tenant's state. Per-tenant
-                       lookups would add N DynamoDB calls per page load for a cosmetic warning.
-                       The erasure lambda handles subscription cancellation regardless of whether
-                       the user saw this warning. See docs/decisions/log.md. #}
-                    <form method="post" action="{{ url_for('tenants.disconnect_tenant') }}" class="disconnect-form"
-                          data-has-subscription="{{ 'true' if tenant.tenantId == current_tenant.tenantId and subscription_state and subscription_state.status == 'active' else 'false' }}">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                      <input type="hidden" name="tenant_id" value="{{ tenant.tenantId }}">
-                      <input type="hidden" name="erasure_days" value="14">
-                      <button class="btn btn-outline-danger btn-sm" type="submit">Disconnect Tenant</button>
-                    </form>
-                  </div>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="page-panel">
-        <p class="mb-0">No tenants connected yet. Use the button above to add one.</p>
-      </div>
-    {% endif %}
+    {# The card-list partial owns both the populated list and the empty state,
+       polls /tenants/sync-progress, and handles the Sync / Retry / Switch /
+       Disconnect actions per card. No separate table view remains. #}
+    {% include "partials/sync_progress_panel.html" %}
   </div>
 </div>
 
@@ -163,26 +85,26 @@
 
     let activeDisconnectForm = null;
 
-    // Intercept disconnect form submissions to show the housekeeping modal.
-    // If JS fails, the form submits directly with the default erasure_days=14.
-    document.querySelectorAll(".disconnect-form").forEach((form) => {
-      form.addEventListener("submit", (e) => {
-        e.preventDefault();
-        activeDisconnectForm = form;
-        // Reset radio to default (2 weeks).
-        const defaultRadio = document.getElementById("erasure-14");
-        if (defaultRadio) defaultRadio.checked = true;
-        // Toggle subscription warning based on the disconnect form's data attribute.
-        const hasSubscription = form.dataset.hasSubscription === "true";
-        const warning = document.getElementById("subscription-warning");
-        if (warning) {
-          warning.classList.toggle("d-none", !hasSubscription);
-        }
-        appModal.show("housekeeping-modal");
-      });
+    // Delegated submit handler: the disconnect forms live inside the HTMX-polled
+    // #sync-progress-panel, which swaps outerHTML every 3s. Direct bindings on
+    // the form nodes would be lost on each swap, letting the form submit
+    // immediately with the default erasure_days=14 and bypassing the
+    // housekeeping confirmation modal. Delegation on document survives swaps.
+    document.addEventListener("submit", (e) => {
+      const form = e.target.closest(".disconnect-form");
+      if (!form) return;
+      e.preventDefault();
+      activeDisconnectForm = form;
+      const defaultRadio = document.getElementById("erasure-14");
+      if (defaultRadio) defaultRadio.checked = true;
+      const hasSubscription = form.dataset.hasSubscription === "true";
+      const warning = document.getElementById("subscription-warning");
+      if (warning) {
+        warning.classList.toggle("d-none", !hasSubscription);
+      }
+      appModal.show("housekeeping-modal");
     });
 
-    // Confirm button in the modal submits the original form with the selected option.
     const confirmBtn = document.getElementById("housekeeping-modal-confirm");
     if (confirmBtn) {
       confirmBtn.addEventListener("click", () => {

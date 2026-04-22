@@ -1,80 +1,46 @@
 {#
-  sync_progress_panel.html — HTMX-polled progress fragment for tenant management.
+  sync_progress_panel.html — HTMX-polled tenant card list for /tenant_management.
 
   Rendered by:
-    - GET /tenants/sync-progress (the poll target)
-    - /tenant_management initial server render (wraps the same markup)
+    - GET /tenants/sync-progress (the HTMX poll target)
+    - /tenant_management initial server render
+    - POST /api/tenants/<id>/sync, /retry-sync (return the fragment after triggering)
 
   Context:
     tenant_views: list[TenantProgressView]
-    polling: bool — when False the outer element omits hx-trigger so polling stops.
+    polling: bool — when False the outer element omits hx-trigger so polling stops
+    current_tenant_id: str | None
+    tenant_token_balances: dict[str, int]
+    is_active_subscription: bool
+    needs_retry_by_id: dict[str, bool]
 
-  The poller stops once every tenant is reconcile_ready + all resources complete,
-  avoiding a permanent 3s heartbeat against DynamoDB for idle sessions.
+  Open detail state is preserved across swaps by tenant-card-detail.js, which
+  mutates the incoming HTML in htmx:beforeSwap. See docs/decisions/log.md
+  entry dated 2026-04-22 for why beforeSwap (not afterSwap) is used.
 #}
-<div id="sync-progress-panel"
-     class="sync-progress-panel"
-     hx-get="/tenants/sync-progress"
-     {# Visibility / AFK gating is done via afk.js toggling hx-disable on this
-        element — an hx-trigger bracket filter would require CSP unsafe-eval
-        (htmx compiles the expression with new Function()). #}
-     {% if polling %}hx-trigger="every 3s"{% endif %}
-     hx-swap="outerHTML">
-  {% set any_loading = tenant_views | selectattr('status', 'equalto', TenantStatus.LOADING) | list %}
-  {% set any_heavy_phase = tenant_views | selectattr('in_heavy_phase') | list %}
-  {% set any_failure = tenant_views | selectattr('has_failure') | list %}
-
-  {% if any_loading %}
-    <div class="sync-progress-banner sync-progress-banner-loading" role="status">Loading your Xero data&hellip;</div>
-  {% elif any_heavy_phase %}
-    <div class="sync-progress-banner sync-progress-banner-heavy" role="status">
-      Contacts ready &mdash; other data is still syncing. Reconciliation will be available once the full sync completes.
-    </div>
-  {% elif any_failure %}
-    <div class="sync-progress-banner sync-progress-banner-failed" role="status">
-      Part of the sync failed. Use <strong>Retry sync</strong> to re-run the missing resources.
-    </div>
-  {% endif %}
-
+{% from "macros/tenant_card.html" import tenant_card %}
+<ul id="sync-progress-panel"
+    class="tenant-card-list"
+    aria-label="Connected tenants"
+    hx-get="/tenants/sync-progress"
+    {# Visibility / AFK gating via afk.js toggling hx-disable on this element. #}
+    {% if polling %}hx-trigger="every 3s"{% endif %}
+    hx-swap="outerHTML">
   {% if not tenant_views %}
-    <p class="text-muted small mb-0">No tenants connected.</p>
+    <li class="tenant-card-empty">
+      <div class="tenant-card-empty-inner">
+        <p class="mb-0">No tenants connected yet. Use the <strong>Add Tenant</strong> button above to connect one.</p>
+      </div>
+    </li>
   {% endif %}
-
   {% for view in tenant_views %}
-    <section class="sync-progress-tenant" aria-label="Sync progress for {{ view.tenant_name }}">
-      <header class="sync-progress-tenant-name">{{ view.tenant_name }}</header>
-      <ul class="sync-progress-compact">
-        {% for resource in view.resources %}
-          <li class="sync-progress-row {{ 'done' if resource.is_complete else ('active' if resource.is_active else ('failed' if resource.is_failed else 'pending')) }} {% if resource.indeterminate %}indeterminate{% endif %}">
-            <span class="sync-progress-label">{{ resource.display_name }}</span>
-            <span class="sync-progress-value">
-              {% if resource.is_complete %}
-                Done
-              {% elif resource.is_failed %}
-                Failed
-              {% elif resource.is_active %}
-                {% if resource.indeterminate %}
-                  {{ resource.records_fetched or 0 }} fetched
-                {% else %}
-                  {{ resource.records_fetched or 0 }} / {{ resource.record_total }}
-                  {% if resource.percent is not none %}({{ resource.percent }}%){% endif %}
-                {% endif %}
-              {% else %}
-                Pending
-              {% endif %}
-            </span>
-          </li>
-        {% endfor %}
-        <li class="sync-progress-row {{ 'done' if view.per_contact_index_status == 'complete' else ('active' if view.per_contact_index_status == 'in_progress' else ('failed' if view.per_contact_index_status == 'failed' else 'pending')) }}">
-          <span class="sync-progress-label">Contact index</span>
-          <span class="sync-progress-value">
-            {% if view.per_contact_index_status == 'complete' %}Done
-            {% elif view.per_contact_index_status == 'in_progress' %}Building&hellip;
-            {% elif view.per_contact_index_status == 'failed' %}Failed
-            {% else %}Pending{% endif %}
-          </span>
-        </li>
-      </ul>
-    </section>
+    {{ tenant_card(
+        view=view,
+        is_current=(view.tenant_id == current_tenant_id),
+        token_balance=tenant_token_balances.get(view.tenant_id, 0),
+        is_active_subscription=is_active_subscription,
+        needs_retry=needs_retry_by_id.get(view.tenant_id, False),
+        csrf_token=csrf_token()
+    ) }}
   {% endfor %}
-</div>
+</ul>

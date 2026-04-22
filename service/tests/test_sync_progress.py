@@ -111,6 +111,79 @@ class TestBuildTenantProgressView:
         assert view.reconcile_ready is True
         assert view.all_complete is False
 
+    def test_reads_last_sync_time_ms(self):
+        """LastSyncTime is surfaced on the view for the card's Last sync metric."""
+        item = {"LastSyncTime": 1_712_000_000_000}
+
+        view = build_tenant_progress_view("tenant-1", "Acme", item)
+
+        assert view.last_sync_time_ms == 1_712_000_000_000
+
+    def test_last_sync_time_ms_is_none_when_missing(self):
+        """First-ever sync: LastSyncTime absent -> field is None (UI renders muted 'First sync...')."""
+        view = build_tenant_progress_view("tenant-1", "Acme", {})
+
+        assert view.last_sync_time_ms is None
+
+    def test_last_sync_time_ms_normalises_decimal(self):
+        """DynamoDB numeric attributes come back as Decimal; coerce to int so the filter can format it."""
+        from decimal import Decimal
+
+        view = build_tenant_progress_view("tenant-1", "Acme", {"LastSyncTime": Decimal("1712000000000")})
+
+        assert view.last_sync_time_ms == 1_712_000_000_000
+        assert isinstance(view.last_sync_time_ms, int)
+
+    def test_is_finalising_when_fetchers_done_but_index_incomplete(self):
+        """All four Xero fetchers done + per_contact_index still in_progress = 'Finalising'."""
+        done = {"status": "complete", "records_fetched": 10, "record_total": 10}
+        item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": done, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "in_progress"}}
+
+        view = build_tenant_progress_view("t", "n", item)
+
+        assert view.is_finalising is True
+
+    def test_is_not_finalising_when_any_fetcher_incomplete(self):
+        """Any active Xero fetcher means we're still 'Syncing', not 'Finalising'."""
+        done = {"status": "complete", "records_fetched": 10, "record_total": 10}
+        active = {"status": "in_progress", "records_fetched": 5, "record_total": 10}
+        item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": active, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "in_progress"}}
+
+        view = build_tenant_progress_view("t", "n", item)
+
+        assert view.is_finalising is False
+
+    def test_is_not_finalising_when_index_complete(self):
+        """All five complete -> Ready, not Finalising."""
+        done = {"status": "complete", "records_fetched": 10, "record_total": 10}
+        item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": done, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "complete"}}
+
+        view = build_tenant_progress_view("t", "n", item)
+
+        assert view.is_finalising is False
+
+    def test_is_not_finalising_when_index_failed(self):
+        """Failed index is a failure state, not a finalising state."""
+        done = {"status": "complete", "records_fetched": 10, "record_total": 10}
+        item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": done, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "failed"}}
+
+        view = build_tenant_progress_view("t", "n", item)
+
+        assert view.is_finalising is False
+
+    def test_is_not_finalising_when_resources_empty(self):
+        """Direct construction with no resources must not vacuously report Finalising.
+
+        ``all([])`` is True in Python; without the explicit guard the property
+        would report Finalising for any directly-constructed view with an
+        empty resources list, which is semantically wrong.
+        """
+        from utils.sync_progress import TenantProgressView
+
+        view = TenantProgressView(tenant_id="t", tenant_name="n", status=TenantStatus.FREE, reconcile_ready=False, resources=[])
+
+        assert view.is_finalising is False
+
 
 class TestBuildProgressView:
     """Assemble a list of tenant views from session tenants + BatchGetItem rows."""

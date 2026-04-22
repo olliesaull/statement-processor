@@ -20,7 +20,9 @@ from typing import Any
 
 from flask import render_template
 
-from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
+from pricing_config import SUBSCRIPTION_TIERS
+from tenant_billing_repository import SubscriptionState
+from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantStatus, _progress_attribute_name
 
 # Display order matches the sync order in ``sync.py`` — users see fetchers finish
 # in the same sequence the backend runs them.
@@ -87,6 +89,7 @@ class TenantProgressView:
     reconcile_ready: bool
     resources: list[ResourceProgress] = field(default_factory=list)
     per_contact_index_status: str = ProgressStatus.PENDING
+    last_sync_time_ms: int | None = None
 
     @property
     def has_failure(self) -> bool:
@@ -108,6 +111,19 @@ class TenantProgressView:
         """True during initial post-contacts phase — drives the wait banner copy."""
         contacts = next((r for r in self.resources if r.resource == "contacts"), None)
         return (not self.reconcile_ready) and contacts is not None and contacts.is_complete
+
+    @property
+    def is_finalising(self) -> bool:
+        """True when all four Xero fetchers are complete but per-contact index is still building.
+
+        Distinguishes "waiting on Xero data" (Syncing) from "waiting on
+        reconcile index build" (Finalising). Both remain syncing-family — the
+        stripe stays blue; only the pill copy changes.
+        """
+        # Guard empty resources: all([]) is True, which would report Finalising
+        # for a directly-constructed view with no resources — the invariant is
+        # "all four Xero fetchers complete", so at least one must exist.
+        return bool(self.resources) and all(r.is_complete for r in self.resources) and self.per_contact_index_status not in (ProgressStatus.COMPLETE, ProgressStatus.FAILED)
 
 
 def _parse_tenant_status(raw: Any) -> TenantStatus:
@@ -162,6 +178,9 @@ def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str,
     per_index_raw = item.get(_progress_attribute_name(_PER_CONTACT_INDEX_RESOURCE))
     per_index_status = str(per_index_raw.get("status") or ProgressStatus.PENDING) if isinstance(per_index_raw, dict) else ProgressStatus.PENDING
 
+    last_sync_raw = item.get("LastSyncTime")
+    last_sync_ms = int(last_sync_raw) if isinstance(last_sync_raw, (int, float, Decimal)) else None
+
     return TenantProgressView(
         tenant_id=tenant_id,
         tenant_name=tenant_name,
@@ -169,6 +188,7 @@ def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str,
         reconcile_ready=item.get("ReconcileReadyAt") is not None,
         resources=resources,
         per_contact_index_status=per_index_status,
+        last_sync_time_ms=last_sync_ms,
     )
 
 
@@ -251,16 +271,64 @@ def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, 
     return False
 
 
-def render_sync_progress_fragment(session_tenants: list[Any]) -> str:
-    """Render the multi-tenant sync-progress fragment for the given session tenants.
+def _subscription_plan_display_name(subscription_state: SubscriptionState | None) -> str | None:
+    """Return the display name of the current subscription tier, or ``None``.
 
-    One DynamoDB ``BatchGetItem`` per render; returns the pre-rendered HTML
-    string. Centralised so both the HTMX poll endpoint (``tenants.sync_progress``)
-    and the post-trigger return path in the API blueprint (``api.sync``,
-    ``api.retry-sync``) swap the exact same fragment shape into the panel.
+    Pure formatter — does not gate on ``status``. Callers that need to
+    distinguish "has an active subscription" from "has a tier_id from a
+    cancelled/past_due row" must check ``subscription_state.status`` separately
+    (see ``render_sync_progress_fragment``'s ``is_active_subscription`` kwarg
+    and the summary-strip ``{% if subscription_state.status == 'active' %}``
+    branch on ``tenant_management.html``).
     """
-    tenant_ids = [t.get("tenantId") for t in session_tenants if isinstance(t, dict) and t.get("tenantId")]
-    rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
-    tenant_views = build_progress_view(session_tenants, rows)
+    if not subscription_state:
+        return None
+    tier = SUBSCRIPTION_TIERS.get(subscription_state.tier_id)
+    return tier.display_name if tier else None
+
+
+def render_sync_progress_fragment(
+    session_tenants: list[Any],
+    *,
+    tenant_rows: dict[str, dict[str, Any]],
+    current_tenant_id: str | None,
+    tenant_token_balances: dict[str, int],
+    is_active_subscription: bool,
+    needs_retry_by_id: dict[str, bool],
+) -> str:
+    """Render the tenant-card list fragment.
+
+    Callers pre-fetch ``tenant_rows`` (one DynamoDB BatchGetItem) and pass it
+    in so ``needs_retry_by_id`` can be derived against the same row snapshot
+    this fragment renders — avoids a second round-trip per poll.
+
+    Args:
+        session_tenants: ``session["xero_tenants"]``, validated inside.
+        tenant_rows: ``{tenant_id: TenantData item}`` from a single
+            ``TenantDataRepository.get_many`` call in the caller.
+        current_tenant_id: ``session["xero_tenant_id"]``, used for the
+            is-current card flag.
+        tenant_token_balances: ``{tenant_id: balance}`` from
+            ``TenantBillingRepository.get_tenant_token_balances``.
+        is_active_subscription: True iff the current tenant has a
+            subscription row with ``status == 'active'``. Drives the
+            disconnect form's subscription-warning data attribute; kept as a
+            pre-computed bool so the macro doesn't need to reach into
+            ``SubscriptionState`` shape.
+        needs_retry_by_id: ``{tenant_id: bool}`` from ``is_retry_recommended``.
+
+    Returns:
+        Rendered HTML string.
+    """
+    tenant_views = build_progress_view(session_tenants, tenant_rows)
     polling = should_poll(tenant_views)
-    return render_template("partials/sync_progress_panel.html", tenant_views=tenant_views, polling=polling, TenantStatus=TenantStatus)
+    return render_template(
+        "partials/sync_progress_panel.html",
+        tenant_views=tenant_views,
+        polling=polling,
+        current_tenant_id=current_tenant_id,
+        tenant_token_balances=tenant_token_balances,
+        is_active_subscription=is_active_subscription,
+        needs_retry_by_id=needs_retry_by_id,
+        TenantStatus=TenantStatus,
+    )

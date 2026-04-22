@@ -544,3 +544,53 @@ dependency surface auditable on its own. Consistent with Python-style
 **Rationale:** Unblocks stub-prod deploy before old-prod is destroyed, which the 2026-04-30 App Runner deadline requires. The cosmetic cost (a long bucket name with an account ID suffix) is tolerable.
 
 **References:** `plans/2026-04-21-aws-org-migration-plan.md` (A.15 Step 8).
+
+---
+
+### [2026-04-22] convention | `render_sync_progress_fragment` takes pre-fetched `tenant_rows`
+
+**Context:** Phase 4 critique of the tenant-management-cards plan surfaced that the original fragment renderer performed its own `TenantDataRepository.get_many(tenant_ids)` call, but every caller (the poll route and the two API triggers in `routes/api.py`) *also* needs the rows in-scope to compute `needs_retry_by_id` via `is_retry_recommended`. The original plan had both layers calling `get_many`, doubling DynamoDB reads on every 3s poll.
+
+**Decision:** The renderer is pure given a row snapshot — callers own the BatchGetItem. `render_sync_progress_fragment` now takes `tenant_rows: dict[str, dict[str, Any]]` as a required keyword argument and never touches DynamoDB directly. The private `_render_sync_progress_fragment` wrapper in `routes/api.py` centralises the fetch for Sync/Retry return paths so the five call sites inside `trigger_tenant_sync` and `retry_tenant_sync` all share one round-trip.
+
+**Rationale:** One BatchGetItem per render, not two. Also keeps `needs_retry_by_id` computed against the exact row snapshot the UI is about to paint — no race between the retry-decision read and the progress-display read.
+
+**References:** `plans/2026-04-22-tenant-management-cards-plan.md` (Task 7 Steps 2-4).
+
+---
+
+### [2026-04-22] UX | Tenant management: replace table with per-tenant cards
+
+**Context:** `/tenant_management` rendered a top `sync_progress_panel` (banners + per-tenant compact list) above a `tenant-table-refined` table with the same tenants, one row each. Users had to cross-reference the top panel with the table row below to find their tenant, and each resource's progress lived far from that tenant's Sync/Retry buttons.
+
+**Decision:** Replace both sections with a single vertical `<ul class="tenant-card-list">` of per-tenant `<li class="tenant-card">` cards. Each card owns state + pills + aggregate progress + expandable resource detail + all actions. The three banner variants (`banner-loading`, `banner-heavy`, `banner-failed`) drop in favour of per-card state pills (`Ready` / `Syncing · N of 4` / `Finalising…` / `Sync failed`) plus a 4px `border-left` stripe colour-coded by state.
+
+**Rationale:** One decision surface per tenant; no cross-referencing. Matches the card pattern validated on `numerint/dexero/web` refactor/ui-overhaul.
+
+**Tradeoff accepted:** Each card is ~150px tall vs. the old ~40px table row, so the page is taller overall. At typical 900-viewport sizes with 1-2 tenants, expanding Show detail pushes the footer by ~112px (reduced from ~148px via `:has()`-triggered `.tenant-content-area` `padding-bottom` shrink). Users with 8+ tenants have the footer already below the fold where the push is invisible.
+
+**References:** `plans/2026-04-22-tenant-management-cards-plan.md`; mockup at `.superpowers/brainstorm/mockups/cards-expandable.html`.
+
+---
+
+### [2026-04-22] UX | Per-contact-index surfaced as `Finalising…`, not folded into Contacts
+
+**Context:** When all four Xero fetchers (Contacts / Credit notes / Invoices / Payments) are complete but `PerContactIndexProgress.status != complete`, the card needs copy that distinguishes "waiting on Xero data" from "waiting on the reconcile index build". Two options considered: (a) fold the index phase into the Contacts resource row (keep Contacts as "Indexing…" until the index build finishes), or (b) add a fifth pill variant `Finalising…` on the card and let the four fetcher rows complete independently.
+
+**Decision:** Option (b). Card pill flips to `Finalising…` once the four fetchers are done but the index is still building. Stripe stays blue (syncing-family) — no new stripe colour. New `TenantProgressView.is_finalising` property gates this on `all(r.is_complete) and per_contact_index_status not in (complete, failed)`.
+
+**Rationale:** Folding the index into Contacts would delay when "Contacts: Done" appears, which blocks other pages from unblocking via the heavy-phase signal. Users need Contacts to flip Done as soon as the raw Xero fetch succeeds, independent of reconcile index build timing.
+
+**References:** `plans/2026-04-22-tenant-management-cards-plan.md` (Task 4).
+
+---
+
+### [2026-04-22] UX | Tenant card detail state preserved across HTMX swaps via `beforeSwap`
+
+**Context:** Tenant cards expose a `Show detail` button that slides open a per-resource detail block via CSS `max-height` transition. The card list lives inside an HTMX polling panel that swaps every 3s. Naive state restoration on `htmx:afterSwap` would re-apply `data-expanded="true"` to the live DOM, which triggers the CSS transition on each poll — the detail would flicker closed then reopen every 3 seconds.
+
+**Decision:** Persist open detail IDs in `sessionStorage` (cleared on tab close). A `htmx:beforeSwap` listener mutates the incoming HTML *string* before the swap to pre-apply `data-expanded="true"` + `aria-expanded="true"`. The new DOM arrives already-open, so no property-change event fires and no transition animates.
+
+**Rationale:** Pre-applying on the response string avoids the property-change event entirely — the alternative (`afterSwap`) fires the transition on every 3s tick. `hx-preserve` on the detail block was rejected because it freezes contents (per-resource counts would go stale) — opposite of what the progress UI needs.
+
+**References:** `plans/2026-04-22-tenant-management-cards-plan.md` (Task 10); `service/static/assets/js/tenant-card-detail.js`.

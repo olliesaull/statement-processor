@@ -2668,52 +2668,6 @@ a:focus-visible {
   font-weight: 500;
 }
 
-/* Refined tenant table */
-.tenant-table-refined {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.tenant-table-refined thead th {
-  padding: 0.7rem 1rem;
-  text-align: left;
-  border-bottom: 2px solid var(--slate-900);
-  color: var(--slate-900);
-  font-weight: 600;
-  font-size: 0.8rem;
-}
-
-.tenant-table-refined thead th:not(:first-child) {
-  text-align: center;
-}
-
-.tenant-table-refined tbody td {
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--slate-100);
-  font-size: 0.85rem;
-  color: var(--slate-600);
-}
-
-.tenant-table-refined tbody td:not(:first-child) {
-  text-align: center;
-}
-
-.tenant-table-refined tbody tr:hover {
-  background: var(--slate-50);
-}
-
-.tenant-table-refined .tenant-name-cell {
-  font-weight: 600;
-  color: var(--slate-900);
-}
-
-.tenant-table-refined .tenant-actions {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-
 /* Responsive — summary strip wraps */
 @media (max-width: 768px) {
   .tenant-summary-strip {
@@ -2757,51 +2711,9 @@ a:focus-visible {
   margin: 0;
 }
 
-/* Sync-progress panel on /tenant_management and /statement/<id> wait view.
-   One shared panel polls /tenants/sync-progress every 3s (HTMX trigger); per-
-   tenant rows group resources, and each row carries a state class so the CSS
-   below can paint done/active/pending/failed/indeterminate variants without
-   any JavaScript. */
-.sync-progress-panel {
-  margin-bottom: 1.5rem;
-  padding: 1rem 1.25rem;
-  border: 1px solid var(--slate-200);
-  border-radius: 0.5rem;
-  background: var(--surface, #fff);
-}
-
-.sync-progress-banner {
-  margin-bottom: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.375rem;
-  font-size: 0.9rem;
-}
-
-.sync-progress-banner-loading {
-  background: color-mix(in srgb, var(--primary, #3b82f6) 10%, transparent);
-  color: var(--slate-900);
-}
-
-.sync-progress-banner-heavy {
-  background: color-mix(in srgb, var(--info, #0ea5e9) 10%, transparent);
-  color: var(--slate-900);
-}
-
-.sync-progress-banner-failed {
-  background: color-mix(in srgb, var(--danger, #ef4444) 10%, transparent);
-  color: var(--slate-900);
-}
-
-.sync-progress-tenant {
-  margin-top: 0.5rem;
-}
-
-.sync-progress-tenant-name {
-  font-weight: 600;
-  margin-bottom: 0.25rem;
-  color: var(--slate-900);
-}
-
+/* Compact sync-progress list used by /statement/<id> wait view.
+   Each .sync-progress-row carries a done/active/pending/failed state class
+   so the CSS below can paint variants without any JavaScript. */
 .sync-progress-compact {
   list-style: none;
   margin: 0;
@@ -2843,28 +2755,292 @@ a:focus-visible {
   color: var(--slate-500, #64748b);
 }
 
-/* Indeterminate: pagination totals unknown — render a subtle animated barber
-   stripe in the value cell so the UI reads as "working" without guessing %. */
-@keyframes sync-progress-indeterminate {
-  0% { background-position: 0 0; }
-  100% { background-position: 1rem 0; }
-}
-
-.sync-progress-compact .sync-progress-row.indeterminate .sync-progress-value {
-  background: repeating-linear-gradient(
-    -45deg,
-    color-mix(in srgb, var(--primary, #3b82f6) 20%, transparent) 0 0.25rem,
-    transparent 0.25rem 0.5rem
-  );
-  background-size: 1rem 100%;
-  animation: sync-progress-indeterminate 0.75s linear infinite;
-  padding: 0 0.375rem;
-  border-radius: 0.25rem;
-}
-
 /* Statement wait view uses the same compact list inside a centered panel. */
 .sync-progress-wait-panel .sync-progress-compact {
   margin-top: 0.75rem;
+}
+
+/* endregion */
+
+/* region Tenant management cards */
+
+/* When any tenant card's detail is expanded, let the content-area's bottom
+   padding shrink so the expansion absorbs some of its own push instead of
+   moving the footer by the full detail height. Uses :has() which is
+   supported in all modern browsers (Chrome 105+/Safari 15.4+). */
+.tenant-content-area {
+  transition: padding-bottom 0.2s ease;
+}
+.tenant-content-area:has(.agg-detail[data-expanded="true"]) {
+  padding-bottom: 0.75rem;
+}
+
+.tenant-card-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Stripe via border-left so it follows the card's border-radius naturally
+   (no overflow:hidden needed). */
+.tenant-card {
+  position: relative;
+  background: var(--white);
+  border: 1px solid var(--slate-200);
+  border-left: 4px solid var(--slate-300);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.18s, box-shadow 0.18s, border-color 0.18s;
+}
+.tenant-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+.tenant-card.is-syncing    { border-left-color: var(--blue-500); }
+.tenant-card.is-finalising { border-left-color: var(--blue-500); }
+.tenant-card.is-complete   { border-left-color: var(--green-600); }
+.tenant-card.is-failed     { border-left-color: var(--red-500); }
+.tenant-card.is-current {
+  border-color: var(--blue-100);
+  background: linear-gradient(180deg, var(--blue-50) 0%, var(--white) 48px);
+}
+.tenant-card.is-current.is-complete   { border-left-color: var(--green-600); }
+.tenant-card.is-current.is-syncing    { border-left-color: var(--blue-500); }
+.tenant-card.is-current.is-finalising { border-left-color: var(--blue-500); }
+.tenant-card.is-current.is-failed     { border-left-color: var(--red-500); }
+
+.tenant-card-inner { padding: 1.1rem 1.3rem; }
+
+.tenant-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+.tenant-card-title {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--slate-900);
+  margin: 0;
+  flex: 1;
+  min-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tenant-card-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  line-height: 1;
+}
+.pill .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pill.current { background: var(--blue-50); color: var(--blue-700); border: 1px solid var(--blue-100); }
+.pill.syncing { background: var(--blue-50); color: var(--blue-700); }
+.pill.syncing .dot { background: var(--blue-500); animation: tc-pulse 1.4s ease-in-out infinite; }
+.pill.complete { background: var(--green-100); color: #0f3b1f; }
+.pill.complete .dot { background: var(--green-600); }
+.pill.failed   { background: var(--red-100); color: #7f1d1d; }
+.pill.failed .dot   { background: var(--red-500); }
+@keyframes tc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+.tenant-card-meta {
+  display: flex;
+  gap: 1.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.65rem;
+  color: var(--slate-600);
+  font-size: 0.82rem;
+}
+.tenant-card-meta .meta-label {
+  display: block;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 1.3px;
+  color: var(--slate-400);
+  font-weight: 700;
+  margin-bottom: 0.15rem;
+}
+.tenant-card-meta .meta-value { font-weight: 600; color: var(--slate-900); }
+.tenant-card-meta .meta-value.muted { color: var(--slate-500); font-weight: 500; }
+
+.tenant-card-divider {
+  height: 1px;
+  background: var(--slate-100);
+  margin: 0.9rem 0;
+}
+.tenant-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+}
+.tenant-card-actions .btn { font-size: 0.8rem; padding: 0.35rem 0.85rem; }
+
+/* Aggregate summary + expandable detail */
+.agg-row {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-top: 0.15rem;
+  padding: 0.45rem 0;
+  flex-wrap: wrap;
+}
+.agg-bar {
+  flex: 1;
+  max-width: 240px;
+  min-width: 160px;
+  position: relative;
+  height: 6px;
+  background: var(--slate-100);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.agg-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, var(--blue-500), var(--teal-500));
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+/* Pipe-separated text next to the bar. Font-family inherits from body
+   (Outfit) so resource names match the expanded detail rows. */
+.agg-text {
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+}
+.agg-text .seg {
+  padding: 0 0.7rem;
+  line-height: 1.3;
+  border-right: 1px solid var(--slate-200);
+}
+.agg-text .seg:first-child { padding-left: 0; }
+.agg-text .seg:last-child { border-right: none; padding-right: 0; }
+.agg-text .step-name { font-size: 0.95rem; font-weight: 600; color: var(--slate-900); }
+.agg-text .step-count { font-size: 0.85rem; font-weight: 600; color: var(--blue-700); }
+.agg-text .step-ratio { font-size: 0.75rem; color: var(--slate-500); }
+
+.agg-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: transparent;
+  border: 1px solid var(--slate-200);
+  color: var(--slate-600);
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  margin-left: auto;
+}
+.agg-toggle:hover { background: var(--slate-50); color: var(--slate-900); border-color: var(--slate-300); }
+.agg-toggle:focus-visible { outline: 3px solid var(--blue-100); outline-offset: 1px; }
+.agg-toggle .caret { display: inline-block; transition: transform 0.2s ease; }
+.agg-toggle[aria-expanded="true"] .caret { transform: rotate(180deg); }
+.agg-toggle .label-expanded { display: none; }
+.agg-toggle[aria-expanded="true"] .label-collapsed { display: none; }
+.agg-toggle[aria-expanded="true"] .label-expanded { display: inline; }
+
+/* Inline expansion: grows the card (pushes following content down).
+   max-height is set just above the actual content height (~170px) so the
+   close animation doesn't waste ~60% of its duration on empty space. */
+.agg-detail {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.2s ease;
+}
+.agg-detail[data-expanded="true"] { max-height: 220px; }
+.agg-detail-inner {
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--slate-200);
+  margin-top: 0.6rem;
+}
+.agg-detail ul { list-style: none; padding: 0; margin: 0; }
+.agg-detail .resource-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--slate-100);
+  font-size: 0.82rem;
+}
+.agg-detail .resource-row:first-child { border-top: none; }
+.agg-detail .resource-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--white);
+  border: 2px solid var(--slate-300);
+  color: var(--slate-500);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.agg-detail .resource-row.done .resource-icon {
+  background: var(--green-600);
+  border-color: var(--green-600);
+  color: var(--white);
+}
+.agg-detail .resource-row.active .resource-icon { border-color: var(--blue-500); }
+.agg-detail .resource-row.active .resource-icon::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--blue-100);
+  border-top-color: var(--blue-600);
+  animation: tc-spin 0.9s linear infinite;
+}
+@keyframes tc-spin { to { transform: rotate(360deg); } }
+.agg-detail .resource-label { color: var(--slate-900); font-weight: 500; }
+.agg-detail .resource-row.pending .resource-label { color: var(--slate-500); font-weight: 400; }
+.agg-detail .resource-value {
+  color: var(--slate-500);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+}
+.agg-detail .resource-row.done .resource-value { color: var(--green-600); }
+.agg-detail .resource-row.active .resource-value { color: var(--blue-700); font-weight: 600; }
+
+/* Empty-state list item, shown when session has no tenants. */
+.tenant-card-empty {
+  list-style: none;
+  padding: 1.5rem;
+  border: 1px dashed var(--slate-300);
+  border-radius: var(--radius-lg);
+  background: var(--slate-50);
+  color: var(--slate-600);
+  text-align: center;
 }
 
 /* endregion */
