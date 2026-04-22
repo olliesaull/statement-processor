@@ -27,6 +27,7 @@ from routes.tenants import tenants_bp
 from routes.webhook import webhook_bp
 from tenant_data_repository import TenantDataRepository
 from ui.banner_service import get_banners
+from utils.template_filters import format_last_sync
 
 # python3.13 -m gunicorn --reload --bind 0.0.0.0:8080 app:app
 
@@ -52,6 +53,8 @@ def _extract_csrf_from_json_body():
 
 # Enable CSRF protection globally -- must be AFTER the JSON body hook above.
 csrf = CSRFProtect(app)
+
+app.add_template_filter(format_last_sync, "format_last_sync")
 
 
 MAX_UPLOAD_MB = os.getenv("MAX_UPLOAD_MB", "10")
