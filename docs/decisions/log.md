@@ -594,3 +594,27 @@ dependency surface auditable on its own. Consistent with Python-style
 **Rationale:** Pre-applying on the response string avoids the property-change event entirely — the alternative (`afterSwap`) fires the transition on every 3s tick. `hx-preserve` on the detail block was rejected because it freezes contents (per-resource counts would go stale) — opposite of what the progress UI needs.
 
 **References:** `plans/2026-04-22-tenant-management-cards-plan.md` (Task 10); `service/static/assets/js/tenant-card-detail.js`.
+
+---
+
+### [2026-04-22] convention | Statement-extraction test suite — sys.path isolation, XFAIL triage, and diff coverage (Phase 4 plan refinements)
+
+**Context:** Planning the new `scripts/accuracy_test/` extraction-accuracy test suite (master + Tier 1 + Tier 2 plan files). Phase 4 critique surfaced four substantive issues with the Phase 1–3 plan that would have produced a non-running or misleading suite if shipped as-written. These decisions are recorded now (rather than only inside the plan files) because they establish conventions that future test-suite work and any other "import service + lambda code in one process" tooling must follow.
+
+**Options considered:**
+- For lambda + service co-import: (a) two `sys.path.insert(0, ...)` calls — the original Phase 3 plan; silently breaks one import tree because both ship colliding top-level `core/` and `logger.py`. (b) Subprocess isolation — clean but expensive per scenario. (c) Restructure lambda into a real package — invasive, touches CDK Docker assembly. (d) **importlib spec_from_file_location for lambda's `extract_statement` under a non-colliding module name; service-only on `sys.path`**. Chose (d).
+- For LLM mis-extraction triage: (a) hand-maintained `known_misses.md` outside the schema — no machine-checkable signal. (b) per-scenario boolean — masks unrelated regressions. (c) **`meta.known_miss_extraction: list[str]` (fnmatch globs against diff-line tags) + per-item `xero.known_miss_match: bool`**, with `PASS / XFAIL / FAIL` aggregation. Chose (c).
+- For `expected.raw`: (a) compare with whitespace tolerance — heavy triage burden. (b) **drop entirely** — `_diff_extraction` doesn't read it; `total{}` is the cell-level signal. (c) keep for inspection only — drift trap for no asserted value. Chose (b).
+- For diff coverage: (a) keep narrow (`date`, `number`, `reference`, `total`) — Tier 2's combined-Details and mixed-payments scenarios silently pass regardless of LLM output. (b) **expand to include `due_date` and `item_type`**. Chose (b); first-run noise absorbed by the new XFAIL mechanism.
+
+**Decision:**
+1. `scripts/accuracy_test/run_accuracy_test.py` puts ONLY `service/` on `sys.path`. Lambda's `core/extraction.py::extract_statement` is loaded via `importlib.util.spec_from_file_location` under module name `_lambda_extraction`. A smoke-import test (Tier 1 Task 10 Step 2) runs before any Bedrock call to fail-fast on regressions. This convention applies to any future tooling that needs both trees in one process.
+2. The scenario JSON schema includes `meta.known_miss_extraction: list[str]` and per-item `xero.known_miss_match: bool`. The runner classifies each diff line as FAIL or XFAIL; suite output is `PASS / XFAIL / FAIL`; non-zero exit only on FAIL. Each known-miss entry MUST be paired with a dated note in `meta.description`.
+3. `helpers.expected_extraction.build_expected_extraction` does NOT populate `raw`. `render_amount` remains a Jinja filter for the templates but is not called from the expected builder.
+4. `_diff_extraction` per-item compare loop covers `date`, `number`, `reference`, `due_date`, `item_type`, plus `total{}` (0.01 tolerance).
+
+**Rationale:** Each of these decisions removes a foreseeable failure mode in the suite without expanding scope. Items 1 and 2 are load-bearing — without them the suite either won't run or won't produce meaningful signal after the first dry run. Items 3 and 4 trade a small amount of helper logic for fewer drift surfaces and broader regression coverage. None of these decisions touch the production code paths under test; they are entirely internal to the test harness.
+
+**How to apply:** When extending the suite (Tier 2 or later), inherit the Tier 1 import pattern, schema fields, and diff coverage. When adding a `known_miss_*` entry, file a follow-up issue and link it from `meta.description` so the miss can be reassessed after each Bedrock model upgrade.
+
+**References:** `plans/2026-04-22-statement-test-suite-master.md` (§2 Coupling policy, §3 schema, §5 expected_extraction, §7 CLI sequence); `plans/2026-04-22-statement-test-suite-tier-1-impl.md` (Tasks 3, 10, 11–13); `plans/2026-04-22-statement-test-suite-tier-2-impl.md` (Review gate, Self-Review).
