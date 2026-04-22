@@ -730,7 +730,7 @@ Each fetcher writes `{Contacts,Invoices,CreditNotes,Payments,PerContactIndex}Pro
 
 #### UI surfaces (HTMX polling)
 
-- **`/tenant_management`**: server-renders the `partials/sync_progress_panel.html` fragment (multi-tenant) on load. An HTMX poll against `GET /tenants/sync-progress` refreshes it every 3 s; `afk.js` toggles the `hx-disable` attribute on the panel when the tab is hidden or the user has been idle for 60 s so polling pauses without weakening CSP (see decision log entry 2026-04-20). Once every session tenant is reconcile-ready, the fragment is returned without `hx-trigger` and polling stops.
+- **`/tenant_management`**: server-renders the `partials/sync_progress_panel.html` fragment (multi-tenant) on load. The fragment is a vertical list of per-tenant cards (`<li class="tenant-card">`) — each card shows state + pills + aggregate progress + expandable resource detail + per-tenant Sync/Retry/Switch/Disconnect actions. An HTMX poll against `GET /tenants/sync-progress` refreshes the list every 3 s; `afk.js` toggles the `hx-disable` attribute on the panel when the tab is hidden or the user has been idle for 60 s so polling pauses without weakening CSP (see decision log entry 2026-04-20). Once every session tenant is reconcile-ready, the fragment is returned without `hx-trigger` and polling stops.
 - **`/statement/<id>` (not-ready)**: when `reconcile_ready_required` finds `ReconcileReadyAt` is null, it renders `partials/statement_wait_panel.html` which HTMX-polls `GET /statement/<id>/wait`. Once `ReconcileReadyAt` flips, the wait endpoint returns an empty body with `HX-Redirect: /statement/<id>` and HTMX navigates the browser to the real statement view.
 - **Retry-sync button** (`LOAD_INCOMPLETE` tenants, or any tenant whose heartbeat has gone stale mid-sync): HTMX `POST /api/tenants/<id>/retry-sync` inspects per-resource `*Progress.status`, atomically acquires the sync lock, and submits `sync_data(only_run_resources=<pending+failed+stale in_progress>, already_acquired=True)` to the background executor. `in_progress` resources are included because they only reach this path after `try_acquire_sync`'s stale-heartbeat gate has confirmed the previous worker crashed; see decision log 2026-04-20 ("_RETRYABLE_STATUSES includes IN_PROGRESS"). Returns 409 when another sync is actually in flight (fresh heartbeat).
 
@@ -750,8 +750,9 @@ The frontend JavaScript is split into focused ES modules under `service/static/a
 | `csrf.js` | Shared CSRF helpers (`getCsrfToken`, `appendCsrfTokenToFormData`, `buildCsrfUrlEncodedBody`) — used by `upload-statements.js`; HTMX flows use the global listener in `main.js` instead. |
 | `upload-statements.js` | Upload page logic — row management, client-side PDF page-count estimation, and server-side preflight gating. |
 | `modal.js` | Thin Bootstrap 5 modal wrapper (`appModal.show(id)`). |
+| `tenant-card-detail.js` | Handles the expandable detail block on the tenant-management cards. Persists open detail IDs in `sessionStorage` and listens for `htmx:beforeSwap` on `#sync-progress-panel` to pre-apply `data-expanded="true"` on the incoming HTML — the new DOM arrives already-open, so the 3 s HTMX poll doesn't trigger a close→reopen transition glitch on each tick. See decision log entry 2026-04-22. |
 
-`main.js` is the only file referenced in `base.html` via `<script type="module" src="...">`. The browser fetches `scroll-proxy.js` and `afk.js` automatically as ES module imports — no extra `<script>` tags are needed.
+`main.js` and `tenant-card-detail.js` are the two files referenced directly in `base.html` via `<script type="module" src="...">`. `tenant-card-detail.js` is listed separately so its `htmx:beforeSwap` listener attaches even when `main.js` is absent (progressive enhancement). The browser fetches `scroll-proxy.js` and `afk.js` automatically as ES module imports — no extra `<script>` tags are needed.
 
 ### JS re-initialisation
 
