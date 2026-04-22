@@ -20,7 +20,7 @@ from typing import Any
 
 from flask import render_template
 
-from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
+from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantStatus, _progress_attribute_name
 
 # Display order matches the sync order in ``sync.py`` — users see fetchers finish
 # in the same sequence the backend runs them.
@@ -266,16 +266,44 @@ def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, 
     return False
 
 
-def render_sync_progress_fragment(session_tenants: list[Any]) -> str:
-    """Render the multi-tenant sync-progress fragment for the given session tenants.
+def render_sync_progress_fragment(
+    session_tenants: list[Any],
+    *,
+    tenant_rows: dict[str, dict[str, Any]],
+    current_tenant_id: str | None,
+    tenant_token_balances: dict[str, int],
+    subscription_plan: str | None,
+    needs_retry_by_id: dict[str, bool],
+) -> str:
+    """Render the tenant-card list fragment.
 
-    One DynamoDB ``BatchGetItem`` per render; returns the pre-rendered HTML
-    string. Centralised so both the HTMX poll endpoint (``tenants.sync_progress``)
-    and the post-trigger return path in the API blueprint (``api.sync``,
-    ``api.retry-sync``) swap the exact same fragment shape into the panel.
+    Callers pre-fetch ``tenant_rows`` (one DynamoDB BatchGetItem) and pass it
+    in so ``needs_retry_by_id`` can be derived against the same row snapshot
+    this fragment renders — avoids a second round-trip per poll.
+
+    Args:
+        session_tenants: ``session["xero_tenants"]``, validated inside.
+        tenant_rows: ``{tenant_id: TenantData item}`` from a single
+            ``TenantDataRepository.get_many`` call in the caller.
+        current_tenant_id: ``session["xero_tenant_id"]``, used for the
+            is-current card flag.
+        tenant_token_balances: ``{tenant_id: balance}`` from
+            ``TenantBillingRepository.get_tenant_token_balances``.
+        subscription_plan: Plan display name for the current tenant, or ``None``.
+        needs_retry_by_id: ``{tenant_id: bool}`` from ``is_retry_recommended``.
+
+    Returns:
+        Rendered HTML string.
     """
-    tenant_ids = [t.get("tenantId") for t in session_tenants if isinstance(t, dict) and t.get("tenantId")]
-    rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
-    tenant_views = build_progress_view(session_tenants, rows)
+    tenant_views = build_progress_view(session_tenants, tenant_rows)
     polling = should_poll(tenant_views)
-    return render_template("partials/sync_progress_panel.html", tenant_views=tenant_views, polling=polling, TenantStatus=TenantStatus)
+    return render_template(
+        "partials/sync_progress_panel.html",
+        tenant_views=tenant_views,
+        polling=polling,
+        current_tenant_id=current_tenant_id,
+        tenant_token_balances=tenant_token_balances,
+        subscription_plan=subscription_plan,
+        needs_retry_by_id=needs_retry_by_id,
+        TenantStatus=TenantStatus,
+    )
