@@ -137,13 +137,7 @@ class TestBuildTenantProgressView:
     def test_is_finalising_when_fetchers_done_but_index_incomplete(self):
         """All four Xero fetchers done + per_contact_index still in_progress = 'Finalising'."""
         done = {"status": "complete", "records_fetched": 10, "record_total": 10}
-        item = {
-            "ContactsProgress": done,
-            "CreditNotesProgress": done,
-            "InvoicesProgress": done,
-            "PaymentsProgress": done,
-            "PerContactIndexProgress": {"status": "in_progress"},
-        }
+        item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": done, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "in_progress"}}
 
         view = build_tenant_progress_view("t", "n", item)
 
@@ -153,13 +147,7 @@ class TestBuildTenantProgressView:
         """Any active Xero fetcher means we're still 'Syncing', not 'Finalising'."""
         done = {"status": "complete", "records_fetched": 10, "record_total": 10}
         active = {"status": "in_progress", "records_fetched": 5, "record_total": 10}
-        item = {
-            "ContactsProgress": done,
-            "CreditNotesProgress": done,
-            "InvoicesProgress": active,
-            "PaymentsProgress": done,
-            "PerContactIndexProgress": {"status": "in_progress"},
-        }
+        item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": active, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "in_progress"}}
 
         view = build_tenant_progress_view("t", "n", item)
 
@@ -168,13 +156,7 @@ class TestBuildTenantProgressView:
     def test_is_not_finalising_when_index_complete(self):
         """All five complete -> Ready, not Finalising."""
         done = {"status": "complete", "records_fetched": 10, "record_total": 10}
-        item = {
-            "ContactsProgress": done,
-            "CreditNotesProgress": done,
-            "InvoicesProgress": done,
-            "PaymentsProgress": done,
-            "PerContactIndexProgress": {"status": "complete"},
-        }
+        item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": done, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "complete"}}
 
         view = build_tenant_progress_view("t", "n", item)
 
@@ -183,13 +165,7 @@ class TestBuildTenantProgressView:
     def test_is_not_finalising_when_index_failed(self):
         """Failed index is a failure state, not a finalising state."""
         done = {"status": "complete", "records_fetched": 10, "record_total": 10}
-        item = {
-            "ContactsProgress": done,
-            "CreditNotesProgress": done,
-            "InvoicesProgress": done,
-            "PaymentsProgress": done,
-            "PerContactIndexProgress": {"status": "failed"},
-        }
+        item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": done, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "failed"}}
 
         view = build_tenant_progress_view("t", "n", item)
 

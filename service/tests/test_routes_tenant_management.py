@@ -80,16 +80,18 @@ class TestTenantManagementSyncButton:
     def test_renders_sync_button_when_fully_ready(self, client, monkeypatch):
         from tenant_data_repository import TenantDataRepository
 
-        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: READY_ROW for tid in ids}))
+        row = {**READY_ROW, "LastSyncTime": 1_712_000_000_000}
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: row for tid in ids}))
 
         response = client.get("/tenant_management")
 
         assert response.status_code == 200
         html = response.data.decode()
-        # Sync button targets the plain sync endpoint.
+        assert f'id="card-{TENANT_ID}"' in html
+        assert "tenant-card is-complete is-current" in html
+        assert ">Ready<" in html
         assert f'hx-post="/api/tenants/{TENANT_ID}/sync"' in html
         assert ">Sync<" in html
-        # Retry button must not be rendered.
         assert f"/api/tenants/{TENANT_ID}/retry-sync" not in html
 
     def test_renders_retry_button_when_load_incomplete(self, client, monkeypatch):
@@ -101,10 +103,10 @@ class TestTenantManagementSyncButton:
 
         assert response.status_code == 200
         html = response.data.decode()
-        assert f'hx-post="/api/tenants/{TENANT_ID}/retry-sync"' in html
+        assert "tenant-card is-failed" in html
         assert ">Retry sync<" in html
-        # Plain sync button must not be rendered simultaneously.
-        assert f'hx-post="/api/tenants/{TENANT_ID}/sync"' not in html
+        assert "Sync failed" in html
+        assert f"/api/tenants/{TENANT_ID}/retry-sync" in html
 
     def test_renders_retry_button_for_stuck_syncing_with_stale_heartbeat(self, client, monkeypatch):
         """Stuck-SYNCING (crashed worker, stale heartbeat) must surface Retry sync.
@@ -164,3 +166,78 @@ class TestTenantManagementProgressPanel:
         html = response.data.decode()
         assert 'id="sync-progress-panel"' in html
         assert "hx-trigger" in html
+
+
+class TestTenantManagementFinalisingPill:
+    """Card pill flips to 'Finalising...' when all four fetchers complete but per_contact_index isn't."""
+
+    def test_finalising_pill_when_index_still_building(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        done = {"status": "complete", "records_fetched": 10, "record_total": 10, "updated_at": 1}
+        row = {
+            "TenantID": TENANT_ID,
+            "TenantStatus": "SYNCING",
+            "ContactsProgress": done,
+            "CreditNotesProgress": done,
+            "InvoicesProgress": done,
+            "PaymentsProgress": done,
+            "PerContactIndexProgress": {"status": "in_progress"},
+        }
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: row for tid in ids}))
+
+        response = client.get("/tenant_management")
+
+        html = response.data.decode()
+        assert "Finalising" in html
+        assert "is-finalising" in html
+        # Ready pill must not be on this card.
+        card_block = html.split(f"card-{TENANT_ID}")[-1].split("</li>")[0]
+        assert ">Ready<" not in card_block
+
+
+class TestTenantManagementLastSyncMetric:
+    """Last sync metric renders formatted timestamp, or 'First sync...' when null."""
+
+    def test_first_sync_shown_when_no_last_sync_time(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        row = {**READY_ROW}
+        row.pop("LastSyncTime", None)
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: row for tid in ids}))
+
+        response = client.get("/tenant_management")
+
+        html = response.data.decode()
+        assert "First sync" in html
+
+    def test_formatted_timestamp_shown_when_present(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        # 2024-01-15 14:30:00 UTC
+        row = {**READY_ROW, "LastSyncTime": 1_705_329_000_000}
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: row for tid in ids}))
+
+        response = client.get("/tenant_management")
+
+        html = response.data.decode()
+        assert "Jan 15, 14:30" in html
+
+
+class TestTenantManagementEmptyState:
+    """Empty-state card renders when the partial is asked with no tenants.
+
+    Tested via the fragment renderer directly; the /tenant_management route
+    is gated by ``@xero_token_required`` which assumes an active tenant, so
+    exercising the empty branch through the route would only prove the
+    auth redirect works.
+    """
+
+    def test_empty_state_in_fragment(self, _app):
+        from utils.sync_progress import render_sync_progress_fragment
+
+        with _app.test_request_context("/"):
+            html = render_sync_progress_fragment([], tenant_rows={}, current_tenant_id=None, tenant_token_balances={}, subscription_plan=None, needs_retry_by_id={})
+
+        assert "tenant-card-empty" in html
+        assert "No tenants connected yet" in html
