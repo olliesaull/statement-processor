@@ -1,0 +1,176 @@
+{#
+  macros/tenant_card.html
+
+  Renders one tenant card. Called from partials/sync_progress_panel.html.
+
+  Parameters:
+    view: TenantProgressView
+    is_current: bool — this tenant === session["xero_tenant_id"]
+    token_balance: int — from TenantBillingRepository.get_tenant_token_balances
+    subscription_plan: str | None — 'Growth', etc., or None (used for ready cards)
+    needs_retry: bool — is_retry_recommended(tenant_item, now_ms=...)
+    csrf_token: value from csrf_token() (passed in so the macro stays pure Jinja)
+#}
+{% macro tenant_card(view, is_current, token_balance, subscription_plan, needs_retry, csrf_token) %}
+  {%- set any_failure = view.has_failure -%}
+  {%- set is_ready = view.reconcile_ready and not any_failure and not view.is_finalising -%}
+  {%- set is_syncing_active = not view.reconcile_ready and not any_failure and not view.is_finalising -%}
+  {%- set state_class =
+        'is-failed' if any_failure
+        else ('is-complete' if is_ready
+        else ('is-finalising' if view.is_finalising
+        else 'is-syncing')) -%}
+  {%- set done_count = view.resources | selectattr('is_complete') | list | length -%}
+  {%- set active = view.resources | selectattr('is_active') | first -%}
+  <li class="tenant-card {{ state_class }}{% if is_current %} is-current{% endif %}"
+      id="card-{{ view.tenant_id }}"
+      aria-label="Tenant {{ view.tenant_name }}, state {{ state_class[3:] }}">
+    <div class="tenant-card-inner">
+      <div class="tenant-card-head">
+        <h3 class="tenant-card-title">{{ view.tenant_name }}</h3>
+        <div class="tenant-card-pills">
+          {% if is_current %}<span class="pill current">Current Tenant</span>{% endif %}
+          {% if any_failure %}
+            <span class="pill failed"><span class="dot" style="background:var(--red-500)"></span>Sync failed</span>
+          {% elif is_ready %}
+            <span class="pill complete"><span class="dot" style="background:var(--green-600)"></span>Ready</span>
+          {% elif view.is_finalising %}
+            <span class="pill syncing"><span class="dot"></span>Finalising&hellip;</span>
+          {% else %}
+            <span class="pill syncing"><span class="dot"></span>Syncing &middot; {{ done_count }} of {{ view.resources | length }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="tenant-card-meta">
+        <div>
+          <span class="meta-label">Pages</span>
+          <span class="meta-value{% if token_balance == 0 %} muted{% endif %}">{{ token_balance }}</span>
+        </div>
+        <div>
+          <span class="meta-label">Last sync</span>
+          {% set formatted = view.last_sync_time_ms | format_last_sync %}
+          {% if formatted %}
+            <span class="meta-value">{{ formatted }}</span>
+          {% else %}
+            <span class="meta-value muted">First sync&hellip;</span>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if is_syncing_active %}
+        <div class="tenant-card-divider"></div>
+        <div class="agg-row">
+          {% if active %}
+            <div class="agg-bar"
+                 role="progressbar"
+                 aria-valuenow="{{ active.percent or 0 }}"
+                 aria-valuemin="0"
+                 aria-valuemax="100"
+                 aria-label="{{ active.display_name }}: {{ active.records_fetched or 0 }} of {{ active.record_total or 'unknown' }}, step {{ done_count + 1 }} of {{ view.resources | length }}">
+              <span style="width: {{ active.percent or 0 }}%;"></span>
+            </div>
+            <div class="agg-text">
+              <span class="seg step-name">{{ active.display_name }}</span>
+              <span class="seg step-count">
+                {%- if active.indeterminate -%}
+                  {{ active.records_fetched or 0 }} fetched
+                {%- else -%}
+                  {{ active.records_fetched or 0 }} / {{ active.record_total }}
+                  {%- if active.percent is not none %} ({{ active.percent }}%){% endif -%}
+                {%- endif -%}
+              </span>
+              <span class="seg step-ratio">Step {{ done_count + 1 }} of {{ view.resources | length }}</span>
+            </div>
+          {% else %}
+            {# All four resources pending - before first fetch starts. #}
+            <div class="agg-bar"
+                 role="progressbar"
+                 aria-valuenow="0"
+                 aria-valuemin="0"
+                 aria-valuemax="100"
+                 aria-label="Sync not yet started">
+              <span style="width: 0%;"></span>
+            </div>
+            <div class="agg-text">
+              <span class="seg step-name">Starting&hellip;</span>
+              <span class="seg step-ratio">Step 1 of {{ view.resources | length }}</span>
+            </div>
+          {% endif %}
+          <button type="button"
+                  class="agg-toggle"
+                  aria-expanded="false"
+                  aria-controls="detail-{{ view.tenant_id }}"
+                  data-toggle-target="detail-{{ view.tenant_id }}">
+            <span class="label-collapsed">Show detail</span>
+            <span class="label-expanded">Hide detail</span>
+            <span class="caret" aria-hidden="true">&#9662;</span>
+          </button>
+        </div>
+        <div class="agg-detail" id="detail-{{ view.tenant_id }}" data-expanded="false">
+          <div class="agg-detail-inner">
+            <ul>
+              {% for resource in view.resources %}
+                <li class="resource-row {{ 'done' if resource.is_complete else ('active' if resource.is_active else ('failed' if resource.is_failed else 'pending')) }}">
+                  <span class="resource-icon" aria-hidden="true">
+                    {%- if resource.is_complete -%}&#10003;{%- elif resource.is_pending -%}&middot;{%- endif -%}
+                  </span>
+                  <span class="resource-label">{{ resource.display_name }}</span>
+                  <span class="resource-value">
+                    {%- if resource.is_complete -%}Done
+                    {%- elif resource.is_failed -%}Failed
+                    {%- elif resource.is_active -%}
+                      {% if resource.indeterminate %}{{ resource.records_fetched or 0 }} fetched
+                      {% else %}{{ resource.records_fetched or 0 }} / {{ resource.record_total }}
+                        {% if resource.percent is not none %} ({{ resource.percent }}%){% endif %}
+                      {% endif %}
+                    {%- else -%}Pending
+                    {%- endif -%}
+                  </span>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+      {% endif %}
+
+      <div class="tenant-card-actions">
+        {% if needs_retry %}
+          <button class="btn btn-outline-warning btn-sm"
+                  type="button"
+                  data-tenant-id="{{ view.tenant_id }}"
+                  hx-post="{{ url_for('api.retry_tenant_sync', tenant_id=view.tenant_id) }}"
+                  hx-target="#sync-progress-panel"
+                  hx-swap="outerHTML">Retry sync</button>
+        {% elif is_ready %}
+          <button class="btn btn-outline-secondary btn-sm"
+                  type="button"
+                  data-tenant-id="{{ view.tenant_id }}"
+                  hx-post="{{ url_for('api.trigger_tenant_sync', tenant_id=view.tenant_id) }}"
+                  hx-target="#sync-progress-panel"
+                  hx-swap="outerHTML">Sync</button>
+        {% else %}
+          {# Syncing / Finalising: button visually muted, not omitted (keeps action row alignment). #}
+          <button class="btn btn-outline-secondary btn-sm" type="button" disabled title="Sync is already running">Syncing&hellip;</button>
+        {% endif %}
+        <a class="btn btn-outline-success btn-sm" href="{{ url_for('billing.buy_tokens', tenant_id=view.tenant_id) }}">Buy Pages</a>
+        {% if not is_current %}
+          <form method="post" action="{{ url_for('tenants.select_tenant') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="tenant_id" value="{{ view.tenant_id }}">
+            <button class="btn btn-outline-primary btn-sm"
+                    type="submit"
+                    {% if not is_ready %}disabled title="Available once sync completes"{% endif %}>Switch to Tenant</button>
+          </form>
+        {% endif %}
+        <form method="post" action="{{ url_for('tenants.disconnect_tenant') }}" class="disconnect-form"
+              data-has-subscription="{{ 'true' if is_current and subscription_plan else 'false' }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="tenant_id" value="{{ view.tenant_id }}">
+          <input type="hidden" name="erasure_days" value="14">
+          <button class="btn btn-outline-danger btn-sm" type="submit">Disconnect</button>
+        </form>
+      </div>
+    </div>
+  </li>
+{% endmacro %}
