@@ -14,6 +14,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from botocore.exceptions import ClientError
 from flask import session
 from xero_python.accounting import AccountingApi
 from xero_python.exceptions import AccountingBadRequestException
@@ -571,7 +572,16 @@ def _load_per_contact_file(tenant_id: str, contact_id: str) -> dict[str, Any] | 
             logger.info("Downloaded per-contact file from S3", tenant_id=tenant_id, contact_id=contact_id)
             with open(local_path, encoding="utf-8") as handle:
                 return json.load(handle)
-        except s3_client.exceptions.NoSuchKey:
+        except ClientError as exc:
+            # boto3's download_file probes with HeadObject, which raises a
+            # generic ClientError (code "404") on missing keys — not the
+            # NoSuchKey subclass that GetObject raises. Contacts with no
+            # invoices/credit-notes/payments never have a per-contact file
+            # written (see sync.build_per_contact_index), so a 404 is a
+            # routine cache miss; logging it at ERROR trips the alarm.
+            if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey"):
+                return None
+            logger.exception("Failed to download per-contact file from S3", tenant_id=tenant_id, contact_id=contact_id, s3_key=s3_key)
             return None
         except Exception:
             logger.exception("Failed to download per-contact file from S3", tenant_id=tenant_id, contact_id=contact_id, s3_key=s3_key)

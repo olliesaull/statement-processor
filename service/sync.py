@@ -359,6 +359,18 @@ def build_per_contact_index(tenant_id: str) -> None:
     S3 uploads are parallelised with a thread pool because large tenants
     can have 1,000+ contacts, and sequential uploads at ~50 ms each would
     block the sync for 50+ seconds.
+
+    TODO: Consider writing an empty per-contact file for every contact in
+    contacts.json (not just those with at least one invoice/credit-note/
+    payment). Today, contacts with no transactions have no per-contact
+    file, so every view of their statement detail misses the cache and
+    pays the ~150 ms full-dataset fallback in xero_repository.
+    get_contact_data. Trade-off: more S3 PUTs per sync (one per contact
+    rather than one per active contact), and "file exists" loses its
+    current implicit meaning of "contact has transactions". Edge cases to
+    think through: new contacts added between syncs and stale
+    references to deleted Xero contacts still need the silent-miss
+    fallback in _load_per_contact_file as a safety net.
     """
     local_dir = os.path.join(LOCAL_DATA_DIR, tenant_id)
 

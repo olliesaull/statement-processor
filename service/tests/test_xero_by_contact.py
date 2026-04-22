@@ -167,6 +167,71 @@ class TestGetXeroDataByContact:
         result = get_xero_data_by_contact(CONTACT_ID, tenant_id=TENANT_ID)
         assert len(result["invoices"]) == 1
 
+    def test_s3_head_object_404_is_silent_miss(self, _data_dir, monkeypatch):
+        """HeadObject 404 (generic ClientError) must not log ERROR.
+
+        boto3's ``download_file`` calls ``HeadObject`` internally, which
+        raises a plain ``botocore.exceptions.ClientError`` with code
+        ``"404"`` — not the ``NoSuchKey`` subclass that ``GetObject``
+        raises. Missing per-contact cache files are a routine condition
+        (contacts with no invoices/credit-notes/payments), so a 404 must
+        be a silent miss. Otherwise the ``ERROR``-pattern CloudWatch
+        metric filter trips the alarm on every such page view.
+        """
+        from botocore.exceptions import ClientError
+
+        monkeypatch.setattr(xero_module, "session", {"xero_tenant_id": TENANT_ID})
+
+        tenant_dir = _data_dir / TENANT_ID
+        tenant_dir.mkdir(parents=True)
+        (tenant_dir / "invoices.json").write_text(json.dumps([{"invoice_id": "inv-1", "contact_id": CONTACT_ID}]))
+        (tenant_dir / "credit_notes.json").write_text("[]")
+        (tenant_dir / "payments.json").write_text("[]")
+
+        error_response = {"Error": {"Code": "404", "Message": "Not Found"}, "ResponseMetadata": {"HTTPStatusCode": 404}}
+        mock_s3, _ = _mock_s3_with_nosuchkey()
+        mock_s3.download_file.side_effect = ClientError(error_response, "HeadObject")
+        monkeypatch.setattr(xero_module, "s3_client", mock_s3)
+
+        mock_logger = MagicMock()
+        monkeypatch.setattr(xero_module, "logger", mock_logger)
+
+        result = get_xero_data_by_contact(CONTACT_ID, tenant_id=TENANT_ID)
+
+        # Fallback still works.
+        assert len(result["invoices"]) == 1
+        # Critical: no ERROR log for the 404.
+        assert mock_logger.exception.call_count == 0
+        assert mock_logger.error.call_count == 0
+
+    def test_s3_non_404_client_error_still_logs(self, _data_dir, monkeypatch):
+        """Non-404 ClientError (e.g., AccessDenied, 500) must still log ERROR.
+
+        The silent-miss rule is for 404 only — real S3 failures remain
+        alarmable.
+        """
+        from botocore.exceptions import ClientError
+
+        monkeypatch.setattr(xero_module, "session", {"xero_tenant_id": TENANT_ID})
+
+        tenant_dir = _data_dir / TENANT_ID
+        tenant_dir.mkdir(parents=True)
+        (tenant_dir / "invoices.json").write_text("[]")
+        (tenant_dir / "credit_notes.json").write_text("[]")
+        (tenant_dir / "payments.json").write_text("[]")
+
+        error_response = {"Error": {"Code": "AccessDenied", "Message": "Forbidden"}, "ResponseMetadata": {"HTTPStatusCode": 403}}
+        mock_s3, _ = _mock_s3_with_nosuchkey()
+        mock_s3.download_file.side_effect = ClientError(error_response, "HeadObject")
+        monkeypatch.setattr(xero_module, "s3_client", mock_s3)
+
+        mock_logger = MagicMock()
+        monkeypatch.setattr(xero_module, "logger", mock_logger)
+
+        get_xero_data_by_contact(CONTACT_ID, tenant_id=TENANT_ID)
+
+        assert mock_logger.exception.call_count == 1
+
     def test_falls_back_when_per_contact_file_is_corrupt(self, _data_dir, monkeypatch):
         """Malformed per-contact JSON must fall back to full datasets without raising."""
         monkeypatch.setattr(xero_module, "session", {"xero_tenant_id": TENANT_ID})
