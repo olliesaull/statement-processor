@@ -110,6 +110,16 @@ class TenantProgressView:
         contacts = next((r for r in self.resources if r.resource == "contacts"), None)
         return (not self.reconcile_ready) and contacts is not None and contacts.is_complete
 
+    @property
+    def is_finalising(self) -> bool:
+        """True when all four Xero fetchers are complete but per-contact index is still building.
+
+        Distinguishes "waiting on Xero data" (Syncing) from "waiting on
+        reconcile index build" (Finalising). Both remain syncing-family — the
+        stripe stays blue; only the pill copy changes.
+        """
+        return all(r.is_complete for r in self.resources) and self.per_contact_index_status not in (ProgressStatus.COMPLETE, ProgressStatus.FAILED)
+
 
 def _parse_tenant_status(raw: Any) -> TenantStatus:
     """Best-effort parse of the stored ``TenantStatus`` attribute.
