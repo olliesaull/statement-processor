@@ -18,6 +18,12 @@ def format_last_sync(epoch_ms: int | float | Decimal | None) -> str:
 
     Returns:
         Formatted string like ``"Apr 22, 09:32"``, or ``""`` for empty input.
+
+    Note:
+        Uses ``%-d`` to strip the leading zero on the day, which is a
+        Linux/macOS-only strftime directive. Matches the documented dev
+        and deployment environment (Ubuntu on AppRunner); will produce
+        zero-padded days on Windows if the code is ever run there.
     """
     if not epoch_ms:
         return ""

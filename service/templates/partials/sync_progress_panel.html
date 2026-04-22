@@ -11,7 +11,7 @@
     polling: bool — when False the outer element omits hx-trigger so polling stops
     current_tenant_id: str | None
     tenant_token_balances: dict[str, int]
-    subscription_plan: str | None
+    is_active_subscription: bool
     needs_retry_by_id: dict[str, bool]
 
   Open detail state is preserved across swaps by tenant-card-detail.js, which
@@ -38,7 +38,7 @@
         view=view,
         is_current=(view.tenant_id == current_tenant_id),
         token_balance=tenant_token_balances.get(view.tenant_id, 0),
-        subscription_plan=subscription_plan,
+        is_active_subscription=is_active_subscription,
         needs_retry=needs_retry_by_id.get(view.tenant_id, False),
         csrf_token=csrf_token()
     ) }}

@@ -20,6 +20,8 @@ from typing import Any
 
 from flask import render_template
 
+from pricing_config import SUBSCRIPTION_TIERS
+from tenant_billing_repository import SubscriptionState
 from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantStatus, _progress_attribute_name
 
 # Display order matches the sync order in ``sync.py`` — users see fetchers finish
@@ -118,7 +120,10 @@ class TenantProgressView:
         reconcile index build" (Finalising). Both remain syncing-family — the
         stripe stays blue; only the pill copy changes.
         """
-        return all(r.is_complete for r in self.resources) and self.per_contact_index_status not in (ProgressStatus.COMPLETE, ProgressStatus.FAILED)
+        # Guard empty resources: all([]) is True, which would report Finalising
+        # for a directly-constructed view with no resources — the invariant is
+        # "all four Xero fetchers complete", so at least one must exist.
+        return bool(self.resources) and all(r.is_complete for r in self.resources) and self.per_contact_index_status not in (ProgressStatus.COMPLETE, ProgressStatus.FAILED)
 
 
 def _parse_tenant_status(raw: Any) -> TenantStatus:
@@ -266,13 +271,29 @@ def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, 
     return False
 
 
+def _subscription_plan_display_name(subscription_state: SubscriptionState | None) -> str | None:
+    """Return the display name of the current subscription tier, or ``None``.
+
+    Pure formatter — does not gate on ``status``. Callers that need to
+    distinguish "has an active subscription" from "has a tier_id from a
+    cancelled/past_due row" must check ``subscription_state.status`` separately
+    (see ``render_sync_progress_fragment``'s ``is_active_subscription`` kwarg
+    and the summary-strip ``{% if subscription_state.status == 'active' %}``
+    branch on ``tenant_management.html``).
+    """
+    if not subscription_state:
+        return None
+    tier = SUBSCRIPTION_TIERS.get(subscription_state.tier_id)
+    return tier.display_name if tier else None
+
+
 def render_sync_progress_fragment(
     session_tenants: list[Any],
     *,
     tenant_rows: dict[str, dict[str, Any]],
     current_tenant_id: str | None,
     tenant_token_balances: dict[str, int],
-    subscription_plan: str | None,
+    is_active_subscription: bool,
     needs_retry_by_id: dict[str, bool],
 ) -> str:
     """Render the tenant-card list fragment.
@@ -289,7 +310,11 @@ def render_sync_progress_fragment(
             is-current card flag.
         tenant_token_balances: ``{tenant_id: balance}`` from
             ``TenantBillingRepository.get_tenant_token_balances``.
-        subscription_plan: Plan display name for the current tenant, or ``None``.
+        is_active_subscription: True iff the current tenant has a
+            subscription row with ``status == 'active'``. Drives the
+            disconnect form's subscription-warning data attribute; kept as a
+            pre-computed bool so the macro doesn't need to reach into
+            ``SubscriptionState`` shape.
         needs_retry_by_id: ``{tenant_id: bool}`` from ``is_retry_recommended``.
 
     Returns:
@@ -303,7 +328,7 @@ def render_sync_progress_fragment(
         polling=polling,
         current_tenant_id=current_tenant_id,
         tenant_token_balances=tenant_token_balances,
-        subscription_plan=subscription_plan,
+        is_active_subscription=is_active_subscription,
         needs_retry_by_id=needs_retry_by_id,
         TenantStatus=TenantStatus,
     )

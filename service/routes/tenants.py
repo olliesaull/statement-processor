@@ -18,23 +18,10 @@ from tenant_activation import set_active_tenant
 from tenant_billing_repository import TenantBillingRepository
 from tenant_data_repository import TenantDataRepository, TenantStatus
 from utils.auth import clear_session_is_set_cookie, route_handler_logging, xero_token_required
-from utils.sync_progress import build_progress_view, is_retry_recommended, render_sync_progress_fragment, should_poll
+from utils.sync_progress import _subscription_plan_display_name, build_progress_view, is_retry_recommended, render_sync_progress_fragment, should_poll
 from utils.tenant_status import get_tenant_status
 
 tenants_bp = Blueprint("tenants", __name__)
-
-
-def _subscription_plan_display_name(subscription_state) -> str | None:
-    """Return the display name of the current subscription tier, or ``None``.
-
-    Shared between ``tenant_management`` and ``sync_progress`` so the card's
-    disconnect-with-subscription warning stays in sync with what the summary
-    strip renders.
-    """
-    if not subscription_state:
-        return None
-    tier = SUBSCRIPTION_TIERS.get(subscription_state.tier_id)
-    return tier.display_name if tier else None
 
 
 @tenants_bp.route("/tenant_management")
@@ -73,6 +60,7 @@ def tenant_management():
     subscription_state = TenantBillingRepository.get_subscription_state(current_tenant_id) if current_tenant_id else None
     subscription_tier = SUBSCRIPTION_TIERS.get(subscription_state.tier_id) if subscription_state else None
     subscription_plan = _subscription_plan_display_name(subscription_state)
+    is_active_subscription = bool(subscription_state) and subscription_state.status == "active"
 
     # Single BatchGetItem drives both card progress and the Retry-sync button
     # decision so both read the same snapshot — no race between the two reads.
@@ -101,6 +89,7 @@ def tenant_management():
         subscription_state=subscription_state,
         subscription_tier=subscription_tier,
         subscription_plan=subscription_plan,
+        is_active_subscription=is_active_subscription,
         tenant_views=tenant_views,
         needs_retry_by_id=needs_retry_by_id,
         polling=polling,
@@ -120,10 +109,31 @@ def sync_progress():
     """
     session_tenants = session.get("xero_tenants") or []
     tenant_ids = [t.get("tenantId") for t in session_tenants if isinstance(t, dict) and t.get("tenantId")]
-    tenant_rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
     current_tenant_id = session.get("xero_tenant_id")
-    subscription_state = TenantBillingRepository.get_subscription_state(current_tenant_id) if current_tenant_id else None
-    subscription_plan = _subscription_plan_display_name(subscription_state)
+
+    # Poll endpoint fires every 3s; a transient DDB error should not kill the
+    # fragment. Mirror the defensive fallbacks used by ``tenant_management``
+    # above so the panel keeps rendering (empty dict / None) when reads fail.
+    try:
+        tenant_rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
+    except Exception as exc:
+        logger.exception("Failed to load tenant rows for sync-progress fragment", tenant_ids=tenant_ids, error=exc)
+        tenant_rows = {}
+    try:
+        # TODO: N individual GetItems today; introduce a batch helper on
+        # TenantBillingRepository if per-poll cost becomes material.
+        # deferred 2026-04-22 because current sessions have 1-3 tenants.
+        tenant_token_balances = TenantBillingRepository.get_tenant_token_balances(tenant_ids)
+    except Exception as exc:
+        logger.exception("Failed to load tenant token balances for sync-progress fragment", tenant_ids=tenant_ids, error=exc)
+        tenant_token_balances = {}
+    try:
+        subscription_state = TenantBillingRepository.get_subscription_state(current_tenant_id) if current_tenant_id else None
+    except Exception as exc:
+        logger.exception("Failed to load subscription state for sync-progress fragment", current_tenant_id=current_tenant_id, error=exc)
+        subscription_state = None
+    is_active_subscription = bool(subscription_state) and subscription_state.status == "active"
+
     now_ms = int(time.time() * 1000)
     needs_retry_by_id = {tid: is_retry_recommended(tenant_rows.get(tid), now_ms=now_ms) for tid in tenant_ids}
     logger.info("Rendering sync-progress fragment", tenant_ids=tenant_ids)
@@ -131,8 +141,8 @@ def sync_progress():
         session_tenants,
         tenant_rows=tenant_rows,
         current_tenant_id=current_tenant_id,
-        tenant_token_balances=TenantBillingRepository.get_tenant_token_balances(tenant_ids),
-        subscription_plan=subscription_plan,
+        tenant_token_balances=tenant_token_balances,
+        is_active_subscription=is_active_subscription,
         needs_retry_by_id=needs_retry_by_id,
     )
 

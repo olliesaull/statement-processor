@@ -2807,8 +2807,10 @@ a:focus-visible {
   border-color: var(--blue-100);
   background: linear-gradient(180deg, var(--blue-50) 0%, var(--white) 48px);
 }
-.tenant-card.is-current.is-complete { border-left-color: var(--green-600); }
-.tenant-card.is-current.is-syncing  { border-left-color: var(--blue-500); }
+.tenant-card.is-current.is-complete   { border-left-color: var(--green-600); }
+.tenant-card.is-current.is-syncing    { border-left-color: var(--blue-500); }
+.tenant-card.is-current.is-finalising { border-left-color: var(--blue-500); }
+.tenant-card.is-current.is-failed     { border-left-color: var(--red-500); }
 
 .tenant-card-inner { padding: 1.1rem 1.3rem; }
 
@@ -2857,7 +2859,9 @@ a:focus-visible {
 .pill.syncing { background: var(--blue-50); color: var(--blue-700); }
 .pill.syncing .dot { background: var(--blue-500); animation: tc-pulse 1.4s ease-in-out infinite; }
 .pill.complete { background: var(--green-100); color: #0f3b1f; }
+.pill.complete .dot { background: var(--green-600); }
 .pill.failed   { background: var(--red-100); color: #7f1d1d; }
+.pill.failed .dot   { background: var(--red-500); }
 @keyframes tc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
 .tenant-card-meta {

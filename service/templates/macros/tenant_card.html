@@ -7,11 +7,14 @@
     view: TenantProgressView
     is_current: bool — this tenant === session["xero_tenant_id"]
     token_balance: int — from TenantBillingRepository.get_tenant_token_balances
-    subscription_plan: str | None — 'Growth', etc., or None (used for ready cards)
+    is_active_subscription: bool — True iff the current-tenant subscription has
+      status == 'active'. Drives the disconnect-form subscription-warning
+      data attribute; must stay in sync with the summary-strip gate on
+      tenant_management.html.
     needs_retry: bool — is_retry_recommended(tenant_item, now_ms=...)
     csrf_token: value from csrf_token() (passed in so the macro stays pure Jinja)
 #}
-{% macro tenant_card(view, is_current, token_balance, subscription_plan, needs_retry, csrf_token) %}
+{% macro tenant_card(view, is_current, token_balance, is_active_subscription, needs_retry, csrf_token) %}
   {%- set any_failure = view.has_failure -%}
   {%- set is_ready = view.reconcile_ready and not any_failure and not view.is_finalising -%}
   {%- set is_syncing_active = not view.reconcile_ready and not any_failure and not view.is_finalising -%}
@@ -31,9 +34,9 @@
         <div class="tenant-card-pills">
           {% if is_current %}<span class="pill current">Current Tenant</span>{% endif %}
           {% if any_failure %}
-            <span class="pill failed"><span class="dot" style="background:var(--red-500)"></span>Sync failed</span>
+            <span class="pill failed"><span class="dot"></span>Sync failed</span>
           {% elif is_ready %}
-            <span class="pill complete"><span class="dot" style="background:var(--green-600)"></span>Ready</span>
+            <span class="pill complete"><span class="dot"></span>Ready</span>
           {% elif view.is_finalising %}
             <span class="pill syncing"><span class="dot"></span>Finalising&hellip;</span>
           {% else %}
@@ -164,7 +167,7 @@
           </form>
         {% endif %}
         <form method="post" action="{{ url_for('tenants.disconnect_tenant') }}" class="disconnect-form"
-              data-has-subscription="{{ 'true' if is_current and subscription_plan else 'false' }}">
+              data-has-subscription="{{ 'true' if is_current and is_active_subscription else 'false' }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="tenant_id" value="{{ view.tenant_id }}">
           <input type="hidden" name="erasure_days" value="14">

@@ -191,9 +191,9 @@ class TestTenantManagementFinalisingPill:
         html = response.data.decode()
         assert "Finalising" in html
         assert "is-finalising" in html
-        # Ready pill must not be on this card.
-        card_block = html.split(f"card-{TENANT_ID}")[-1].split("</li>")[0]
-        assert ">Ready<" not in card_block
+        # Ready pill must not appear for this single-tenant fixture; the
+        # simple page-wide assertion is safe because only one card is rendered.
+        assert "Ready" not in html
 
 
 class TestTenantManagementLastSyncMetric:
@@ -237,7 +237,55 @@ class TestTenantManagementEmptyState:
         from utils.sync_progress import render_sync_progress_fragment
 
         with _app.test_request_context("/"):
-            html = render_sync_progress_fragment([], tenant_rows={}, current_tenant_id=None, tenant_token_balances={}, subscription_plan=None, needs_retry_by_id={})
+            html = render_sync_progress_fragment([], tenant_rows={}, current_tenant_id=None, tenant_token_balances={}, is_active_subscription=False, needs_retry_by_id={})
 
         assert "tenant-card-empty" in html
         assert "No tenants connected yet" in html
+
+
+class TestTenantManagementSubscriptionWarning:
+    """`data-has-subscription` flips only when the current tenant's subscription is active.
+
+    Regression guard: before this refactor the flag required
+    ``subscription_state.status == 'active'``. An intermediate version flagged
+    any tenant with a tier_id (including cancelled / past_due / incomplete),
+    which would surface the "active subscription" warning on the disconnect
+    modal for users without one.
+    """
+
+    def _set_active_subscription(self, monkeypatch, status: str) -> None:
+        from tenant_billing_repository import SubscriptionState, TenantBillingRepository
+
+        state = SubscriptionState(tier_id="tier_200", status=status, stripe_subscription_id="sub_x", current_period_end="2026-05-01", tokens_credited_this_period=0, cancel_at="")
+        monkeypatch.setattr(TenantBillingRepository, "get_subscription_state", classmethod(lambda cls, tid: state))
+
+    def test_has_subscription_true_when_status_active(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        self._set_active_subscription(monkeypatch, "active")
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: READY_ROW for tid in ids}))
+
+        response = client.get("/tenant_management")
+
+        assert 'data-has-subscription="true"' in response.data.decode()
+
+    def test_has_subscription_false_when_status_canceled(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        self._set_active_subscription(monkeypatch, "canceled")
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: READY_ROW for tid in ids}))
+
+        response = client.get("/tenant_management")
+
+        html = response.data.decode()
+        assert 'data-has-subscription="true"' not in html
+        assert 'data-has-subscription="false"' in html
+
+    def test_has_subscription_false_when_no_subscription(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: READY_ROW for tid in ids}))
+
+        response = client.get("/tenant_management")
+
+        assert 'data-has-subscription="false"' in response.data.decode()

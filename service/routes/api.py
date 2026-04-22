@@ -12,7 +12,6 @@ from typing import Any
 from flask import Blueprint, jsonify, request, session, url_for
 
 from logger import logger
-from pricing_config import SUBSCRIPTION_TIERS
 from sync import sync_data
 from tenant_activation import executor
 from tenant_billing_repository import TenantBillingRepository
@@ -45,21 +44,37 @@ def _render_sync_progress_fragment() -> str:
     Gathers session + billing + retry context, issues the single BatchGetItem
     for tenant rows, and delegates to ``utils.sync_progress.render_sync_progress_fragment``.
     Sync and Retry-sync both swap the same HTMX-target shape as the poll endpoint.
+
+    Defensive fallbacks mirror ``tenants.sync_progress``: a transient DDB read
+    error returns an empty/None result so the fragment still renders rather
+    than propagating a 500 back to HTMX on a 3s poll interval.
     """
     session_tenants = session.get("xero_tenants") or []
     tenant_ids = [t.get("tenantId") for t in session_tenants if isinstance(t, dict) and t.get("tenantId")]
-    tenant_rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
     current_tenant_id = session.get("xero_tenant_id")
-    subscription_state = TenantBillingRepository.get_subscription_state(current_tenant_id) if current_tenant_id else None
-    subscription_tier = SUBSCRIPTION_TIERS.get(subscription_state.tier_id) if subscription_state else None
-    subscription_plan = subscription_tier.display_name if subscription_tier else None
+    try:
+        tenant_rows = TenantDataRepository.get_many(tenant_ids) if tenant_ids else {}
+    except Exception as exc:
+        logger.exception("Failed to load tenant rows for sync-progress fragment", tenant_ids=tenant_ids, error=exc)
+        tenant_rows = {}
+    try:
+        tenant_token_balances = TenantBillingRepository.get_tenant_token_balances(tenant_ids)
+    except Exception as exc:
+        logger.exception("Failed to load tenant token balances for sync-progress fragment", tenant_ids=tenant_ids, error=exc)
+        tenant_token_balances = {}
+    try:
+        subscription_state = TenantBillingRepository.get_subscription_state(current_tenant_id) if current_tenant_id else None
+    except Exception as exc:
+        logger.exception("Failed to load subscription state for sync-progress fragment", current_tenant_id=current_tenant_id, error=exc)
+        subscription_state = None
+    is_active_subscription = bool(subscription_state) and subscription_state.status == "active"
     now_ms = int(time.time() * 1000)
     return render_sync_progress_fragment(
         session_tenants,
         tenant_rows=tenant_rows,
         current_tenant_id=current_tenant_id,
-        tenant_token_balances=TenantBillingRepository.get_tenant_token_balances(tenant_ids),
-        subscription_plan=subscription_plan,
+        tenant_token_balances=tenant_token_balances,
+        is_active_subscription=is_active_subscription,
         needs_retry_by_id={tid: is_retry_recommended(tenant_rows.get(tid), now_ms=now_ms) for tid in tenant_ids},
     )
 

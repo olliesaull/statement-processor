@@ -85,26 +85,26 @@
 
     let activeDisconnectForm = null;
 
-    // Intercept disconnect form submissions to show the housekeeping modal.
-    // If JS fails, the form submits directly with the default erasure_days=14.
-    document.querySelectorAll(".disconnect-form").forEach((form) => {
-      form.addEventListener("submit", (e) => {
-        e.preventDefault();
-        activeDisconnectForm = form;
-        // Reset radio to default (2 weeks).
-        const defaultRadio = document.getElementById("erasure-14");
-        if (defaultRadio) defaultRadio.checked = true;
-        // Toggle subscription warning based on the disconnect form's data attribute.
-        const hasSubscription = form.dataset.hasSubscription === "true";
-        const warning = document.getElementById("subscription-warning");
-        if (warning) {
-          warning.classList.toggle("d-none", !hasSubscription);
-        }
-        appModal.show("housekeeping-modal");
-      });
+    // Delegated submit handler: the disconnect forms live inside the HTMX-polled
+    // #sync-progress-panel, which swaps outerHTML every 3s. Direct bindings on
+    // the form nodes would be lost on each swap, letting the form submit
+    // immediately with the default erasure_days=14 and bypassing the
+    // housekeeping confirmation modal. Delegation on document survives swaps.
+    document.addEventListener("submit", (e) => {
+      const form = e.target.closest(".disconnect-form");
+      if (!form) return;
+      e.preventDefault();
+      activeDisconnectForm = form;
+      const defaultRadio = document.getElementById("erasure-14");
+      if (defaultRadio) defaultRadio.checked = true;
+      const hasSubscription = form.dataset.hasSubscription === "true";
+      const warning = document.getElementById("subscription-warning");
+      if (warning) {
+        warning.classList.toggle("d-none", !hasSubscription);
+      }
+      appModal.show("housekeeping-modal");
     });
 
-    // Confirm button in the modal submits the original form with the selected option.
     const confirmBtn = document.getElementById("housekeeping-modal-confirm");
     if (confirmBtn) {
       confirmBtn.addEventListener("click", () => {

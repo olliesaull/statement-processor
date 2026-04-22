@@ -171,6 +171,19 @@ class TestBuildTenantProgressView:
 
         assert view.is_finalising is False
 
+    def test_is_not_finalising_when_resources_empty(self):
+        """Direct construction with no resources must not vacuously report Finalising.
+
+        ``all([])`` is True in Python; without the explicit guard the property
+        would report Finalising for any directly-constructed view with an
+        empty resources list, which is semantically wrong.
+        """
+        from utils.sync_progress import TenantProgressView
+
+        view = TenantProgressView(tenant_id="t", tenant_name="n", status=TenantStatus.FREE, reconcile_ready=False, resources=[])
+
+        assert view.is_finalising is False
+
 
 class TestBuildProgressView:
     """Assemble a list of tenant views from session tenants + BatchGetItem rows."""
