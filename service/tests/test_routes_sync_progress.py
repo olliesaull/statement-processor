@@ -212,3 +212,41 @@ class TestTriggerTenantSyncHtmx:
         response = client.post(f"/api/tenants/{TENANT_ID}/sync")
         assert response.status_code == 202
         assert response.json == {"started": True}
+
+
+class TestIncrementalSyncingRender:
+    """Reconcile-ready tenant mid-incremental-sync shows syncing pill + disabled Sync button."""
+
+    def test_incremental_syncing_shows_syncing_pill_and_disabled_button(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        import time
+        now = int(time.time() * 1000)
+        incremental_row = {
+            "TenantID": TENANT_ID,
+            "TenantStatus": "SYNCING",
+            "ReconcileReadyAt": 1_000_000,
+            "LastHeartbeatAt": now - 500,
+            "LastSyncTime": 2_000_000,
+            "ContactsProgress": COMPLETE_PROGRESS,
+            "InvoicesProgress": COMPLETE_PROGRESS,
+            "CreditNotesProgress": COMPLETE_PROGRESS,
+            "PaymentsProgress": COMPLETE_PROGRESS,
+            "PerContactIndexProgress": {"status": "complete", "updated_at": 1},
+        }
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: incremental_row for tid in ids}))
+
+        response = client.get("/tenants/sync-progress", headers={"HX-Request": "true"})
+        assert response.status_code == 200
+        body = response.data.decode()
+
+        # Pill: "Syncing..." present; Ready not present.
+        assert "Syncing" in body
+        assert ">Ready<" not in body
+        # Action button: disabled with Syncing label.
+        assert "disabled" in body
+        # No first-sync progress bar.
+        assert 'role="progressbar"' not in body
+        # aria-label reflects the visible syncing state, not the CSS class.
+        assert "state syncing-incremental" in body
+        assert "state complete" not in body
