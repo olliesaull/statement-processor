@@ -65,9 +65,10 @@
         </div>
         <div>
           <span class="meta-label">Last sync</span>
-          {% set formatted = view.last_sync_time_ms | format_last_sync %}
-          {% if formatted %}
-            <span class="meta-value">{{ formatted }}</span>
+          {% if view.last_sync_time_ms %}
+            <time class="meta-value"
+                  data-last-sync-ms="{{ view.last_sync_time_ms }}"
+                  datetime="{{ view.last_sync_time_ms | format_last_sync_iso }}">{{ view.last_sync_time_ms | format_last_sync }}</time>
           {% else %}
             <span class="meta-value muted">First sync&hellip;</span>
           {% endif %}
