@@ -81,7 +81,19 @@ class ResourceProgress:
 
 @dataclass(frozen=True)
 class TenantProgressView:
-    """Render-ready view of a tenant row for the sync progress partials."""
+    """Render-ready view of a tenant row for the sync progress partials.
+
+    Frozen because the partials treat it as an immutable snapshot of one
+    tenant's sync state at a single instant.
+
+    ``is_live_sync`` is set once at construction (via
+    ``build_tenant_progress_view``) from ``status`` + ``LastHeartbeatAt`` +
+    the caller-supplied ``now_ms``. Three derived properties (``has_failure``,
+    ``is_retry_recommended`` on the matching free function, and
+    ``is_incremental_syncing``) short-circuit when it's True so a running sync
+    can overwrite stale FAILED / IN_PROGRESS markers before the UI surfaces
+    them — see decision log 2026-04-23 entry 5 for the convention.
+    """
 
     tenant_id: str
     tenant_name: str
@@ -90,7 +102,6 @@ class TenantProgressView:
     resources: list[ResourceProgress] = field(default_factory=list)
     per_contact_index_status: str = ProgressStatus.PENDING
     last_sync_time_ms: int | None = None
-    last_heartbeat_ms: int | None = None
     is_live_sync: bool = False
 
     @property
@@ -219,7 +230,7 @@ def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str,
     heartbeat_ms = int(heartbeat_raw) if isinstance(heartbeat_raw, (int, float, Decimal)) else None
 
     status = _parse_tenant_status(item.get("TenantStatus"))
-    is_live = status in (TenantStatus.LOADING, TenantStatus.SYNCING) and heartbeat_ms is not None and (heartbeat_ms + SYNC_STALE_THRESHOLD_MS) >= now_ms
+    is_live_sync = status in (TenantStatus.LOADING, TenantStatus.SYNCING) and heartbeat_ms is not None and (heartbeat_ms + SYNC_STALE_THRESHOLD_MS) >= now_ms
 
     return TenantProgressView(
         tenant_id=tenant_id,
@@ -229,8 +240,7 @@ def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str,
         resources=resources,
         per_contact_index_status=per_index_status,
         last_sync_time_ms=last_sync_ms,
-        last_heartbeat_ms=heartbeat_ms,
-        is_live_sync=is_live,
+        is_live_sync=is_live_sync,
     )
 
 
@@ -262,10 +272,18 @@ def should_poll(views: list[TenantProgressView]) -> bool:
     Empty input resolves to ``False`` so the panel doesn't poll forever when
     the session has no tenants — the UI handles the empty state server-side.
 
-    Returns True when any view is not fully complete, OR when any view has
-    status SYNCING — needed for incremental-sync on a reconcile-ready tenant,
-    whose resource maps may still read COMPLETE from the prior run even while
-    a new sync is underway.
+    Polls when either condition holds:
+
+    - Any view is not fully complete. Covers LOADING tenants implicitly —
+      ``reconcile_ready`` is False during LOADING, so ``all_complete`` is
+      False and the first clause fires without needing an explicit branch.
+    - Any view has status SYNCING. Needed for incremental-sync on a
+      reconcile-ready tenant whose resource maps still read COMPLETE from the
+      prior run. As a side effect, a stuck-SYNCING tenant (crashed worker
+      with stale heartbeat) also keeps polling — that's load-bearing: the
+      Retry button only appears once polling re-renders the fragment after
+      the stale-heartbeat gate has fired. See decision log 2026-04-20 entry
+      "Stuck-SYNCING tenants surface Retry sync based on heartbeat staleness".
     """
     if not views:
         return False
@@ -317,10 +335,10 @@ def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, 
         progress = tenant_item.get(_progress_attribute_name(resource))
         if not isinstance(progress, dict):
             continue
-        status = str(progress.get("status") or "")
-        if status == ProgressStatus.FAILED:
+        resource_status = str(progress.get("status") or "")
+        if resource_status == ProgressStatus.FAILED:
             return True
-        if status == ProgressStatus.IN_PROGRESS and stale:
+        if resource_status == ProgressStatus.IN_PROGRESS and stale:
             return True
 
     return False
@@ -372,6 +390,9 @@ def render_sync_progress_fragment(
             pre-computed bool so the macro doesn't need to reach into
             ``SubscriptionState`` shape.
         needs_retry_by_id: ``{tenant_id: bool}`` from ``is_retry_recommended``.
+        now_ms: injected wall clock in epoch milliseconds, threaded into
+            ``build_progress_view`` so every view in the same render uses
+            the same instant for ``is_live_sync`` evaluation.
 
     Returns:
         Rendered HTML string.

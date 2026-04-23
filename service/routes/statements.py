@@ -494,7 +494,8 @@ def statement_wait(statement_id: str):
         return response
 
     tenant_name = session.get("xero_tenant_name") or tenant_id or ""
-    tenant_view = build_tenant_progress_view(tenant_id or "", tenant_name, item, now_ms=int(time.time() * 1000))
+    now_ms = int(time.time() * 1000)
+    tenant_view = build_tenant_progress_view(tenant_id or "", tenant_name, item, now_ms=now_ms)
     return render_template("partials/statement_wait_panel.html", statement_id=statement_id, tenant_view=tenant_view)
 
 

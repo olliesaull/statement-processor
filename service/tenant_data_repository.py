@@ -80,8 +80,8 @@ class TenantStatus(StrEnum):
 # IMPORTANT: the attribute names on the right-hand side are duplicated in
 # lambda_functions/tenant_erasure_lambda/main.py (_mark_as_erased REMOVE
 # expression). Any addition/rename here MUST be mirrored there — the
-# erasure Lambda does not share code with the service. See
-# plans/2026-04-23-tenant-management-ux-fixes-design.md, Issue 4a.
+# erasure Lambda does not share code with the service. See decision log
+# 2026-04-23 ("Tenant management UX fixes — five choices") for context.
 _PROGRESS_RESOURCES: dict[str, str] = {
     "contacts": "ContactsProgress",
     "invoices": "InvoicesProgress",
@@ -352,6 +352,12 @@ class TenantDataRepository:
         FAILED / IN_PROGRESS markers from an interrupted prior attempt.
         Resources not listed stay untouched — retry paths rely on this to
         preserve COMPLETE markers for the resources they're skipping.
+
+        Caller contract: the tenant row must already exist — in practice this
+        is only called after ``try_acquire_sync`` has succeeded, which writes
+        the row as part of the lock-claim ``UpdateItem``. No
+        ``ConditionExpression`` is used here: a missing row is an invariant
+        violation, not a runtime condition to guard.
 
         Args:
             tenant_id: Tenant whose maps are being reset.

@@ -165,8 +165,8 @@ def trigger_tenant_sync(tenant_id: str):
         # SYNCING with a fresh heartbeat until the stale threshold elapses.
         try:
             TenantDataRepository.release_sync_lock(tenant_id, fallback_status=TenantStatus.FREE)
-        except Exception:
-            logger.exception("Failed to release sync lock after submission failure", tenant_id=tenant_id)
+        except Exception as release_exc:
+            logger.exception("Failed to release sync lock after submission failure", tenant_id=tenant_id, error=release_exc)
         if _is_htmx_request():
             return _render_sync_progress_fragment(), 500
         return jsonify({"error": "Failed to trigger sync"}), 500
@@ -234,8 +234,8 @@ def retry_tenant_sync(tenant_id: str):
         # elapses, blocking legitimate retries for 5 minutes.
         try:
             TenantDataRepository.release_sync_lock(tenant_id, fallback_status=TenantStatus.LOAD_INCOMPLETE)
-        except Exception:
-            logger.exception("Failed to release sync lock after submission failure", tenant_id=tenant_id)
+        except Exception as release_exc:
+            logger.exception("Failed to release sync lock after submission failure", tenant_id=tenant_id, error=release_exc)
         if _is_htmx_request():
             return _render_sync_progress_fragment(), 500
         return jsonify({"error": "Failed to trigger retry"}), 500

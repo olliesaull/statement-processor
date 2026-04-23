@@ -625,11 +625,11 @@ class TestSyncDataRetry:
     def test_retry_rebuilds_per_contact_index_when_only_index_was_failed(self, _sync_scaffold, monkeypatch):
         """Retry with only_run_resources={'per_contact_index'} routes through the index-rebuild branch.
 
-        Regression for the Codex-flagged bug: a tenant whose 4 fetchers all
-        succeeded but whose index build failed could not be recovered —
-        ``_RETRY_RESOURCES`` now includes ``per_contact_index`` so the retry
-        endpoint can drive a pure index rebuild. Every heavy fetcher must be
-        skipped; only the index build runs.
+        Regression: before the ``ALL_SYNC_RESOURCES`` consolidation,
+        ``per_contact_index`` was excluded from the retry resource set, so an
+        index-only failure returned 409 "Nothing to retry" and trapped the
+        tenant in LOAD_INCOMPLETE. Every heavy fetcher must be skipped; only
+        the index build runs.
         """
         heavy_calls: list[str] = []
         monkeypatch.setattr(sync, "sync_contacts", lambda *a, **kw: heavy_calls.append("contacts") or True)

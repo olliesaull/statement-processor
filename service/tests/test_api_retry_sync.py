@@ -252,9 +252,10 @@ class TestRetrySyncHtmxResponse:
     def test_index_only_failure_can_be_retried(self, client, monkeypatch):
         """A tenant whose 4 fetchers all succeeded but whose index build failed must be retryable.
 
-        Regression for Codex finding: ``_RETRY_RESOURCES`` originally excluded
-        ``per_contact_index``, so an index-only failure returned 409 "Nothing
-        to retry" and trapped the tenant in LOAD_INCOMPLETE.
+        Regression: before ``ALL_SYNC_RESOURCES`` consolidation,
+        ``per_contact_index`` was excluded from the retry resource set, so an
+        index-only failure returned 409 "Nothing to retry" and trapped the
+        tenant in LOAD_INCOMPLETE.
         """
         from tenant_data_repository import TenantDataRepository
 

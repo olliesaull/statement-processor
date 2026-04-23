@@ -161,7 +161,7 @@
                   hx-swap="outerHTML">Retry sync</button>
         {% elif is_ready %}
           {% if view.is_incremental_syncing %}
-            <button class="btn btn-outline-secondary btn-sm" type="button" disabled>Syncing&hellip;</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" disabled title="Sync is already running">Syncing&hellip;</button>
           {% else %}
             <button class="btn btn-outline-secondary btn-sm"
                     type="button"

@@ -501,6 +501,12 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
             evaluation. Used by the Retry-sync endpoint to re-run only the
             failed subset without re-fetching all of Xero. ``None`` (default)
             runs a full sync as before.
+        already_acquired: When ``True``, skip the ``try_acquire_sync`` call
+            at step 1 and trust that the caller has already claimed the lock
+            (and therefore owns the responsibility to release it on early
+            failure). Set by the ``/sync`` and ``/retry-sync`` endpoints so
+            they can observe the 409 synchronously instead of swallowing it
+            in the worker thread.
     """
     if not already_acquired and not TenantDataRepository.try_acquire_sync(tenant_id, target_status=operation_type, stale_threshold_ms=SYNC_STALE_THRESHOLD_MS):
         logger.warning("Sync already in flight; skipping overlapping start", tenant_id=tenant_id, target_status=str(operation_type))

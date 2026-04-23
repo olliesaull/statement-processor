@@ -203,6 +203,31 @@ class TestTriggerTenantSyncHtmx:
         response = client.post(f"/api/tenants/{TENANT_ID}/sync", headers={"HX-Request": "true"})
         assert response.status_code == 409
 
+    def test_htmx_fragment_reflects_syncing_state_after_synchronous_acquire(self, client, monkeypatch):
+        """Regression: before the synchronous acquire, the fragment returned "Ready"
+        for 2-4 seconds until the next 3s poll. Simulate acquire-flips-status and
+        assert the response body no longer shows ">Ready<".
+        """
+        from tenant_data_repository import TenantDataRepository
+
+        shared_row = dict(READY_ROW)
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: shared_row for tid in ids}))
+
+        def fake_acquire(cls, *a, **k):
+            shared_row["TenantStatus"] = "SYNCING"
+            shared_row["LastHeartbeatAt"] = 9_999_999_999_999
+            return True
+
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(fake_acquire))
+        monkeypatch.setattr("routes.api.executor", type("E", (), {"submit": lambda self, *a, **k: None})())
+
+        response = client.post(f"/api/tenants/{TENANT_ID}/sync", headers={"HX-Request": "true"})
+
+        assert response.status_code == 200
+        body = response.data.decode()
+        assert ">Ready<" not in body
+        assert "Syncing" in body
+
     def test_non_htmx_request_returns_202_json(self, client, monkeypatch):
         from tenant_data_repository import TenantDataRepository
 
@@ -217,17 +242,20 @@ class TestTriggerTenantSyncHtmx:
 class TestIncrementalSyncingRender:
     """Reconcile-ready tenant mid-incremental-sync shows syncing pill + disabled Sync button."""
 
-    def test_incremental_syncing_shows_syncing_pill_and_disabled_button(self, client, monkeypatch):
-        import time
+    NOW_MS = 1_700_000_000_000
 
+    def test_incremental_syncing_shows_syncing_pill_and_disabled_button(self, client, monkeypatch):
         from tenant_data_repository import TenantDataRepository
 
-        now = int(time.time() * 1000)
+        # Fixed clock so heartbeat-freshness evaluation is deterministic; the
+        # repo testing rule ("Control clocks/time where logic depends on
+        # expiration or polling") forbids wall-clock reads in unit tests.
+        monkeypatch.setattr("routes.tenants.time.time", lambda: self.NOW_MS / 1000)
         incremental_row = {
             "TenantID": TENANT_ID,
             "TenantStatus": "SYNCING",
             "ReconcileReadyAt": 1_000_000,
-            "LastHeartbeatAt": now - 500,
+            "LastHeartbeatAt": self.NOW_MS - 500,
             "LastSyncTime": 2_000_000,
             "ContactsProgress": COMPLETE_PROGRESS,
             "InvoicesProgress": COMPLETE_PROGRESS,
