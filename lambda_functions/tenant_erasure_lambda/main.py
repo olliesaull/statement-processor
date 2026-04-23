@@ -80,15 +80,29 @@ def _delete_statement_rows(tenant_id: str) -> int:
 
 
 def _mark_as_erased(tenant_id: str) -> None:
-    """Set status to ERASED and clean up attributes.
+    """Set status to ERASED and clear every sync-lifecycle attribute.
 
     Uses a conditional write to prevent race conditions — if the tenant
     reconnected and cleared EraseTenantDataTime, this raises
     ConditionalCheckFailedException (handled by the caller).
+
+    IMPORTANT: the REMOVE list below mirrors _PROGRESS_RESOURCES in
+    service/tenant_data_repository.py plus the other sync-state attrs
+    (ReconcileReadyAt, LastFullLoadCompletedAt, LastHeartbeatAt,
+    LastSyncTime). Any new progress-tracked resource added in the
+    service must be added here too — this Lambda does not import from
+    the service. See plans/2026-04-23-tenant-management-ux-fixes-design.md
+    Issue 4a.
     """
     tenant_data_table.update_item(
         Key={"TenantID": tenant_id},
-        UpdateExpression="SET TenantStatus = :erased REMOVE EraseTenantDataTime, LastSyncTime",
+        UpdateExpression=(
+            "SET TenantStatus = :erased "
+            "REMOVE EraseTenantDataTime, LastSyncTime, LastHeartbeatAt, "
+            "ReconcileReadyAt, LastFullLoadCompletedAt, "
+            "ContactsProgress, InvoicesProgress, CreditNotesProgress, "
+            "PaymentsProgress, PerContactIndexProgress"
+        ),
         ExpressionAttributeValues={":erased": "ERASED"},
         ConditionExpression="attribute_exists(EraseTenantDataTime)",
     )
