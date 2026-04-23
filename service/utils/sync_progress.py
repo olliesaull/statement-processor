@@ -22,7 +22,7 @@ from flask import render_template
 
 from pricing_config import SUBSCRIPTION_TIERS
 from tenant_billing_repository import SubscriptionState
-from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantStatus, _progress_attribute_name
+from tenant_data_repository import ALL_SYNC_RESOURCES, SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantStatus, _progress_attribute_name
 
 # Display order matches the sync order in ``sync.py`` — users see fetchers finish
 # in the same sequence the backend runs them.
@@ -222,9 +222,6 @@ def should_poll(views: list[TenantProgressView]) -> bool:
     return any(not view.all_complete for view in views)
 
 
-_ALL_RESOURCES: tuple[str, ...] = RESOURCE_ORDER + (_PER_CONTACT_INDEX_RESOURCE,)
-
-
 def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, stale_threshold_ms: int = SYNC_STALE_THRESHOLD_MS) -> bool:
     """Return True when the operator should see "Retry sync" instead of "Sync".
 
@@ -258,7 +255,7 @@ def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, 
     heartbeat_ms = int(heartbeat) if isinstance(heartbeat, (int, float, Decimal)) else None
     stale = heartbeat_ms is not None and (heartbeat_ms + stale_threshold_ms) < now_ms
 
-    for resource in _ALL_RESOURCES:
+    for resource in ALL_SYNC_RESOURCES:
         progress = tenant_item.get(_progress_attribute_name(resource))
         if not isinstance(progress, dict):
             continue

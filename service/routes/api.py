@@ -15,7 +15,7 @@ from logger import logger
 from sync import sync_data
 from tenant_activation import executor
 from tenant_billing_repository import TenantBillingRepository
-from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
+from tenant_data_repository import ALL_SYNC_RESOURCES, SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
 from utils.auth import route_handler_logging, xero_token_required
 from utils.statement_upload_validation import build_statement_upload_preflight
 from utils.sync_progress import is_retry_recommended, render_sync_progress_fragment
@@ -27,10 +27,6 @@ api_bp = Blueprint("api", __name__)
 # gate runs first — see decision log entry 2026-04-20 ("_RETRYABLE_STATUSES
 # includes IN_PROGRESS") for the full rationale.
 _RETRYABLE_STATUSES: frozenset[str] = frozenset({ProgressStatus.PENDING, ProgressStatus.FAILED, ProgressStatus.IN_PROGRESS})
-# Includes ``per_contact_index`` so a tenant whose 4 fetchers all succeeded but
-# whose index build failed isn't silently stuck — retry-sync with
-# ``{"per_contact_index"}`` routes through sync_data's index-rebuild branch.
-_RETRY_RESOURCES: tuple[str, ...] = ("contacts", "credit_notes", "invoices", "payments", "per_contact_index")
 
 
 def _is_htmx_request() -> bool:
@@ -95,7 +91,7 @@ def _collect_retry_resources(tenant_item: dict[str, Any] | None) -> set[str]:
     """
     tenant_item = tenant_item or {}
     retryable: set[str] = set()
-    for resource in _RETRY_RESOURCES:
+    for resource in ALL_SYNC_RESOURCES:
         progress = tenant_item.get(_progress_attribute_name(resource))
         if not isinstance(progress, dict):
             # Missing entirely — treat as retryable.

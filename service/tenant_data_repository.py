@@ -77,6 +77,11 @@ class TenantStatus(StrEnum):
     ERASED = "ERASED"
 
 
+# IMPORTANT: the attribute names on the right-hand side are duplicated in
+# lambda_functions/tenant_erasure_lambda/main.py (_mark_as_erased REMOVE
+# expression). Any addition/rename here MUST be mirrored there — the
+# erasure Lambda does not share code with the service. See
+# plans/2026-04-23-tenant-management-ux-fixes-design.md, Issue 4a.
 _PROGRESS_RESOURCES: dict[str, str] = {
     "contacts": "ContactsProgress",
     "invoices": "InvoicesProgress",
@@ -84,6 +89,17 @@ _PROGRESS_RESOURCES: dict[str, str] = {
     "payments": "PaymentsProgress",
     "per_contact_index": "PerContactIndexProgress",
 }
+
+ALL_SYNC_RESOURCES: Final[tuple[str, ...]] = tuple(_PROGRESS_RESOURCES.keys())
+"""Every progress-tracked resource, in persistence order.
+
+Consumed by:
+- ``sync.sync_data`` to scope the start-of-run progress-map reset.
+- ``utils.sync_progress.is_retry_recommended`` to iterate retry candidates.
+- ``routes.api._collect_retry_resources`` for the same.
+
+Source of truth is ``_PROGRESS_RESOURCES`` above; this tuple is derived so
+adding a new sync resource means one edit, not three."""
 
 
 def _progress_attribute_name(resource: str) -> str:
