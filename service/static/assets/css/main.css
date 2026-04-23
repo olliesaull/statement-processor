@@ -2862,6 +2862,12 @@ a:focus-visible {
 .pill.complete .dot { background: var(--green-600); }
 .pill.failed   { background: var(--red-100); color: #7f1d1d; }
 .pill.failed .dot   { background: var(--red-500); }
+
+/* Incremental sync on a reconcile-ready tenant — same silhouette as the
+   "complete" pill but with a desaturated, in-motion feel. The dot animates
+   so the eye catches it against the otherwise-unchanged card surface. */
+.pill.syncing-light { background: var(--slate-100, #eef2f7); color: var(--slate-700, #3d4a5c); }
+.pill.syncing-light .dot { background: var(--slate-500, #6c7a8c); animation: tc-pulse 1.4s ease-in-out infinite; }
 @keyframes tc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
 .tenant-card-meta {
@@ -2896,6 +2902,24 @@ a:focus-visible {
   margin-top: 0.9rem;
 }
 .tenant-card-actions .btn { font-size: 0.8rem; padding: 0.35rem 0.85rem; }
+
+/* Disabled Sync button while a sync is running — keep outline-secondary
+   silhouette but add a subtle rotating spinner glyph so the user sees
+   motion rather than a dead button. Reuses tc-spin (defined later for
+   agg-row). */
+.tenant-card-actions button[disabled] { cursor: not-allowed; }
+.tenant-card-actions button[disabled]::before {
+  content: "";
+  display: inline-block;
+  width: 0.75em;
+  height: 0.75em;
+  margin-right: 0.45em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: tc-spin 0.9s linear infinite;
+  vertical-align: -0.1em;
+}
 
 /* Aggregate summary + expandable detail */
 .agg-row {
