@@ -458,3 +458,38 @@ class TestIsRetryRecommendedLiveSyncGuard:
             "LastHeartbeatAt": now - 1000,
         }
         assert is_retry_recommended(item, now_ms=now) is True
+
+
+class TestShouldPollIncrementalSync:
+    def test_syncing_with_all_resources_complete_still_polls(self):
+        """During an incremental sync of a reconcile-ready tenant, all
+        five *Progress maps may remain complete from the prior run until
+        sync_data's reset runs. should_poll must still return True so the
+        UI picks up the eventual completion."""
+        from utils.sync_progress import TenantProgressView, should_poll
+        from tenant_data_repository import ProgressStatus
+        view = TenantProgressView(
+            tenant_id="t", tenant_name="T",
+            status=TenantStatus.SYNCING, reconcile_ready=True,
+            resources=[_resource("contacts", ProgressStatus.COMPLETE),
+                       _resource("invoices", ProgressStatus.COMPLETE),
+                       _resource("credit_notes", ProgressStatus.COMPLETE),
+                       _resource("payments", ProgressStatus.COMPLETE)],
+            per_contact_index_status=ProgressStatus.COMPLETE,
+            is_live_sync=True,
+        )
+        assert should_poll([view]) is True
+
+    def test_free_with_all_complete_does_not_poll(self):
+        from utils.sync_progress import TenantProgressView, should_poll
+        from tenant_data_repository import ProgressStatus
+        view = TenantProgressView(
+            tenant_id="t", tenant_name="T",
+            status=TenantStatus.FREE, reconcile_ready=True,
+            resources=[_resource("contacts", ProgressStatus.COMPLETE),
+                       _resource("invoices", ProgressStatus.COMPLETE),
+                       _resource("credit_notes", ProgressStatus.COMPLETE),
+                       _resource("payments", ProgressStatus.COMPLETE)],
+            per_contact_index_status=ProgressStatus.COMPLETE,
+        )
+        assert should_poll([view]) is False

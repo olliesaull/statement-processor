@@ -243,10 +243,15 @@ def should_poll(views: list[TenantProgressView]) -> bool:
 
     Empty input resolves to ``False`` so the panel doesn't poll forever when
     the session has no tenants — the UI handles the empty state server-side.
+
+    Returns True when any view is not fully complete, OR when any view has
+    status SYNCING — needed for incremental-sync on a reconcile-ready tenant,
+    whose resource maps may still read COMPLETE from the prior run even while
+    a new sync is underway.
     """
     if not views:
         return False
-    return any(not view.all_complete for view in views)
+    return any((not view.all_complete) or view.status == TenantStatus.SYNCING for view in views)
 
 
 def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, stale_threshold_ms: int = SYNC_STALE_THRESHOLD_MS) -> bool:
