@@ -83,18 +83,24 @@
   <script type="module">
     import { appModal } from "/static/assets/js/modal.js";
 
-    let activeDisconnectForm = null;
+    // Context captured as primitives at submit-intercept time. We deliberately
+    // do not keep a reference to the origin form: that form lives inside the
+    // 3s-polled #sync-progress-panel and, after an outerHTML swap, its node is
+    // detached. Calling .submit() on a detached form is a silent no-op in
+    // modern browsers — the visible symptom is "Confirm Disconnect does
+    // nothing if you pause on the modal". Rebuilding a fresh hidden form on
+    // <body> at confirm time sidesteps the whole lifetime problem.
+    let activeDisconnect = null;
 
-    // Delegated submit handler: the disconnect forms live inside the HTMX-polled
-    // #sync-progress-panel, which swaps outerHTML every 3s. Direct bindings on
-    // the form nodes would be lost on each swap, letting the form submit
-    // immediately with the default erasure_days=14 and bypassing the
-    // housekeeping confirmation modal. Delegation on document survives swaps.
     document.addEventListener("submit", (e) => {
       const form = e.target.closest(".disconnect-form");
       if (!form) return;
       e.preventDefault();
-      activeDisconnectForm = form;
+      activeDisconnect = {
+        action: form.action,
+        csrfToken: form.querySelector('input[name="csrf_token"]').value,
+        tenantId: form.querySelector('input[name="tenant_id"]').value,
+      };
       const defaultRadio = document.getElementById("erasure-14");
       if (defaultRadio) defaultRadio.checked = true;
       const hasSubscription = form.dataset.hasSubscription === "true";
@@ -108,12 +114,27 @@
     const confirmBtn = document.getElementById("housekeeping-modal-confirm");
     if (confirmBtn) {
       confirmBtn.addEventListener("click", () => {
-        if (!activeDisconnectForm) return;
+        if (!activeDisconnect) return;
         const selected = document.querySelector('input[name="erasure_days"]:checked');
-        if (selected) {
-          activeDisconnectForm.querySelector('input[name="erasure_days"]').value = selected.value;
+        const days = selected ? selected.value : "14";
+        const tmp = document.createElement("form");
+        tmp.method = "post";
+        tmp.action = activeDisconnect.action;
+        tmp.style.display = "none";
+        const fields = {
+          csrf_token: activeDisconnect.csrfToken,
+          tenant_id: activeDisconnect.tenantId,
+          erasure_days: days,
+        };
+        for (const [name, value] of Object.entries(fields)) {
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = name;
+          input.value = value;
+          tmp.appendChild(input);
         }
-        activeDisconnectForm.submit();
+        document.body.appendChild(tmp);
+        tmp.submit();
       });
     }
   </script>
