@@ -493,3 +493,57 @@ class TestShouldPollIncrementalSync:
             per_contact_index_status=ProgressStatus.COMPLETE,
         )
         assert should_poll([view]) is False
+
+
+class TestIsIncrementalSyncing:
+    def _view(self, **overrides):
+        from utils.sync_progress import TenantProgressView
+        from tenant_data_repository import ProgressStatus
+        defaults = dict(
+            tenant_id="t", tenant_name="T",
+            status=TenantStatus.SYNCING, reconcile_ready=True,
+            resources=[_resource("contacts", ProgressStatus.COMPLETE)],
+            per_contact_index_status=ProgressStatus.COMPLETE,
+            is_live_sync=True,
+        )
+        defaults.update(overrides)
+        return TenantProgressView(**defaults)
+
+    def test_syncing_reconcile_ready_is_incremental(self):
+        assert self._view().is_incremental_syncing is True
+
+    def test_loading_is_not_incremental(self):
+        assert self._view(status=TenantStatus.LOADING).is_incremental_syncing is False
+
+    def test_not_reconcile_ready_is_not_incremental(self):
+        assert self._view(reconcile_ready=False).is_incremental_syncing is False
+
+    def test_failure_suppresses_incremental(self):
+        from tenant_data_repository import ProgressStatus
+        # has_failure is False under live sync guard, but construct a
+        # view that reports failure by disabling live_sync (paranoia case).
+        v = self._view(
+            is_live_sync=False,
+            resources=[_resource("contacts", ProgressStatus.FAILED)],
+        )
+        assert v.is_incremental_syncing is False
+
+    def test_finalising_is_not_incremental(self):
+        from tenant_data_repository import ProgressStatus
+        v = self._view(
+            resources=[_resource("contacts", ProgressStatus.COMPLETE),
+                       _resource("invoices", ProgressStatus.COMPLETE),
+                       _resource("credit_notes", ProgressStatus.COMPLETE),
+                       _resource("payments", ProgressStatus.COMPLETE)],
+            per_contact_index_status=ProgressStatus.IN_PROGRESS,
+        )
+        # is_finalising=True → is_incremental_syncing must be False
+        assert v.is_finalising is True
+        assert v.is_incremental_syncing is False
+
+    def test_stale_heartbeat_is_not_incremental(self):
+        """Crashed-worker scenario: status=SYNCING but heartbeat stale.
+        The macro must NOT render the 'Syncing…' pill on top of the Retry
+        button — is_retry_recommended returns True in this case, and the
+        two signals contradict each other."""
+        assert self._view(is_live_sync=False).is_incremental_syncing is False

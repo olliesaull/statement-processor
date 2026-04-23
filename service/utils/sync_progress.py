@@ -134,6 +134,24 @@ class TenantProgressView:
         # "all four Xero fetchers complete", so at least one must exist.
         return bool(self.resources) and all(r.is_complete for r in self.resources) and self.per_contact_index_status not in (ProgressStatus.COMPLETE, ProgressStatus.FAILED)
 
+    @property
+    def is_incremental_syncing(self) -> bool:
+        """True when a reconcile-ready tenant is mid-sync with a fresh heartbeat.
+
+        Distinct from ``is_syncing_active`` (first-sync state with no
+        reconcile-ready) — incremental sync keeps the Ready layout and only
+        swaps the pill + Sync button.
+
+        The ``is_live_sync`` guard suppresses the 'Syncing…' pill on a
+        crashed worker (stale heartbeat). Without it, a stale SYNCING state
+        with an IN_PROGRESS resource would render 'Syncing…' *and* a Retry
+        button — contradictory signals. With the guard the card falls
+        through to the Retry branch cleanly.
+
+        See plans/2026-04-23-tenant-management-ux-fixes-design.md Issue 3.
+        """
+        return self.is_live_sync and self.status == TenantStatus.SYNCING and self.reconcile_ready and not self.has_failure and not self.is_finalising
+
 
 def _parse_tenant_status(raw: Any) -> TenantStatus:
     """Best-effort parse of the stored ``TenantStatus`` attribute.
