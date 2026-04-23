@@ -433,7 +433,7 @@ def reconcile_ready_required(f: Callable[..., Any]) -> Callable[..., Any]:
         if reconcile_ready_at is None:
             statement_id = kwargs.get("statement_id")
             tenant_name = session.get("xero_tenant_name") or tenant_id or ""
-            tenant_view = build_tenant_progress_view(tenant_id or "", tenant_name, item)
+            tenant_view = build_tenant_progress_view(tenant_id or "", tenant_name, item, now_ms=int(time.time() * 1000))
             logger.info("Rendering reconcile-not-ready view", tenant_id=tenant_id, statement_id=statement_id, route=request.path)
             return render_template(
                 "statement.html",

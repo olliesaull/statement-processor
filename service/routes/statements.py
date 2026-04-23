@@ -4,6 +4,7 @@ Handles the statement list view with sorting/pagination, the individual
 statement detail/reconciliation view, statement uploads, and deletion.
 """
 
+import time
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -493,7 +494,7 @@ def statement_wait(statement_id: str):
         return response
 
     tenant_name = session.get("xero_tenant_name") or tenant_id or ""
-    tenant_view = build_tenant_progress_view(tenant_id or "", tenant_name, item)
+    tenant_view = build_tenant_progress_view(tenant_id or "", tenant_name, item, now_ms=int(time.time() * 1000))
     return render_template("partials/statement_wait_panel.html", statement_id=statement_id, tenant_view=tenant_view)
 
 

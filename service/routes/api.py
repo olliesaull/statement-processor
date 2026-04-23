@@ -72,6 +72,7 @@ def _render_sync_progress_fragment() -> str:
         tenant_token_balances=tenant_token_balances,
         is_active_subscription=is_active_subscription,
         needs_retry_by_id={tid: is_retry_recommended(tenant_rows.get(tid), now_ms=now_ms) for tid in tenant_ids},
+        now_ms=now_ms,
     )
 
 

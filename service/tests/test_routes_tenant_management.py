@@ -237,7 +237,7 @@ class TestTenantManagementEmptyState:
         from utils.sync_progress import render_sync_progress_fragment
 
         with _app.test_request_context("/"):
-            html = render_sync_progress_fragment([], tenant_rows={}, current_tenant_id=None, tenant_token_balances={}, is_active_subscription=False, needs_retry_by_id={})
+            html = render_sync_progress_fragment([], tenant_rows={}, current_tenant_id=None, tenant_token_balances={}, is_active_subscription=False, needs_retry_by_id={}, now_ms=0)
 
         assert "tenant-card-empty" in html
         assert "No tenants connected yet" in html

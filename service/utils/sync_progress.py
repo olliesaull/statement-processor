@@ -90,6 +90,8 @@ class TenantProgressView:
     resources: list[ResourceProgress] = field(default_factory=list)
     per_contact_index_status: str = ProgressStatus.PENDING
     last_sync_time_ms: int | None = None
+    last_heartbeat_ms: int | None = None
+    is_live_sync: bool = False
 
     @property
     def has_failure(self) -> bool:
@@ -171,8 +173,15 @@ def _resource_from_item(item: dict[str, Any], resource: str) -> ResourceProgress
     return ResourceProgress(resource=resource, display_name=_RESOURCE_DISPLAY_NAMES[resource], status=status, records_fetched=records_fetched, record_total=record_total, percent=percent)
 
 
-def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str, Any] | None) -> TenantProgressView:
-    """Compose a progress view for one tenant."""
+def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str, Any] | None, *, now_ms: int) -> TenantProgressView:
+    """Compose a progress view for one tenant.
+
+    Args:
+        now_ms: injected wall clock in epoch milliseconds — used to decide
+            whether ``LastHeartbeatAt`` is fresh enough for ``is_live_sync``.
+            Callers pre-compute once per request so every view in the same
+            render uses the same instant.
+    """
     item = item or {}
     resources = [_resource_from_item(item, r) for r in RESOURCE_ORDER]
     per_index_raw = item.get(_progress_attribute_name(_PER_CONTACT_INDEX_RESOURCE))
@@ -181,23 +190,34 @@ def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str,
     last_sync_raw = item.get("LastSyncTime")
     last_sync_ms = int(last_sync_raw) if isinstance(last_sync_raw, (int, float, Decimal)) else None
 
+    heartbeat_raw = item.get("LastHeartbeatAt")
+    heartbeat_ms = int(heartbeat_raw) if isinstance(heartbeat_raw, (int, float, Decimal)) else None
+
+    status = _parse_tenant_status(item.get("TenantStatus"))
+    is_live = status in (TenantStatus.LOADING, TenantStatus.SYNCING) and heartbeat_ms is not None and (heartbeat_ms + SYNC_STALE_THRESHOLD_MS) >= now_ms
+
     return TenantProgressView(
         tenant_id=tenant_id,
         tenant_name=tenant_name,
-        status=_parse_tenant_status(item.get("TenantStatus")),
+        status=status,
         reconcile_ready=item.get("ReconcileReadyAt") is not None,
         resources=resources,
         per_contact_index_status=per_index_status,
         last_sync_time_ms=last_sync_ms,
+        last_heartbeat_ms=heartbeat_ms,
+        is_live_sync=is_live,
     )
 
 
-def build_progress_view(session_tenants: list[Any], tenant_rows: dict[str, dict[str, Any] | None]) -> list[TenantProgressView]:
+def build_progress_view(session_tenants: list[Any], tenant_rows: dict[str, dict[str, Any] | None], *, now_ms: int) -> list[TenantProgressView]:
     """Build progress views for every well-formed session tenant.
 
     ``session_tenants`` is the untyped ``session["xero_tenants"]`` list — we
     skip entries without a ``tenantId`` or that aren't dicts so a corrupted
     session can't 500 the endpoint.
+
+    ``now_ms`` is threaded through to ``build_tenant_progress_view`` so every
+    view in the same render uses the same instant (see that function).
     """
     views: list[TenantProgressView] = []
     for tenant in session_tenants:
@@ -207,7 +227,7 @@ def build_progress_view(session_tenants: list[Any], tenant_rows: dict[str, dict[
         if not tenant_id:
             continue
         name = tenant.get("tenantName") or tenant_id
-        views.append(build_tenant_progress_view(tenant_id, name, tenant_rows.get(tenant_id)))
+        views.append(build_tenant_progress_view(tenant_id, name, tenant_rows.get(tenant_id), now_ms=now_ms))
     return views
 
 
@@ -292,6 +312,7 @@ def render_sync_progress_fragment(
     tenant_token_balances: dict[str, int],
     is_active_subscription: bool,
     needs_retry_by_id: dict[str, bool],
+    now_ms: int,
 ) -> str:
     """Render the tenant-card list fragment.
 
@@ -317,7 +338,7 @@ def render_sync_progress_fragment(
     Returns:
         Rendered HTML string.
     """
-    tenant_views = build_progress_view(session_tenants, tenant_rows)
+    tenant_views = build_progress_view(session_tenants, tenant_rows, now_ms=now_ms)
     polling = should_poll(tenant_views)
     return render_template(
         "partials/sync_progress_panel.html",
