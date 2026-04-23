@@ -95,7 +95,14 @@ class TenantProgressView:
 
     @property
     def has_failure(self) -> bool:
-        """True when any resource or the per-contact index is in ``failed`` state."""
+        """True when any resource or the per-contact index is in ``failed`` state.
+
+        A live sync (status LOADING/SYNCING with fresh heartbeat) overrides
+        stale FAILED markers — the running sync will overwrite them, and
+        rendering the failure pill while a sync is mid-flight is misleading.
+        """
+        if self.is_live_sync:
+            return False
         return any(r.is_failed for r in self.resources) or self.per_contact_index_status == ProgressStatus.FAILED
 
     @property

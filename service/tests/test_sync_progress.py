@@ -373,3 +373,50 @@ class TestIsLiveSync:
         item = {"TenantStatus": "FREE", "LastHeartbeatAt": now - 1000}
         view = build_tenant_progress_view("t", "T", item, now_ms=now)
         assert view.is_live_sync is False
+
+
+def _resource(name: str, status: str):
+    from utils.sync_progress import ResourceProgress
+    return ResourceProgress(
+        resource=name,
+        display_name=name.title(),
+        status=status,
+        records_fetched=None,
+        record_total=None,
+        percent=None,
+    )
+
+
+class TestHasFailureLiveSyncGuard:
+    def test_free_tenant_with_failed_resource_reports_failure(self):
+        from utils.sync_progress import TenantProgressView
+        from tenant_data_repository import ProgressStatus
+        view = TenantProgressView(
+            tenant_id="t", tenant_name="T",
+            status=TenantStatus.FREE, reconcile_ready=True,
+            resources=[_resource("contacts", ProgressStatus.FAILED)],
+            is_live_sync=False,
+        )
+        assert view.has_failure is True
+
+    def test_live_sync_hides_failed_resource(self):
+        from utils.sync_progress import TenantProgressView
+        from tenant_data_repository import ProgressStatus
+        view = TenantProgressView(
+            tenant_id="t", tenant_name="T",
+            status=TenantStatus.SYNCING, reconcile_ready=True,
+            resources=[_resource("contacts", ProgressStatus.FAILED)],
+            is_live_sync=True,
+        )
+        assert view.has_failure is False
+
+    def test_live_sync_hides_failed_per_contact_index(self):
+        from utils.sync_progress import TenantProgressView
+        from tenant_data_repository import ProgressStatus
+        view = TenantProgressView(
+            tenant_id="t", tenant_name="T",
+            status=TenantStatus.SYNCING, reconcile_ready=True,
+            per_contact_index_status=ProgressStatus.FAILED,
+            is_live_sync=True,
+        )
+        assert view.has_failure is False
