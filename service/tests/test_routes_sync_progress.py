@@ -250,3 +250,24 @@ class TestIncrementalSyncingRender:
         # aria-label reflects the visible syncing state, not the CSS class.
         assert "state syncing-incremental" in body
         assert "state complete" not in body
+
+
+class TestPanelPollingWiring:
+    """When no tenant requires polling, the panel must carry no HTMX wiring."""
+
+    def test_fully_complete_tenant_renders_no_hx_attributes(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: READY_ROW for tid in ids}))
+
+        response = client.get("/tenants/sync-progress", headers={"HX-Request": "true"})
+        body = response.data.decode()
+
+        # Isolate the <ul id="sync-progress-panel"> opening tag.
+        import re
+        match = re.search(r'<ul[^>]*id="sync-progress-panel"[^>]*>', body)
+        assert match, "panel element missing"
+        opening = match.group(0)
+        assert "hx-get" not in opening
+        assert "hx-trigger" not in opening
+        assert "hx-swap" not in opening
