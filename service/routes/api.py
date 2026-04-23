@@ -124,9 +124,11 @@ def tenant_status():
 def trigger_tenant_sync(tenant_id: str):
     """Trigger a background sync for the specified tenant.
 
-    HTMX callers receive the rendered sync-progress fragment (with polling
-    reinstated) so the UI panel swaps in place; non-HTMX callers get the
-    legacy 202 JSON response.
+    Synchronously acquires the sync lock (flipping ``TenantStatus`` to
+    ``SYNCING``) before submitting ``sync_data`` to the executor so the
+    HTTP response already reflects the in-flight state. HTMX callers
+    receive the rendered sync-progress fragment; non-HTMX callers get
+    the legacy 202 JSON response. A concurrent start returns 409.
     """
     tenant_id = (tenant_id or "").strip()
     if not tenant_id:
@@ -144,20 +146,32 @@ def trigger_tenant_sync(tenant_id: str):
         logger.warning("Manual sync denied; missing OAuth token", tenant_id=tenant_id)
         return jsonify({"error": "Missing OAuth token"}), 400
 
+    # Acquire the sync lock synchronously so the returned fragment already
+    # reflects TenantStatus=SYNCING. sync_data then runs with
+    # already_acquired=True to avoid double-claiming.
+    acquired = TenantDataRepository.try_acquire_sync(tenant_id, target_status=TenantStatus.SYNCING, stale_threshold_ms=SYNC_STALE_THRESHOLD_MS)
+    if not acquired:
+        logger.info("Manual sync rejected; another sync in flight", tenant_id=tenant_id)
+        if _is_htmx_request():
+            return _render_sync_progress_fragment(), 409
+        return jsonify({"error": "Sync already in flight"}), 409
+
     try:
-        # Fire-and-forget: sync runs in the background.
-        executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token)  # TODO: Perhaps worth checking if there is row in DDB/files in S3
+        executor.submit(sync_data, tenant_id, TenantStatus.SYNCING, oauth_token, already_acquired=True)
         logger.info("Manual tenant sync triggered", tenant_id=tenant_id)
     except Exception as exc:
         logger.exception("Failed to trigger manual sync", tenant_id=tenant_id, error=exc)
+        # Release the lock we just acquired so the tenant isn't stuck in
+        # SYNCING with a fresh heartbeat until the stale threshold elapses.
+        try:
+            TenantDataRepository.release_sync_lock(tenant_id, fallback_status=TenantStatus.FREE)
+        except Exception:
+            logger.exception("Failed to release sync lock after submission failure", tenant_id=tenant_id)
         if _is_htmx_request():
             return _render_sync_progress_fragment(), 500
         return jsonify({"error": "Failed to trigger sync"}), 500
 
     if _is_htmx_request():
-        # The sync_data thread will update DDB within a second; returning the
-        # fragment immediately with hx-trigger reinstated restores polling so
-        # the UI reflects the new "in progress" state on the next 3s tick.
         return _render_sync_progress_fragment()
     return jsonify({"started": True}), 202
 

@@ -328,15 +328,43 @@ class TestSyncEndpointHtmxResponse:
 
         c, _ = client
         monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: _row_with_failed_invoices() for tid in ids}))
+        # Mock try_acquire_sync: the endpoint now synchronously acquires before submitting.
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: True))
+        submitted: list[tuple] = []
+        monkeypatch.setattr("routes.api.executor", type("E", (), {"submit": lambda self, *a, **k: submitted.append((a, k))})())
 
         response = c.post(f"/api/tenants/{TENANT_ID}/sync", headers={"HX-Request": "true"})
 
         assert response.status_code == 200
         html = response.data.decode()
         assert 'id="sync-progress-panel"' in html
+        # Contract: sync_data must be dispatched with already_acquired=True
+        # so it doesn't double-claim the lock this endpoint already holds.
+        assert len(submitted) == 1
+        _, kwargs = submitted[0]
+        assert kwargs.get("already_acquired") is True
 
-    def test_non_htmx_sync_keeps_json_202(self, client):
+    def test_htmx_conflict_returns_409(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
         c, _ = client
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: _row_with_failed_invoices() for tid in ids}))
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: False))
+
+        response = c.post(f"/api/tenants/{TENANT_ID}/sync", headers={"HX-Request": "true"})
+
+        assert response.status_code == 409
+        # 409 still returns the fragment body so HTMX can swap something
+        # useful rather than erroring out.
+        assert 'id="sync-progress-panel"' in response.data.decode()
+
+    def test_non_htmx_sync_keeps_json_202(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        c, _ = client
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: True))
+        monkeypatch.setattr("routes.api.executor", type("E", (), {"submit": lambda self, *a, **k: None})())
+
         response = c.post(f"/api/tenants/{TENANT_ID}/sync")
         assert response.status_code == 202
         assert response.get_json()["started"] is True

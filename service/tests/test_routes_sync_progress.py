@@ -74,6 +74,8 @@ def client(_app, monkeypatch):
             sess["xero_tenant_id"] = TENANT_ID
             sess["xero_tenant_name"] = "Acme Ltd"
             sess["xero_tenants"] = [{"tenantId": TENANT_ID, "tenantName": "Acme Ltd"}]
+            # Needed by the sync-trigger endpoint; harmless to other tests.
+            sess["xero_oauth2_token"] = {"access_token": "fake", "expires_at": 9_999_999_999.0}
         yield c
 
 
@@ -163,3 +165,50 @@ class TestStatementWaitEndpoint:
         response = client.get(f"/statement/{STATEMENT_ID}/wait")
 
         assert response.status_code == 404
+
+
+class TestTriggerTenantSyncHtmx:
+    """HTMX-flavoured trigger_tenant_sync returns a syncing fragment."""
+
+    def test_htmx_request_acquires_lock_and_submits_already_acquired(self, client, monkeypatch):
+        """Contract: POST acquires the sync lock synchronously, then submits
+        sync_data with already_acquired=True so it doesn't double-claim.
+
+        Fragment rendering (pill copy, disabled button) is covered separately
+        in TestIncrementalSyncingRender — here we just verify the plumbing.
+        """
+        from tenant_data_repository import TenantDataRepository
+
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: IN_FLIGHT_ROW for tid in ids}))
+        acquire_calls: list = []
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: (acquire_calls.append((a, k)) or True)))
+        submitted: list[tuple] = []
+        monkeypatch.setattr("routes.api.executor", type("E", (), {"submit": lambda self, *a, **k: submitted.append((a, k))})())
+
+        response = client.post(f"/api/tenants/{TENANT_ID}/sync", headers={"HX-Request": "true"})
+
+        assert response.status_code == 200
+        assert 'id="sync-progress-panel"' in response.data.decode()
+        assert len(acquire_calls) == 1
+        assert len(submitted) == 1
+        _, kwargs = submitted[0]
+        assert kwargs.get("already_acquired") is True
+
+    def test_htmx_request_returns_409_on_conflict(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: IN_FLIGHT_ROW for tid in ids}))
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: False))
+
+        response = client.post(f"/api/tenants/{TENANT_ID}/sync", headers={"HX-Request": "true"})
+        assert response.status_code == 409
+
+    def test_non_htmx_request_returns_202_json(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: True))
+        monkeypatch.setattr("routes.api.executor", type("E", (), {"submit": lambda self, *a, **k: None})())
+
+        response = client.post(f"/api/tenants/{TENANT_ID}/sync")
+        assert response.status_code == 202
+        assert response.json == {"started": True}
