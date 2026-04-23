@@ -25,7 +25,7 @@ from billing_service import LAST_MUTATION_SOURCE_WELCOME_GRANT, WELCOME_GRANT_TO
 from config import LOCAL_DATA_DIR, S3_BUCKET_NAME, s3_client, tenant_data_table
 from logger import logger
 from statement_view_cache import bump_tenant_generation
-from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
+from tenant_data_repository import ALL_SYNC_RESOURCES, SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantDataRepository, TenantStatus, _progress_attribute_name
 from utils.auth import get_xero_api_client
 from xero_repository import CONTACT_DOC_TYPES, XeroType, get_contacts_from_xero, get_credit_notes, get_invoices, get_payments
 
@@ -505,6 +505,13 @@ def sync_data(tenant_id: str, operation_type: TenantStatus, oauth_token: dict[st
     if not already_acquired and not TenantDataRepository.try_acquire_sync(tenant_id, target_status=operation_type, stale_threshold_ms=SYNC_STALE_THRESHOLD_MS):
         logger.warning("Sync already in flight; skipping overlapping start", tenant_id=tenant_id, target_status=str(operation_type))
         return
+
+    # Reset stale progress sub-maps so a fresh run doesn't carry FAILED /
+    # IN_PROGRESS markers from an interrupted prior attempt. Scope to the
+    # resources we're about to run so retry paths preserve COMPLETE markers
+    # on the subset they're deliberately skipping.
+    resources_to_reset = only_run_resources if only_run_resources is not None else set(ALL_SYNC_RESOURCES)
+    TenantDataRepository.reset_resource_progress(tenant_id, resources_to_reset)
 
     tenant_record = TenantDataRepository.get_item(tenant_id)
     reconcile_ready_before = bool(tenant_record and tenant_record.get("ReconcileReadyAt"))
