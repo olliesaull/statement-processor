@@ -275,12 +275,20 @@ def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, 
     if tenant_item is None:
         return False
 
-    if _parse_tenant_status(tenant_item.get("TenantStatus")) == TenantStatus.LOAD_INCOMPLETE:
+    status = _parse_tenant_status(tenant_item.get("TenantStatus"))
+    if status == TenantStatus.LOAD_INCOMPLETE:
         return True
 
     heartbeat = tenant_item.get("LastHeartbeatAt")
     heartbeat_ms = int(heartbeat) if isinstance(heartbeat, (int, float, Decimal)) else None
     stale = heartbeat_ms is not None and (heartbeat_ms + stale_threshold_ms) < now_ms
+
+    # Live sync with fresh heartbeat overrides stale FAILED / IN_PROGRESS
+    # markers — the running sync will overwrite them, and rendering the
+    # Retry button while a sync is mid-flight is broken (409 on click).
+    live = status in (TenantStatus.LOADING, TenantStatus.SYNCING) and heartbeat_ms is not None and not stale
+    if live:
+        return False
 
     for resource in ALL_SYNC_RESOURCES:
         progress = tenant_item.get(_progress_attribute_name(resource))

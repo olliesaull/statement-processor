@@ -420,3 +420,41 @@ class TestHasFailureLiveSyncGuard:
             is_live_sync=True,
         )
         assert view.has_failure is False
+
+
+class TestIsRetryRecommendedLiveSyncGuard:
+    def test_live_sync_with_stale_failed_resource_does_not_recommend_retry(self):
+        now = 10_000_000
+        item = {
+            "TenantStatus": "LOADING",
+            "LastHeartbeatAt": now - 1000,  # fresh
+            "ContactsProgress": {"status": "failed"},
+        }
+        assert is_retry_recommended(item, now_ms=now) is False
+
+    def test_stale_heartbeat_with_failed_resource_recommends_retry(self):
+        now = 10_000_000
+        item = {
+            "TenantStatus": "LOADING",
+            "LastHeartbeatAt": now - (SYNC_STALE_THRESHOLD_MS + 1000),
+            "ContactsProgress": {"status": "failed"},
+        }
+        assert is_retry_recommended(item, now_ms=now) is True
+
+    def test_free_tenant_with_failed_resource_recommends_retry(self):
+        now = 10_000_000
+        item = {
+            "TenantStatus": "FREE",
+            "ContactsProgress": {"status": "failed"},
+        }
+        assert is_retry_recommended(item, now_ms=now) is True
+
+    def test_load_incomplete_always_recommends_retry(self):
+        now = 10_000_000
+        # Even with a fresh heartbeat, LOAD_INCOMPLETE is an unambiguous
+        # signal that a full load never finished — surface Retry.
+        item = {
+            "TenantStatus": "LOAD_INCOMPLETE",
+            "LastHeartbeatAt": now - 1000,
+        }
+        assert is_retry_recommended(item, now_ms=now) is True
