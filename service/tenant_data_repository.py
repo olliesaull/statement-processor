@@ -345,6 +345,34 @@ class TenantDataRepository:
         )
 
     @classmethod
+    def reset_resource_progress(cls, tenant_id: str, resources: Iterable[str]) -> None:
+        """Reset the named progress sub-maps to ``{status: pending}``.
+
+        Called by ``sync_data`` at start so a new run doesn't inherit stale
+        FAILED / IN_PROGRESS markers from an interrupted prior attempt.
+        Resources not listed stay untouched — retry paths rely on this to
+        preserve COMPLETE markers for the resources they're skipping.
+
+        Args:
+            tenant_id: Tenant whose maps are being reset.
+            resources: Snake-case resource identifiers to reset. Unknown
+                identifiers raise via ``_progress_attribute_name``.
+        """
+        resources = list(resources)
+        if not resources:
+            return
+        names = {f"#r{i}": _progress_attribute_name(r) for i, r in enumerate(resources)}
+        set_clauses = [f"{alias} = :pending" for alias in names]
+        # Mirror update_resource_progress's StrEnum coercion.
+        pending: dict[str, Any] = {"status": str(ProgressStatus.PENDING)}
+        cls._table.update_item(
+            Key={"TenantID": tenant_id},
+            UpdateExpression="SET " + ", ".join(set_clauses),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues={":pending": pending},
+        )
+
+    @classmethod
     def mark_reconcile_ready(cls, tenant_id: str) -> None:
         """Flag the tenant as reconcile-ready after a successful initial or retry sync.
 
