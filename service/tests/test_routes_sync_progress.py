@@ -181,7 +181,7 @@ class TestTriggerTenantSyncHtmx:
 
         monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: IN_FLIGHT_ROW for tid in ids}))
         acquire_calls: list = []
-        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: (acquire_calls.append((a, k)) or True)))
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: acquire_calls.append((a, k)) or True))
         submitted: list[tuple] = []
         monkeypatch.setattr("routes.api.executor", type("E", (), {"submit": lambda self, *a, **k: submitted.append((a, k))})())
 
@@ -218,9 +218,10 @@ class TestIncrementalSyncingRender:
     """Reconcile-ready tenant mid-incremental-sync shows syncing pill + disabled Sync button."""
 
     def test_incremental_syncing_shows_syncing_pill_and_disabled_button(self, client, monkeypatch):
+        import time
+
         from tenant_data_repository import TenantDataRepository
 
-        import time
         now = int(time.time() * 1000)
         incremental_row = {
             "TenantID": TENANT_ID,
@@ -265,6 +266,7 @@ class TestPanelPollingWiring:
 
         # Isolate the <ul id="sync-progress-panel"> opening tag.
         import re
+
         match = re.search(r'<ul[^>]*id="sync-progress-panel"[^>]*>', body)
         assert match, "panel element missing"
         opening = match.group(0)

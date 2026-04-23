@@ -346,19 +346,13 @@ class TestIsLiveSync:
 
     def test_syncing_with_fresh_heartbeat_is_live(self):
         now = 10_000_000
-        item = {
-            "TenantStatus": "SYNCING",
-            "LastHeartbeatAt": now - 1000,
-        }
+        item = {"TenantStatus": "SYNCING", "LastHeartbeatAt": now - 1000}
         view = build_tenant_progress_view("t", "T", item, now_ms=now)
         assert view.is_live_sync is True
 
     def test_stale_heartbeat_is_not_live(self):
         now = 10_000_000
-        item = {
-            "TenantStatus": "LOADING",
-            "LastHeartbeatAt": now - (SYNC_STALE_THRESHOLD_MS + 1000),
-        }
+        item = {"TenantStatus": "LOADING", "LastHeartbeatAt": now - (SYNC_STALE_THRESHOLD_MS + 1000)}
         view = build_tenant_progress_view("t", "T", item, now_ms=now)
         assert view.is_live_sync is False
 
@@ -377,48 +371,30 @@ class TestIsLiveSync:
 
 def _resource(name: str, status: str):
     from utils.sync_progress import ResourceProgress
-    return ResourceProgress(
-        resource=name,
-        display_name=name.title(),
-        status=status,
-        records_fetched=None,
-        record_total=None,
-        percent=None,
-    )
+
+    return ResourceProgress(resource=name, display_name=name.title(), status=status, records_fetched=None, record_total=None, percent=None)
 
 
 class TestHasFailureLiveSyncGuard:
     def test_free_tenant_with_failed_resource_reports_failure(self):
-        from utils.sync_progress import TenantProgressView
         from tenant_data_repository import ProgressStatus
-        view = TenantProgressView(
-            tenant_id="t", tenant_name="T",
-            status=TenantStatus.FREE, reconcile_ready=True,
-            resources=[_resource("contacts", ProgressStatus.FAILED)],
-            is_live_sync=False,
-        )
+        from utils.sync_progress import TenantProgressView
+
+        view = TenantProgressView(tenant_id="t", tenant_name="T", status=TenantStatus.FREE, reconcile_ready=True, resources=[_resource("contacts", ProgressStatus.FAILED)], is_live_sync=False)
         assert view.has_failure is True
 
     def test_live_sync_hides_failed_resource(self):
-        from utils.sync_progress import TenantProgressView
         from tenant_data_repository import ProgressStatus
-        view = TenantProgressView(
-            tenant_id="t", tenant_name="T",
-            status=TenantStatus.SYNCING, reconcile_ready=True,
-            resources=[_resource("contacts", ProgressStatus.FAILED)],
-            is_live_sync=True,
-        )
+        from utils.sync_progress import TenantProgressView
+
+        view = TenantProgressView(tenant_id="t", tenant_name="T", status=TenantStatus.SYNCING, reconcile_ready=True, resources=[_resource("contacts", ProgressStatus.FAILED)], is_live_sync=True)
         assert view.has_failure is False
 
     def test_live_sync_hides_failed_per_contact_index(self):
-        from utils.sync_progress import TenantProgressView
         from tenant_data_repository import ProgressStatus
-        view = TenantProgressView(
-            tenant_id="t", tenant_name="T",
-            status=TenantStatus.SYNCING, reconcile_ready=True,
-            per_contact_index_status=ProgressStatus.FAILED,
-            is_live_sync=True,
-        )
+        from utils.sync_progress import TenantProgressView
+
+        view = TenantProgressView(tenant_id="t", tenant_name="T", status=TenantStatus.SYNCING, reconcile_ready=True, per_contact_index_status=ProgressStatus.FAILED, is_live_sync=True)
         assert view.has_failure is False
 
 
@@ -434,29 +410,19 @@ class TestIsRetryRecommendedLiveSyncGuard:
 
     def test_stale_heartbeat_with_failed_resource_recommends_retry(self):
         now = 10_000_000
-        item = {
-            "TenantStatus": "LOADING",
-            "LastHeartbeatAt": now - (SYNC_STALE_THRESHOLD_MS + 1000),
-            "ContactsProgress": {"status": "failed"},
-        }
+        item = {"TenantStatus": "LOADING", "LastHeartbeatAt": now - (SYNC_STALE_THRESHOLD_MS + 1000), "ContactsProgress": {"status": "failed"}}
         assert is_retry_recommended(item, now_ms=now) is True
 
     def test_free_tenant_with_failed_resource_recommends_retry(self):
         now = 10_000_000
-        item = {
-            "TenantStatus": "FREE",
-            "ContactsProgress": {"status": "failed"},
-        }
+        item = {"TenantStatus": "FREE", "ContactsProgress": {"status": "failed"}}
         assert is_retry_recommended(item, now_ms=now) is True
 
     def test_load_incomplete_always_recommends_retry(self):
         now = 10_000_000
         # Even with a fresh heartbeat, LOAD_INCOMPLETE is an unambiguous
         # signal that a full load never finished — surface Retry.
-        item = {
-            "TenantStatus": "LOAD_INCOMPLETE",
-            "LastHeartbeatAt": now - 1000,
-        }
+        item = {"TenantStatus": "LOAD_INCOMPLETE", "LastHeartbeatAt": now - 1000}
         assert is_retry_recommended(item, now_ms=now) is True
 
 
@@ -466,30 +432,40 @@ class TestShouldPollIncrementalSync:
         five *Progress maps may remain complete from the prior run until
         sync_data's reset runs. should_poll must still return True so the
         UI picks up the eventual completion."""
-        from utils.sync_progress import TenantProgressView, should_poll
         from tenant_data_repository import ProgressStatus
+        from utils.sync_progress import TenantProgressView, should_poll
+
         view = TenantProgressView(
-            tenant_id="t", tenant_name="T",
-            status=TenantStatus.SYNCING, reconcile_ready=True,
-            resources=[_resource("contacts", ProgressStatus.COMPLETE),
-                       _resource("invoices", ProgressStatus.COMPLETE),
-                       _resource("credit_notes", ProgressStatus.COMPLETE),
-                       _resource("payments", ProgressStatus.COMPLETE)],
+            tenant_id="t",
+            tenant_name="T",
+            status=TenantStatus.SYNCING,
+            reconcile_ready=True,
+            resources=[
+                _resource("contacts", ProgressStatus.COMPLETE),
+                _resource("invoices", ProgressStatus.COMPLETE),
+                _resource("credit_notes", ProgressStatus.COMPLETE),
+                _resource("payments", ProgressStatus.COMPLETE),
+            ],
             per_contact_index_status=ProgressStatus.COMPLETE,
             is_live_sync=True,
         )
         assert should_poll([view]) is True
 
     def test_free_with_all_complete_does_not_poll(self):
-        from utils.sync_progress import TenantProgressView, should_poll
         from tenant_data_repository import ProgressStatus
+        from utils.sync_progress import TenantProgressView, should_poll
+
         view = TenantProgressView(
-            tenant_id="t", tenant_name="T",
-            status=TenantStatus.FREE, reconcile_ready=True,
-            resources=[_resource("contacts", ProgressStatus.COMPLETE),
-                       _resource("invoices", ProgressStatus.COMPLETE),
-                       _resource("credit_notes", ProgressStatus.COMPLETE),
-                       _resource("payments", ProgressStatus.COMPLETE)],
+            tenant_id="t",
+            tenant_name="T",
+            status=TenantStatus.FREE,
+            reconcile_ready=True,
+            resources=[
+                _resource("contacts", ProgressStatus.COMPLETE),
+                _resource("invoices", ProgressStatus.COMPLETE),
+                _resource("credit_notes", ProgressStatus.COMPLETE),
+                _resource("payments", ProgressStatus.COMPLETE),
+            ],
             per_contact_index_status=ProgressStatus.COMPLETE,
         )
         assert should_poll([view]) is False
@@ -497,11 +473,14 @@ class TestShouldPollIncrementalSync:
 
 class TestIsIncrementalSyncing:
     def _view(self, **overrides):
-        from utils.sync_progress import TenantProgressView
         from tenant_data_repository import ProgressStatus
+        from utils.sync_progress import TenantProgressView
+
         defaults = dict(
-            tenant_id="t", tenant_name="T",
-            status=TenantStatus.SYNCING, reconcile_ready=True,
+            tenant_id="t",
+            tenant_name="T",
+            status=TenantStatus.SYNCING,
+            reconcile_ready=True,
             resources=[_resource("contacts", ProgressStatus.COMPLETE)],
             per_contact_index_status=ProgressStatus.COMPLETE,
             is_live_sync=True,
@@ -520,21 +499,22 @@ class TestIsIncrementalSyncing:
 
     def test_failure_suppresses_incremental(self):
         from tenant_data_repository import ProgressStatus
+
         # has_failure is False under live sync guard, but construct a
         # view that reports failure by disabling live_sync (paranoia case).
-        v = self._view(
-            is_live_sync=False,
-            resources=[_resource("contacts", ProgressStatus.FAILED)],
-        )
+        v = self._view(is_live_sync=False, resources=[_resource("contacts", ProgressStatus.FAILED)])
         assert v.is_incremental_syncing is False
 
     def test_finalising_is_not_incremental(self):
         from tenant_data_repository import ProgressStatus
+
         v = self._view(
-            resources=[_resource("contacts", ProgressStatus.COMPLETE),
-                       _resource("invoices", ProgressStatus.COMPLETE),
-                       _resource("credit_notes", ProgressStatus.COMPLETE),
-                       _resource("payments", ProgressStatus.COMPLETE)],
+            resources=[
+                _resource("contacts", ProgressStatus.COMPLETE),
+                _resource("invoices", ProgressStatus.COMPLETE),
+                _resource("credit_notes", ProgressStatus.COMPLETE),
+                _resource("payments", ProgressStatus.COMPLETE),
+            ],
             per_contact_index_status=ProgressStatus.IN_PROGRESS,
         )
         # is_finalising=True → is_incremental_syncing must be False

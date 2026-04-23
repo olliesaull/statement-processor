@@ -365,12 +365,7 @@ class TenantDataRepository:
         set_clauses = [f"{alias} = :pending" for alias in names]
         # Mirror update_resource_progress's StrEnum coercion.
         pending: dict[str, Any] = {"status": str(ProgressStatus.PENDING)}
-        cls._table.update_item(
-            Key={"TenantID": tenant_id},
-            UpdateExpression="SET " + ", ".join(set_clauses),
-            ExpressionAttributeNames=names,
-            ExpressionAttributeValues={":pending": pending},
-        )
+        cls._table.update_item(Key={"TenantID": tenant_id}, UpdateExpression="SET " + ", ".join(set_clauses), ExpressionAttributeNames=names, ExpressionAttributeValues={":pending": pending})
 
     @classmethod
     def mark_reconcile_ready(cls, tenant_id: str) -> None:
