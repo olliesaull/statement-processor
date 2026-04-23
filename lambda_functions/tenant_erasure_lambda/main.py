@@ -11,9 +11,8 @@ This handler:
 import time
 from typing import Any
 
-from botocore.exceptions import ClientError
-
 import stripe
+from botocore.exceptions import ClientError
 
 from config import S3_BUCKET_NAME, s3_client, tenant_billing_table, tenant_data_table, tenant_statements_table
 from logger import logger
@@ -115,10 +114,7 @@ def _cancel_stripe_subscription_if_active(tenant_id: str) -> None:
     data is actually erased. This preserves the subscription during the
     grace period so reconnecting tenants find everything intact.
     """
-    response = tenant_billing_table.get_item(
-        Key={"TenantID": tenant_id},
-        ProjectionExpression="StripeSubscriptionID",
-    )
+    response = tenant_billing_table.get_item(Key={"TenantID": tenant_id}, ProjectionExpression="StripeSubscriptionID")
     item = response.get("Item")
     if not item:
         return
