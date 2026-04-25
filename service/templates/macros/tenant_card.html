@@ -23,11 +23,20 @@
         else ('is-complete' if is_ready
         else ('is-finalising' if view.is_finalising
         else 'is-syncing')) -%}
+  {#- aria_state reflects the pill copy for screen readers. Decoupled from
+      state_class (which drives CSS) because is-complete covers both
+      'Ready' and mid-incremental 'Syncing…' — a11y needs the real state. -#}
+  {%- set aria_state =
+        'failed' if any_failure
+        else ('syncing-incremental' if (is_ready and view.is_incremental_syncing)
+        else ('ready' if is_ready
+        else ('finalising' if view.is_finalising
+        else 'syncing'))) -%}
   {%- set done_count = view.resources | selectattr('is_complete') | list | length -%}
   {%- set active = view.resources | selectattr('is_active') | first -%}
   <li class="tenant-card {{ state_class }}{% if is_current %} is-current{% endif %}"
       id="card-{{ view.tenant_id }}"
-      aria-label="Tenant {{ view.tenant_name }}, state {{ state_class[3:] }}">
+      aria-label="Tenant {{ view.tenant_name }}, state {{ aria_state }}">
     <div class="tenant-card-inner">
       <div class="tenant-card-head">
         <h3 class="tenant-card-title">{{ view.tenant_name }}</h3>
@@ -36,7 +45,11 @@
           {% if any_failure %}
             <span class="pill failed"><span class="dot"></span>Sync failed</span>
           {% elif is_ready %}
-            <span class="pill complete"><span class="dot"></span>Ready</span>
+            {% if view.is_incremental_syncing %}
+              <span class="pill syncing-light"><span class="dot"></span>Syncing&hellip;</span>
+            {% else %}
+              <span class="pill complete"><span class="dot"></span>Ready</span>
+            {% endif %}
           {% elif view.is_finalising %}
             <span class="pill syncing"><span class="dot"></span>Finalising&hellip;</span>
           {% else %}
@@ -52,9 +65,10 @@
         </div>
         <div>
           <span class="meta-label">Last sync</span>
-          {% set formatted = view.last_sync_time_ms | format_last_sync %}
-          {% if formatted %}
-            <span class="meta-value">{{ formatted }}</span>
+          {% if view.last_sync_time_ms %}
+            <time class="meta-value"
+                  data-last-sync-ms="{{ view.last_sync_time_ms }}"
+                  datetime="{{ view.last_sync_time_ms | format_last_sync_iso }}">{{ view.last_sync_time_ms | format_last_sync }}</time>
           {% else %}
             <span class="meta-value muted">First sync&hellip;</span>
           {% endif %}
@@ -146,12 +160,16 @@
                   hx-target="#sync-progress-panel"
                   hx-swap="outerHTML">Retry sync</button>
         {% elif is_ready %}
-          <button class="btn btn-outline-secondary btn-sm"
-                  type="button"
-                  data-tenant-id="{{ view.tenant_id }}"
-                  hx-post="{{ url_for('api.trigger_tenant_sync', tenant_id=view.tenant_id) }}"
-                  hx-target="#sync-progress-panel"
-                  hx-swap="outerHTML">Sync</button>
+          {% if view.is_incremental_syncing %}
+            <button class="btn btn-outline-secondary btn-sm" type="button" disabled title="Sync is already running">Syncing&hellip;</button>
+          {% else %}
+            <button class="btn btn-outline-secondary btn-sm"
+                    type="button"
+                    data-tenant-id="{{ view.tenant_id }}"
+                    hx-post="{{ url_for('api.trigger_tenant_sync', tenant_id=view.tenant_id) }}"
+                    hx-target="#sync-progress-panel"
+                    hx-swap="outerHTML">Sync</button>
+          {% endif %}
         {% else %}
           {# Syncing / Finalising: button visually muted, not omitted (keeps action row alignment). #}
           <button class="btn btn-outline-secondary btn-sm" type="button" disabled title="Sync is already running">Syncing&hellip;</button>

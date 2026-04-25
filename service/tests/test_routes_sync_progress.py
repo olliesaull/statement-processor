@@ -74,6 +74,8 @@ def client(_app, monkeypatch):
             sess["xero_tenant_id"] = TENANT_ID
             sess["xero_tenant_name"] = "Acme Ltd"
             sess["xero_tenants"] = [{"tenantId": TENANT_ID, "tenantName": "Acme Ltd"}]
+            # Needed by the sync-trigger endpoint; harmless to other tests.
+            sess["xero_oauth2_token"] = {"access_token": "fake", "expires_at": 9_999_999_999.0}
         yield c
 
 
@@ -163,3 +165,139 @@ class TestStatementWaitEndpoint:
         response = client.get(f"/statement/{STATEMENT_ID}/wait")
 
         assert response.status_code == 404
+
+
+class TestTriggerTenantSyncHtmx:
+    """HTMX-flavoured trigger_tenant_sync returns a syncing fragment."""
+
+    def test_htmx_request_acquires_lock_and_submits_already_acquired(self, client, monkeypatch):
+        """Contract: POST acquires the sync lock synchronously, then submits
+        sync_data with already_acquired=True so it doesn't double-claim.
+
+        Fragment rendering (pill copy, disabled button) is covered separately
+        in TestIncrementalSyncingRender — here we just verify the plumbing.
+        """
+        from tenant_data_repository import TenantDataRepository
+
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: IN_FLIGHT_ROW for tid in ids}))
+        acquire_calls: list = []
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: acquire_calls.append((a, k)) or True))
+        submitted: list[tuple] = []
+        monkeypatch.setattr("routes.api.executor", type("E", (), {"submit": lambda self, *a, **k: submitted.append((a, k))})())
+
+        response = client.post(f"/api/tenants/{TENANT_ID}/sync", headers={"HX-Request": "true"})
+
+        assert response.status_code == 200
+        assert 'id="sync-progress-panel"' in response.data.decode()
+        assert len(acquire_calls) == 1
+        assert len(submitted) == 1
+        _, kwargs = submitted[0]
+        assert kwargs.get("already_acquired") is True
+
+    def test_htmx_request_returns_409_on_conflict(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: IN_FLIGHT_ROW for tid in ids}))
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: False))
+
+        response = client.post(f"/api/tenants/{TENANT_ID}/sync", headers={"HX-Request": "true"})
+        assert response.status_code == 409
+
+    def test_htmx_fragment_reflects_syncing_state_after_synchronous_acquire(self, client, monkeypatch):
+        """Regression: before the synchronous acquire, the fragment returned "Ready"
+        for 2-4 seconds until the next 3s poll. Simulate acquire-flips-status and
+        assert the response body no longer shows ">Ready<".
+        """
+        from tenant_data_repository import TenantDataRepository
+
+        shared_row = dict(READY_ROW)
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: shared_row for tid in ids}))
+
+        def fake_acquire(cls, *a, **k):
+            shared_row["TenantStatus"] = "SYNCING"
+            shared_row["LastHeartbeatAt"] = 9_999_999_999_999
+            return True
+
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(fake_acquire))
+        monkeypatch.setattr("routes.api.executor", type("E", (), {"submit": lambda self, *a, **k: None})())
+
+        response = client.post(f"/api/tenants/{TENANT_ID}/sync", headers={"HX-Request": "true"})
+
+        assert response.status_code == 200
+        body = response.data.decode()
+        assert ">Ready<" not in body
+        assert "Syncing" in body
+
+    def test_non_htmx_request_returns_202_json(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        monkeypatch.setattr(TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: True))
+        monkeypatch.setattr("routes.api.executor", type("E", (), {"submit": lambda self, *a, **k: None})())
+
+        response = client.post(f"/api/tenants/{TENANT_ID}/sync")
+        assert response.status_code == 202
+        assert response.json == {"started": True}
+
+
+class TestIncrementalSyncingRender:
+    """Reconcile-ready tenant mid-incremental-sync shows syncing pill + disabled Sync button."""
+
+    NOW_MS = 1_700_000_000_000
+
+    def test_incremental_syncing_shows_syncing_pill_and_disabled_button(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        # Fixed clock so heartbeat-freshness evaluation is deterministic; the
+        # repo testing rule ("Control clocks/time where logic depends on
+        # expiration or polling") forbids wall-clock reads in unit tests.
+        monkeypatch.setattr("routes.tenants.time.time", lambda: self.NOW_MS / 1000)
+        incremental_row = {
+            "TenantID": TENANT_ID,
+            "TenantStatus": "SYNCING",
+            "ReconcileReadyAt": 1_000_000,
+            "LastHeartbeatAt": self.NOW_MS - 500,
+            "LastSyncTime": 2_000_000,
+            "ContactsProgress": COMPLETE_PROGRESS,
+            "InvoicesProgress": COMPLETE_PROGRESS,
+            "CreditNotesProgress": COMPLETE_PROGRESS,
+            "PaymentsProgress": COMPLETE_PROGRESS,
+            "PerContactIndexProgress": {"status": "complete", "updated_at": 1},
+        }
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: incremental_row for tid in ids}))
+
+        response = client.get("/tenants/sync-progress", headers={"HX-Request": "true"})
+        assert response.status_code == 200
+        body = response.data.decode()
+
+        # Pill: "Syncing..." present; Ready not present.
+        assert "Syncing" in body
+        assert ">Ready<" not in body
+        # Action button: disabled with Syncing label.
+        assert "disabled" in body
+        # No first-sync progress bar.
+        assert 'role="progressbar"' not in body
+        # aria-label reflects the visible syncing state, not the CSS class.
+        assert "state syncing-incremental" in body
+        assert "state complete" not in body
+
+
+class TestPanelPollingWiring:
+    """When no tenant requires polling, the panel must carry no HTMX wiring."""
+
+    def test_fully_complete_tenant_renders_no_hx_attributes(self, client, monkeypatch):
+        from tenant_data_repository import TenantDataRepository
+
+        monkeypatch.setattr(TenantDataRepository, "get_many", classmethod(lambda cls, ids: {tid: READY_ROW for tid in ids}))
+
+        response = client.get("/tenants/sync-progress", headers={"HX-Request": "true"})
+        body = response.data.decode()
+
+        # Isolate the <ul id="sync-progress-panel"> opening tag.
+        import re
+
+        match = re.search(r'<ul[^>]*id="sync-progress-panel"[^>]*>', body)
+        assert match, "panel element missing"
+        opening = match.group(0)
+        assert "hx-get" not in opening
+        assert "hx-trigger" not in opening
+        assert "hx-swap" not in opening

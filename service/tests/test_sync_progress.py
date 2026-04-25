@@ -15,7 +15,7 @@ class TestBuildTenantProgressView:
 
     def test_empty_item_yields_pending_resources(self):
         """Legacy rows with no progress attributes render as pending."""
-        view = build_tenant_progress_view("tenant-1", "Acme", {})
+        view = build_tenant_progress_view("tenant-1", "Acme", {}, now_ms=0)
 
         assert view.tenant_id == "tenant-1"
         assert view.tenant_name == "Acme"
@@ -30,7 +30,7 @@ class TestBuildTenantProgressView:
 
     def test_none_item_yields_pending_resources(self):
         """A missing row is treated the same as an empty item."""
-        view = build_tenant_progress_view("tenant-1", "Acme", None)
+        view = build_tenant_progress_view("tenant-1", "Acme", None, now_ms=0)
 
         assert view.status == TenantStatus.FREE
         assert view.reconcile_ready is False
@@ -41,7 +41,7 @@ class TestBuildTenantProgressView:
         """Active resource with known total must compute a 0-100 percent."""
         item = {"TenantStatus": "SYNCING", "InvoicesProgress": {"status": "in_progress", "records_fetched": 250, "record_total": 1000}}
 
-        view = build_tenant_progress_view("tenant-1", "Acme", item)
+        view = build_tenant_progress_view("tenant-1", "Acme", item, now_ms=0)
         invoices = next(r for r in view.resources if r.resource == "invoices")
 
         assert view.status == TenantStatus.SYNCING
@@ -56,7 +56,7 @@ class TestBuildTenantProgressView:
         """record_total=null should not compute a percent; UI shows striped bar."""
         item = {"InvoicesProgress": {"status": "in_progress", "records_fetched": 50, "record_total": None}}
 
-        view = build_tenant_progress_view("tenant-1", "Acme", item)
+        view = build_tenant_progress_view("tenant-1", "Acme", item, now_ms=0)
         invoices = next(r for r in view.resources if r.resource == "invoices")
 
         assert invoices.records_fetched == 50
@@ -68,7 +68,7 @@ class TestBuildTenantProgressView:
         """Status=complete must flag through is_complete and show 100% bar."""
         item = {"ContactsProgress": {"status": "complete", "records_fetched": 100, "record_total": 100}}
 
-        view = build_tenant_progress_view("tenant-1", "Acme", item)
+        view = build_tenant_progress_view("tenant-1", "Acme", item, now_ms=0)
         contacts = next(r for r in view.resources if r.resource == "contacts")
 
         assert contacts.is_complete is True
@@ -78,7 +78,7 @@ class TestBuildTenantProgressView:
         """Any failed resource must flag the tenant-level has_failure banner trigger."""
         item = {"CreditNotesProgress": {"status": "failed", "records_fetched": 25, "record_total": 100}}
 
-        view = build_tenant_progress_view("tenant-1", "Acme", item)
+        view = build_tenant_progress_view("tenant-1", "Acme", item, now_ms=0)
 
         assert view.has_failure is True
 
@@ -95,7 +95,7 @@ class TestBuildTenantProgressView:
             "PerContactIndexProgress": {"status": "complete"},
         }
 
-        view = build_tenant_progress_view("tenant-1", "Acme", item)
+        view = build_tenant_progress_view("tenant-1", "Acme", item, now_ms=0)
 
         assert view.reconcile_ready is True
         assert view.all_complete is True
@@ -106,7 +106,7 @@ class TestBuildTenantProgressView:
         """Unwritten resource progress must keep all_complete false even when reconcile-ready is set."""
         item = {"ReconcileReadyAt": 1_700_000_000_000}
 
-        view = build_tenant_progress_view("tenant-1", "Acme", item)
+        view = build_tenant_progress_view("tenant-1", "Acme", item, now_ms=0)
 
         assert view.reconcile_ready is True
         assert view.all_complete is False
@@ -115,13 +115,13 @@ class TestBuildTenantProgressView:
         """LastSyncTime is surfaced on the view for the card's Last sync metric."""
         item = {"LastSyncTime": 1_712_000_000_000}
 
-        view = build_tenant_progress_view("tenant-1", "Acme", item)
+        view = build_tenant_progress_view("tenant-1", "Acme", item, now_ms=0)
 
         assert view.last_sync_time_ms == 1_712_000_000_000
 
     def test_last_sync_time_ms_is_none_when_missing(self):
         """First-ever sync: LastSyncTime absent -> field is None (UI renders muted 'First sync...')."""
-        view = build_tenant_progress_view("tenant-1", "Acme", {})
+        view = build_tenant_progress_view("tenant-1", "Acme", {}, now_ms=0)
 
         assert view.last_sync_time_ms is None
 
@@ -129,7 +129,7 @@ class TestBuildTenantProgressView:
         """DynamoDB numeric attributes come back as Decimal; coerce to int so the filter can format it."""
         from decimal import Decimal
 
-        view = build_tenant_progress_view("tenant-1", "Acme", {"LastSyncTime": Decimal("1712000000000")})
+        view = build_tenant_progress_view("tenant-1", "Acme", {"LastSyncTime": Decimal("1712000000000")}, now_ms=0)
 
         assert view.last_sync_time_ms == 1_712_000_000_000
         assert isinstance(view.last_sync_time_ms, int)
@@ -139,7 +139,7 @@ class TestBuildTenantProgressView:
         done = {"status": "complete", "records_fetched": 10, "record_total": 10}
         item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": done, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "in_progress"}}
 
-        view = build_tenant_progress_view("t", "n", item)
+        view = build_tenant_progress_view("t", "n", item, now_ms=0)
 
         assert view.is_finalising is True
 
@@ -149,7 +149,7 @@ class TestBuildTenantProgressView:
         active = {"status": "in_progress", "records_fetched": 5, "record_total": 10}
         item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": active, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "in_progress"}}
 
-        view = build_tenant_progress_view("t", "n", item)
+        view = build_tenant_progress_view("t", "n", item, now_ms=0)
 
         assert view.is_finalising is False
 
@@ -158,7 +158,7 @@ class TestBuildTenantProgressView:
         done = {"status": "complete", "records_fetched": 10, "record_total": 10}
         item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": done, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "complete"}}
 
-        view = build_tenant_progress_view("t", "n", item)
+        view = build_tenant_progress_view("t", "n", item, now_ms=0)
 
         assert view.is_finalising is False
 
@@ -167,7 +167,7 @@ class TestBuildTenantProgressView:
         done = {"status": "complete", "records_fetched": 10, "record_total": 10}
         item = {"ContactsProgress": done, "CreditNotesProgress": done, "InvoicesProgress": done, "PaymentsProgress": done, "PerContactIndexProgress": {"status": "failed"}}
 
-        view = build_tenant_progress_view("t", "n", item)
+        view = build_tenant_progress_view("t", "n", item, now_ms=0)
 
         assert view.is_finalising is False
 
@@ -192,7 +192,7 @@ class TestBuildProgressView:
         session_tenants = [{"tenantId": "t1", "tenantName": "Acme"}, {"tenantId": "t2", "tenantName": "Other"}]
         rows = {"t1": {"TenantStatus": "SYNCING", "InvoicesProgress": {"status": "in_progress", "records_fetched": 1, "record_total": 2}}, "t2": None}
 
-        views = build_progress_view(session_tenants, rows)
+        views = build_progress_view(session_tenants, rows, now_ms=0)
 
         assert len(views) == 2
         assert views[0].tenant_id == "t1"
@@ -205,14 +205,14 @@ class TestBuildProgressView:
         """Defensive: ignore entries without tenantId or non-dict entries."""
         session_tenants = [{"tenantId": "t1", "tenantName": "Acme"}, {"tenantName": "Missing Id"}, "nonsense", None]
 
-        views = build_progress_view(session_tenants, {"t1": {}})
+        views = build_progress_view(session_tenants, {"t1": {}}, now_ms=0)
 
         assert len(views) == 1
         assert views[0].tenant_id == "t1"
 
     def test_tenant_name_falls_back_to_id(self):
         """Without tenantName we should not crash; show the id instead."""
-        views = build_progress_view([{"tenantId": "t1"}], {"t1": None})
+        views = build_progress_view([{"tenantId": "t1"}], {"t1": None}, now_ms=0)
 
         assert views[0].tenant_name == "t1"
 
@@ -230,7 +230,7 @@ class TestShouldPoll:
             "PaymentsProgress": {"status": "complete", "records_fetched": 1, "record_total": 1},
             "PerContactIndexProgress": {"status": "complete"},
         }
-        views = build_progress_view([{"tenantId": "t1"}, {"tenantId": "t2"}], {"t1": in_progress, "t2": complete})
+        views = build_progress_view([{"tenantId": "t1"}, {"tenantId": "t2"}], {"t1": in_progress, "t2": complete}, now_ms=0)
 
         assert should_poll(views) is True
 
@@ -243,7 +243,7 @@ class TestShouldPoll:
             "PaymentsProgress": {"status": "complete", "records_fetched": 1, "record_total": 1},
             "PerContactIndexProgress": {"status": "complete"},
         }
-        views = build_progress_view([{"tenantId": "t1"}], {"t1": complete})
+        views = build_progress_view([{"tenantId": "t1"}], {"t1": complete}, now_ms=0)
 
         assert should_poll(views) is False
 
@@ -332,3 +332,198 @@ class TestIsRetryRecommended:
         assert is_retry_recommended(item, now_ms=self.NOW_MS) is False
         # Caller-provided 60s threshold treats this as stale.
         assert is_retry_recommended(item, now_ms=self.NOW_MS, stale_threshold_ms=60_000) is True
+
+
+class TestIsLiveSync:
+    def test_loading_with_fresh_heartbeat_is_live(self):
+        now = 10_000_000
+        item = {
+            "TenantStatus": "LOADING",
+            "LastHeartbeatAt": now - 1000,  # 1s ago — fresh
+        }
+        view = build_tenant_progress_view("t", "T", item, now_ms=now)
+        assert view.is_live_sync is True
+
+    def test_syncing_with_fresh_heartbeat_is_live(self):
+        now = 10_000_000
+        item = {"TenantStatus": "SYNCING", "LastHeartbeatAt": now - 1000}
+        view = build_tenant_progress_view("t", "T", item, now_ms=now)
+        assert view.is_live_sync is True
+
+    def test_stale_heartbeat_is_not_live(self):
+        now = 10_000_000
+        item = {"TenantStatus": "LOADING", "LastHeartbeatAt": now - (SYNC_STALE_THRESHOLD_MS + 1000)}
+        view = build_tenant_progress_view("t", "T", item, now_ms=now)
+        assert view.is_live_sync is False
+
+    def test_missing_heartbeat_is_not_live(self):
+        now = 10_000_000
+        item = {"TenantStatus": "LOADING"}
+        view = build_tenant_progress_view("t", "T", item, now_ms=now)
+        assert view.is_live_sync is False
+
+    def test_free_status_is_not_live_regardless_of_heartbeat(self):
+        now = 10_000_000
+        item = {"TenantStatus": "FREE", "LastHeartbeatAt": now - 1000}
+        view = build_tenant_progress_view("t", "T", item, now_ms=now)
+        assert view.is_live_sync is False
+
+
+def _resource(name: str, status: str):
+    from utils.sync_progress import ResourceProgress
+
+    return ResourceProgress(resource=name, display_name=name.title(), status=status, records_fetched=None, record_total=None, percent=None)
+
+
+class TestHasFailureLiveSyncGuard:
+    def test_free_tenant_with_failed_resource_reports_failure(self):
+        from tenant_data_repository import ProgressStatus
+        from utils.sync_progress import TenantProgressView
+
+        view = TenantProgressView(tenant_id="t", tenant_name="T", status=TenantStatus.FREE, reconcile_ready=True, resources=[_resource("contacts", ProgressStatus.FAILED)], is_live_sync=False)
+        assert view.has_failure is True
+
+    def test_live_sync_hides_failed_resource(self):
+        from tenant_data_repository import ProgressStatus
+        from utils.sync_progress import TenantProgressView
+
+        view = TenantProgressView(tenant_id="t", tenant_name="T", status=TenantStatus.SYNCING, reconcile_ready=True, resources=[_resource("contacts", ProgressStatus.FAILED)], is_live_sync=True)
+        assert view.has_failure is False
+
+    def test_live_sync_hides_failed_per_contact_index(self):
+        from tenant_data_repository import ProgressStatus
+        from utils.sync_progress import TenantProgressView
+
+        view = TenantProgressView(tenant_id="t", tenant_name="T", status=TenantStatus.SYNCING, reconcile_ready=True, per_contact_index_status=ProgressStatus.FAILED, is_live_sync=True)
+        assert view.has_failure is False
+
+
+class TestIsRetryRecommendedLiveSyncGuard:
+    def test_live_sync_with_stale_failed_resource_does_not_recommend_retry(self):
+        now = 10_000_000
+        item = {
+            "TenantStatus": "LOADING",
+            "LastHeartbeatAt": now - 1000,  # fresh
+            "ContactsProgress": {"status": "failed"},
+        }
+        assert is_retry_recommended(item, now_ms=now) is False
+
+    def test_stale_heartbeat_with_failed_resource_recommends_retry(self):
+        now = 10_000_000
+        item = {"TenantStatus": "LOADING", "LastHeartbeatAt": now - (SYNC_STALE_THRESHOLD_MS + 1000), "ContactsProgress": {"status": "failed"}}
+        assert is_retry_recommended(item, now_ms=now) is True
+
+    def test_free_tenant_with_failed_resource_recommends_retry(self):
+        now = 10_000_000
+        item = {"TenantStatus": "FREE", "ContactsProgress": {"status": "failed"}}
+        assert is_retry_recommended(item, now_ms=now) is True
+
+    def test_load_incomplete_always_recommends_retry(self):
+        now = 10_000_000
+        # Even with a fresh heartbeat, LOAD_INCOMPLETE is an unambiguous
+        # signal that a full load never finished — surface Retry.
+        item = {"TenantStatus": "LOAD_INCOMPLETE", "LastHeartbeatAt": now - 1000}
+        assert is_retry_recommended(item, now_ms=now) is True
+
+
+class TestShouldPollIncrementalSync:
+    def test_syncing_with_all_resources_complete_still_polls(self):
+        """During an incremental sync of a reconcile-ready tenant, all
+        five *Progress maps may remain complete from the prior run until
+        sync_data's reset runs. should_poll must still return True so the
+        UI picks up the eventual completion."""
+        from tenant_data_repository import ProgressStatus
+        from utils.sync_progress import TenantProgressView, should_poll
+
+        view = TenantProgressView(
+            tenant_id="t",
+            tenant_name="T",
+            status=TenantStatus.SYNCING,
+            reconcile_ready=True,
+            resources=[
+                _resource("contacts", ProgressStatus.COMPLETE),
+                _resource("invoices", ProgressStatus.COMPLETE),
+                _resource("credit_notes", ProgressStatus.COMPLETE),
+                _resource("payments", ProgressStatus.COMPLETE),
+            ],
+            per_contact_index_status=ProgressStatus.COMPLETE,
+            is_live_sync=True,
+        )
+        assert should_poll([view]) is True
+
+    def test_free_with_all_complete_does_not_poll(self):
+        from tenant_data_repository import ProgressStatus
+        from utils.sync_progress import TenantProgressView, should_poll
+
+        view = TenantProgressView(
+            tenant_id="t",
+            tenant_name="T",
+            status=TenantStatus.FREE,
+            reconcile_ready=True,
+            resources=[
+                _resource("contacts", ProgressStatus.COMPLETE),
+                _resource("invoices", ProgressStatus.COMPLETE),
+                _resource("credit_notes", ProgressStatus.COMPLETE),
+                _resource("payments", ProgressStatus.COMPLETE),
+            ],
+            per_contact_index_status=ProgressStatus.COMPLETE,
+        )
+        assert should_poll([view]) is False
+
+
+class TestIsIncrementalSyncing:
+    def _view(self, **overrides):
+        from tenant_data_repository import ProgressStatus
+        from utils.sync_progress import TenantProgressView
+
+        defaults = dict(
+            tenant_id="t",
+            tenant_name="T",
+            status=TenantStatus.SYNCING,
+            reconcile_ready=True,
+            resources=[_resource("contacts", ProgressStatus.COMPLETE)],
+            per_contact_index_status=ProgressStatus.COMPLETE,
+            is_live_sync=True,
+        )
+        defaults.update(overrides)
+        return TenantProgressView(**defaults)
+
+    def test_syncing_reconcile_ready_is_incremental(self):
+        assert self._view().is_incremental_syncing is True
+
+    def test_loading_is_not_incremental(self):
+        assert self._view(status=TenantStatus.LOADING).is_incremental_syncing is False
+
+    def test_not_reconcile_ready_is_not_incremental(self):
+        assert self._view(reconcile_ready=False).is_incremental_syncing is False
+
+    def test_failure_suppresses_incremental(self):
+        from tenant_data_repository import ProgressStatus
+
+        # has_failure is False under live sync guard, but construct a
+        # view that reports failure by disabling live_sync (paranoia case).
+        v = self._view(is_live_sync=False, resources=[_resource("contacts", ProgressStatus.FAILED)])
+        assert v.is_incremental_syncing is False
+
+    def test_finalising_is_not_incremental(self):
+        from tenant_data_repository import ProgressStatus
+
+        v = self._view(
+            resources=[
+                _resource("contacts", ProgressStatus.COMPLETE),
+                _resource("invoices", ProgressStatus.COMPLETE),
+                _resource("credit_notes", ProgressStatus.COMPLETE),
+                _resource("payments", ProgressStatus.COMPLETE),
+            ],
+            per_contact_index_status=ProgressStatus.IN_PROGRESS,
+        )
+        # is_finalising=True → is_incremental_syncing must be False
+        assert v.is_finalising is True
+        assert v.is_incremental_syncing is False
+
+    def test_stale_heartbeat_is_not_incremental(self):
+        """Crashed-worker scenario: status=SYNCING but heartbeat stale.
+        The macro must NOT render the 'Syncing…' pill on top of the Retry
+        button — is_retry_recommended returns True in this case, and the
+        two signals contradict each other."""
+        assert self._view(is_live_sync=False).is_incremental_syncing is False

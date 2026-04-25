@@ -69,10 +69,10 @@ def tenant_management():
     except Exception as exc:
         logger.exception("Failed to load tenant rows for progress panel", tenant_ids=tenant_ids, error=exc)
         tenant_rows = {}
-    tenant_views = build_progress_view(tenants, tenant_rows)
+    now_ms = int(time.time() * 1000)
+    tenant_views = build_progress_view(tenants, tenant_rows, now_ms=now_ms)
     polling = should_poll(tenant_views)
 
-    now_ms = int(time.time() * 1000)
     needs_retry_by_id = {tid: is_retry_recommended(tenant_rows.get(tid), now_ms=now_ms) for tid in tenant_ids}
 
     logger.info("Rendering tenant_management page", current_tenant_id=current_tenant_id, tenant_ids=tenant_ids, current_tenant_token_balance=ct_token_balance)
@@ -144,6 +144,7 @@ def sync_progress():
         tenant_token_balances=tenant_token_balances,
         is_active_subscription=is_active_subscription,
         needs_retry_by_id=needs_retry_by_id,
+        now_ms=now_ms,
     )
 
 

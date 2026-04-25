@@ -618,3 +618,26 @@ dependency surface auditable on its own. Consistent with Python-style
 **How to apply:** When extending the suite (Tier 2 or later), inherit the Tier 1 import pattern, schema fields, and diff coverage. When adding a `known_miss_*` entry, file a follow-up issue and link it from `meta.description` so the miss can be reassessed after each Bedrock model upgrade.
 
 **References:** `plans/2026-04-22-statement-test-suite-master.md` (§2 Coupling policy, §3 schema, §5 expected_extraction, §7 CLI sequence); `plans/2026-04-22-statement-test-suite-tier-1-impl.md` (Tasks 3, 10, 11–13); `plans/2026-04-22-statement-test-suite-tier-2-impl.md` (Review gate, Self-Review).
+
+
+---
+
+### [2026-04-23] architecture | Tenant management UX fixes — five choices
+
+**Context:** Implementing `plans/2026-04-23-tenant-management-ux-fixes-design.md` (four UX/correctness fixes on `/tenant_management`). Each fix surfaced a genuine design choice worth recording so future readers don't have to excavate git blame or the impl plan.
+
+**Decisions:**
+
+1. **Synchronous sync-lock acquire in `trigger_tenant_sync`.** `POST /api/tenants/<id>/sync` now calls `try_acquire_sync` in the request thread before submitting `sync_data` to the executor (with `already_acquired=True`). Previously the endpoint returned the fragment before `sync_data` had flipped `TenantStatus=SYNCING`, so the UI showed "Ready" for 2–4 seconds until the next 3s poll. Synchronous acquire makes the returned fragment reflect the syncing state immediately. Trade-off: adds one DynamoDB conditional `update_item` to the request path (small); mirrors the existing retry-sync endpoint's pattern.
+
+2. **`is_live_sync` as a `TenantProgressView` field, not a `@property`.** `build_tenant_progress_view` pre-computes `is_live_sync` from `status` + `LastHeartbeatAt` + injected `now_ms`, storing the result on the frozen dataclass. Three guards (`has_failure`, `is_retry_recommended`, `is_incremental_syncing`) all need the signal; a `@property` would force threading `now_ms` into every read site. Pre-computed field keeps the dataclass pure and pushes the clock read to the construction edge. Trade-off: `now_ms` becomes a required kwarg on the three view builders; one-time edit across five production callsites.
+
+3. **Reset progress sub-maps at `sync_data` start, not inside `try_acquire_sync`.** `sync_data` calls `reset_resource_progress(tenant_id, resources_to_reset)` immediately after lock acquisition, scoped to `only_run_resources` for retry paths or all five resources for full syncs. Retry paths must preserve COMPLETE markers on resources they're deliberately skipping; lumping the reset into `try_acquire_sync` would force either a full-wipe (breaks retry) or a resource-aware acquire (couples concerns). Scoped reset in `sync_data` keeps the lock-acquire predicate focused on status transitions.
+
+4. **Client-side local-time formatting via `Intl.DateTimeFormat`.** Last-sync timestamps render as UTC from the server (`<time datetime="...">`), and a `tenant-card-local-time.js` module rewrites them to the user's locale on DOMContentLoaded + on `htmx:beforeSwap`. No authoritative client timezone available server-side (cookie-based TZ sniffing is brittle and adds session surface). `beforeSwap` mutation of the detached HTML prevents UTC flicker between polls — mirrors the pattern already used by `tenant-card-detail.js`. Trade-off: JS-off users see UTC; acceptable — this app is authenticated and JS-dependent for HTMX anyway.
+
+5. **Live-sync override on stale FAILED markers — a convention.** `has_failure`, `is_retry_recommended`, and `is_incremental_syncing` all short-circuit when `is_live_sync` is True (status LOADING/SYNCING AND heartbeat fresh). A transient Xero failure mid-incremental-sync used to flip the whole card to "Sync failed + Retry" while the sync was still making progress on other resources; clicking Retry then returned 409 because the live sync's heartbeat was fresh. The guard lets the running sync overwrite stale markers before the UI surfaces them. Establishes a convention: gate any "tenant is broken" signal on `is_live_sync` when a running sync would otherwise overwrite the underlying state.
+
+**How to apply:** Future sync-lifecycle UX work should follow (5) — if adding a new derived property that flags a tenant as broken/retry-worthy/failed, first ask whether a live sync is currently overwriting the markers, and guard with `view.is_live_sync`. Decision (2) also sets a pattern for time-dependent view fields: inject `now_ms` at the view-builder boundary rather than reading the clock inside properties.
+
+**References:** `plans/2026-04-23-tenant-management-ux-fixes-design.md` (Issues 1–4), `plans/2026-04-23-tenant-management-ux-fixes-impl.md`, `service/utils/sync_progress.py`, `service/routes/api.py`, `service/sync.py`, `service/templates/macros/tenant_card.html`, `service/static/assets/js/tenant-card-local-time.js`.

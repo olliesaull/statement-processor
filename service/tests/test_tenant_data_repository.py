@@ -544,3 +544,49 @@ class TestReleaseSyncLock:
         assert "SET TenantStatus" in expr
         assert "REMOVE LastHeartbeatAt" in expr
         assert calls[0]["ExpressionAttributeValues"][":status"] == TenantStatus.LOAD_INCOMPLETE.value
+
+
+def test_reset_resource_progress_resets_only_named_resources(monkeypatch) -> None:
+    """UpdateExpression should SET exactly the aliased attributes passed in."""
+    calls: list[dict] = []
+
+    class FakeTable:
+        @staticmethod
+        def update_item(**kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+
+    TenantDataRepository.reset_resource_progress("t-1", ["invoices", "contacts"])
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["Key"] == {"TenantID": "t-1"}
+    # Two SET clauses, one per resource.
+    assert kwargs["UpdateExpression"].count(" = :pending") == 2
+    # Pending payload is shared across clauses, with the expected shape.
+    assert kwargs["ExpressionAttributeValues"][":pending"] == {"status": "pending"}
+    # Attribute-name aliases resolve to the right DynamoDB columns.
+    assert set(kwargs["ExpressionAttributeNames"].values()) == {"InvoicesProgress", "ContactsProgress"}
+
+
+def test_reset_resource_progress_empty_resources_is_noop(monkeypatch) -> None:
+    """No resources passed in → no DynamoDB call (avoids empty SET expressions)."""
+    calls: list[dict] = []
+
+    class FakeTable:
+        @staticmethod
+        def update_item(**kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(TenantDataRepository, "_table", FakeTable())
+    TenantDataRepository.reset_resource_progress("t-2", [])
+    assert calls == []
+
+
+def test_reset_resource_progress_rejects_unknown_resource(monkeypatch) -> None:
+    """Unknown resource identifiers must raise via _progress_attribute_name."""
+    monkeypatch.setattr(TenantDataRepository, "_table", MagicMock())
+
+    with pytest.raises(ValueError, match="Unknown progress resource"):
+        TenantDataRepository.reset_resource_progress("t-3", ["bogus"])

@@ -625,11 +625,11 @@ class TestSyncDataRetry:
     def test_retry_rebuilds_per_contact_index_when_only_index_was_failed(self, _sync_scaffold, monkeypatch):
         """Retry with only_run_resources={'per_contact_index'} routes through the index-rebuild branch.
 
-        Regression for the Codex-flagged bug: a tenant whose 4 fetchers all
-        succeeded but whose index build failed could not be recovered —
-        ``_RETRY_RESOURCES`` now includes ``per_contact_index`` so the retry
-        endpoint can drive a pure index rebuild. Every heavy fetcher must be
-        skipped; only the index build runs.
+        Regression: before the ``ALL_SYNC_RESOURCES`` consolidation,
+        ``per_contact_index`` was excluded from the retry resource set, so an
+        index-only failure returned 409 "Nothing to retry" and trapped the
+        tenant in LOAD_INCOMPLETE. Every heavy fetcher must be skipped; only
+        the index build runs.
         """
         heavy_calls: list[str] = []
         monkeypatch.setattr(sync, "sync_contacts", lambda *a, **kw: heavy_calls.append("contacts") or True)
@@ -678,3 +678,49 @@ class TestSyncDataRetry:
         sync.sync_data("tenant-preheld", TenantStatus.SYNCING, already_acquired=True)
 
         _sync_scaffold["repo"].try_acquire_sync.assert_not_called()
+
+
+class TestSyncDataStartReset:
+    """sync_data should reset progress sub-maps scoped to resources it will run."""
+
+    def test_full_sync_resets_all_five_resources(self, monkeypatch):
+        reset_calls: list[tuple] = []
+        monkeypatch.setattr(sync.TenantDataRepository, "reset_resource_progress", classmethod(lambda cls, *a, **k: reset_calls.append((a, k))))
+        monkeypatch.setattr(sync.TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: True))
+        monkeypatch.setattr(sync.TenantDataRepository, "get_item", classmethod(lambda cls, tenant_id: None))
+        # Raising from get_xero_api_client is a convenient way to abort sync
+        # right after the reset so the test stays focused on the contract.
+        monkeypatch.setattr(sync, "get_xero_api_client", lambda token: (_ for _ in ()).throw(RuntimeError("abort here")))
+
+        with pytest.raises(RuntimeError):
+            sync.sync_data("t-1", TenantStatus.LOADING, oauth_token={})
+
+        assert len(reset_calls) == 1
+        args, _kwargs = reset_calls[0]
+        tenant_arg, resources_arg = args
+        assert tenant_arg == "t-1"
+        assert set(resources_arg) == {"contacts", "invoices", "credit_notes", "payments", "per_contact_index"}
+
+    def test_retry_scopes_reset_to_only_run_resources(self, monkeypatch):
+        reset_calls: list[tuple] = []
+        monkeypatch.setattr(sync.TenantDataRepository, "reset_resource_progress", classmethod(lambda cls, *a, **k: reset_calls.append((a, k))))
+        monkeypatch.setattr(sync.TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: True))
+        monkeypatch.setattr(sync.TenantDataRepository, "get_item", classmethod(lambda cls, tenant_id: None))
+        monkeypatch.setattr(sync, "get_xero_api_client", lambda token: (_ for _ in ()).throw(RuntimeError("abort here")))
+
+        with pytest.raises(RuntimeError):
+            sync.sync_data("t-2", TenantStatus.SYNCING, oauth_token={}, only_run_resources={"contacts"})
+
+        assert len(reset_calls) == 1
+        args, _kwargs = reset_calls[0]
+        _tenant, resources_arg = args
+        assert set(resources_arg) == {"contacts"}
+
+    def test_skipped_sync_does_not_reset(self, monkeypatch):
+        reset_calls: list[tuple] = []
+        monkeypatch.setattr(sync.TenantDataRepository, "reset_resource_progress", classmethod(lambda cls, *a, **k: reset_calls.append((a, k))))
+        monkeypatch.setattr(sync.TenantDataRepository, "try_acquire_sync", classmethod(lambda cls, *a, **k: False))
+
+        # try_acquire_sync returning False → sync_data returns early.
+        sync.sync_data("t-3", TenantStatus.LOADING, oauth_token={})
+        assert reset_calls == []

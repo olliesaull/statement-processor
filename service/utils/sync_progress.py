@@ -22,7 +22,7 @@ from flask import render_template
 
 from pricing_config import SUBSCRIPTION_TIERS
 from tenant_billing_repository import SubscriptionState
-from tenant_data_repository import SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantStatus, _progress_attribute_name
+from tenant_data_repository import ALL_SYNC_RESOURCES, SYNC_STALE_THRESHOLD_MS, ProgressStatus, TenantStatus, _progress_attribute_name
 
 # Display order matches the sync order in ``sync.py`` — users see fetchers finish
 # in the same sequence the backend runs them.
@@ -81,7 +81,19 @@ class ResourceProgress:
 
 @dataclass(frozen=True)
 class TenantProgressView:
-    """Render-ready view of a tenant row for the sync progress partials."""
+    """Render-ready view of a tenant row for the sync progress partials.
+
+    Frozen because the partials treat it as an immutable snapshot of one
+    tenant's sync state at a single instant.
+
+    ``is_live_sync`` is set once at construction (via
+    ``build_tenant_progress_view``) from ``status`` + ``LastHeartbeatAt`` +
+    the caller-supplied ``now_ms``. Three derived properties (``has_failure``,
+    ``is_retry_recommended`` on the matching free function, and
+    ``is_incremental_syncing``) short-circuit when it's True so a running sync
+    can overwrite stale FAILED / IN_PROGRESS markers before the UI surfaces
+    them — see decision log 2026-04-23 entry 5 for the convention.
+    """
 
     tenant_id: str
     tenant_name: str
@@ -90,10 +102,18 @@ class TenantProgressView:
     resources: list[ResourceProgress] = field(default_factory=list)
     per_contact_index_status: str = ProgressStatus.PENDING
     last_sync_time_ms: int | None = None
+    is_live_sync: bool = False
 
     @property
     def has_failure(self) -> bool:
-        """True when any resource or the per-contact index is in ``failed`` state."""
+        """True when any resource or the per-contact index is in ``failed`` state.
+
+        A live sync (status LOADING/SYNCING with fresh heartbeat) overrides
+        stale FAILED markers — the running sync will overwrite them, and
+        rendering the failure pill while a sync is mid-flight is misleading.
+        """
+        if self.is_live_sync:
+            return False
         return any(r.is_failed for r in self.resources) or self.per_contact_index_status == ProgressStatus.FAILED
 
     @property
@@ -124,6 +144,24 @@ class TenantProgressView:
         # for a directly-constructed view with no resources — the invariant is
         # "all four Xero fetchers complete", so at least one must exist.
         return bool(self.resources) and all(r.is_complete for r in self.resources) and self.per_contact_index_status not in (ProgressStatus.COMPLETE, ProgressStatus.FAILED)
+
+    @property
+    def is_incremental_syncing(self) -> bool:
+        """True when a reconcile-ready tenant is mid-sync with a fresh heartbeat.
+
+        Distinct from ``is_syncing_active`` (first-sync state with no
+        reconcile-ready) — incremental sync keeps the Ready layout and only
+        swaps the pill + Sync button.
+
+        The ``is_live_sync`` guard suppresses the 'Syncing…' pill on a
+        crashed worker (stale heartbeat). Without it, a stale SYNCING state
+        with an IN_PROGRESS resource would render 'Syncing…' *and* a Retry
+        button — contradictory signals. With the guard the card falls
+        through to the Retry branch cleanly.
+
+        See plans/2026-04-23-tenant-management-ux-fixes-design.md Issue 3.
+        """
+        return self.is_live_sync and self.status == TenantStatus.SYNCING and self.reconcile_ready and not self.has_failure and not self.is_finalising
 
 
 def _parse_tenant_status(raw: Any) -> TenantStatus:
@@ -171,8 +209,15 @@ def _resource_from_item(item: dict[str, Any], resource: str) -> ResourceProgress
     return ResourceProgress(resource=resource, display_name=_RESOURCE_DISPLAY_NAMES[resource], status=status, records_fetched=records_fetched, record_total=record_total, percent=percent)
 
 
-def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str, Any] | None) -> TenantProgressView:
-    """Compose a progress view for one tenant."""
+def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str, Any] | None, *, now_ms: int) -> TenantProgressView:
+    """Compose a progress view for one tenant.
+
+    Args:
+        now_ms: injected wall clock in epoch milliseconds — used to decide
+            whether ``LastHeartbeatAt`` is fresh enough for ``is_live_sync``.
+            Callers pre-compute once per request so every view in the same
+            render uses the same instant.
+    """
     item = item or {}
     resources = [_resource_from_item(item, r) for r in RESOURCE_ORDER]
     per_index_raw = item.get(_progress_attribute_name(_PER_CONTACT_INDEX_RESOURCE))
@@ -181,23 +226,33 @@ def build_tenant_progress_view(tenant_id: str, tenant_name: str, item: dict[str,
     last_sync_raw = item.get("LastSyncTime")
     last_sync_ms = int(last_sync_raw) if isinstance(last_sync_raw, (int, float, Decimal)) else None
 
+    heartbeat_raw = item.get("LastHeartbeatAt")
+    heartbeat_ms = int(heartbeat_raw) if isinstance(heartbeat_raw, (int, float, Decimal)) else None
+
+    status = _parse_tenant_status(item.get("TenantStatus"))
+    is_live_sync = status in (TenantStatus.LOADING, TenantStatus.SYNCING) and heartbeat_ms is not None and (heartbeat_ms + SYNC_STALE_THRESHOLD_MS) >= now_ms
+
     return TenantProgressView(
         tenant_id=tenant_id,
         tenant_name=tenant_name,
-        status=_parse_tenant_status(item.get("TenantStatus")),
+        status=status,
         reconcile_ready=item.get("ReconcileReadyAt") is not None,
         resources=resources,
         per_contact_index_status=per_index_status,
         last_sync_time_ms=last_sync_ms,
+        is_live_sync=is_live_sync,
     )
 
 
-def build_progress_view(session_tenants: list[Any], tenant_rows: dict[str, dict[str, Any] | None]) -> list[TenantProgressView]:
+def build_progress_view(session_tenants: list[Any], tenant_rows: dict[str, dict[str, Any] | None], *, now_ms: int) -> list[TenantProgressView]:
     """Build progress views for every well-formed session tenant.
 
     ``session_tenants`` is the untyped ``session["xero_tenants"]`` list — we
     skip entries without a ``tenantId`` or that aren't dicts so a corrupted
     session can't 500 the endpoint.
+
+    ``now_ms`` is threaded through to ``build_tenant_progress_view`` so every
+    view in the same render uses the same instant (see that function).
     """
     views: list[TenantProgressView] = []
     for tenant in session_tenants:
@@ -207,7 +262,7 @@ def build_progress_view(session_tenants: list[Any], tenant_rows: dict[str, dict[
         if not tenant_id:
             continue
         name = tenant.get("tenantName") or tenant_id
-        views.append(build_tenant_progress_view(tenant_id, name, tenant_rows.get(tenant_id)))
+        views.append(build_tenant_progress_view(tenant_id, name, tenant_rows.get(tenant_id), now_ms=now_ms))
     return views
 
 
@@ -216,13 +271,23 @@ def should_poll(views: list[TenantProgressView]) -> bool:
 
     Empty input resolves to ``False`` so the panel doesn't poll forever when
     the session has no tenants — the UI handles the empty state server-side.
+
+    Polls when either condition holds:
+
+    - Any view is not fully complete. Covers LOADING tenants implicitly —
+      ``reconcile_ready`` is False during LOADING, so ``all_complete`` is
+      False and the first clause fires without needing an explicit branch.
+    - Any view has status SYNCING. Needed for incremental-sync on a
+      reconcile-ready tenant whose resource maps still read COMPLETE from the
+      prior run. As a side effect, a stuck-SYNCING tenant (crashed worker
+      with stale heartbeat) also keeps polling — that's load-bearing: the
+      Retry button only appears once polling re-renders the fragment after
+      the stale-heartbeat gate has fired. See decision log 2026-04-20 entry
+      "Stuck-SYNCING tenants surface Retry sync based on heartbeat staleness".
     """
     if not views:
         return False
-    return any(not view.all_complete for view in views)
-
-
-_ALL_RESOURCES: tuple[str, ...] = RESOURCE_ORDER + (_PER_CONTACT_INDEX_RESOURCE,)
+    return any((not view.all_complete) or view.status == TenantStatus.SYNCING for view in views)
 
 
 def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, stale_threshold_ms: int = SYNC_STALE_THRESHOLD_MS) -> bool:
@@ -251,21 +316,29 @@ def is_retry_recommended(tenant_item: Mapping[str, Any] | None, *, now_ms: int, 
     if tenant_item is None:
         return False
 
-    if _parse_tenant_status(tenant_item.get("TenantStatus")) == TenantStatus.LOAD_INCOMPLETE:
+    status = _parse_tenant_status(tenant_item.get("TenantStatus"))
+    if status == TenantStatus.LOAD_INCOMPLETE:
         return True
 
     heartbeat = tenant_item.get("LastHeartbeatAt")
     heartbeat_ms = int(heartbeat) if isinstance(heartbeat, (int, float, Decimal)) else None
     stale = heartbeat_ms is not None and (heartbeat_ms + stale_threshold_ms) < now_ms
 
-    for resource in _ALL_RESOURCES:
+    # Live sync with fresh heartbeat overrides stale FAILED / IN_PROGRESS
+    # markers — the running sync will overwrite them, and rendering the
+    # Retry button while a sync is mid-flight is broken (409 on click).
+    live = status in (TenantStatus.LOADING, TenantStatus.SYNCING) and heartbeat_ms is not None and not stale
+    if live:
+        return False
+
+    for resource in ALL_SYNC_RESOURCES:
         progress = tenant_item.get(_progress_attribute_name(resource))
         if not isinstance(progress, dict):
             continue
-        status = str(progress.get("status") or "")
-        if status == ProgressStatus.FAILED:
+        resource_status = str(progress.get("status") or "")
+        if resource_status == ProgressStatus.FAILED:
             return True
-        if status == ProgressStatus.IN_PROGRESS and stale:
+        if resource_status == ProgressStatus.IN_PROGRESS and stale:
             return True
 
     return False
@@ -295,6 +368,7 @@ def render_sync_progress_fragment(
     tenant_token_balances: dict[str, int],
     is_active_subscription: bool,
     needs_retry_by_id: dict[str, bool],
+    now_ms: int,
 ) -> str:
     """Render the tenant-card list fragment.
 
@@ -316,11 +390,14 @@ def render_sync_progress_fragment(
             pre-computed bool so the macro doesn't need to reach into
             ``SubscriptionState`` shape.
         needs_retry_by_id: ``{tenant_id: bool}`` from ``is_retry_recommended``.
+        now_ms: injected wall clock in epoch milliseconds, threaded into
+            ``build_progress_view`` so every view in the same render uses
+            the same instant for ``is_live_sync`` evaluation.
 
     Returns:
         Rendered HTML string.
     """
-    tenant_views = build_progress_view(session_tenants, tenant_rows)
+    tenant_views = build_progress_view(session_tenants, tenant_rows, now_ms=now_ms)
     polling = should_poll(tenant_views)
     return render_template(
         "partials/sync_progress_panel.html",

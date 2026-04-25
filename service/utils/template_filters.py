@@ -31,3 +31,23 @@ def format_last_sync(epoch_ms: int | float | Decimal | None) -> str:
     # %-d strips the day's leading zero. Linux/macOS only, which matches the
     # documented dev environment (Ubuntu; see .claude/rules/project.md).
     return datetime.fromtimestamp(ts, tz=UTC).strftime("%b %-d, %H:%M")
+
+
+def format_last_sync_iso(epoch_ms: int | float | Decimal | None) -> str:
+    """Format an epoch-ms timestamp as an ISO-8601 UTC string.
+
+    Returns ``''`` for None / 0 so the template can omit the attribute
+    cleanly. Used as the machine-readable ``datetime`` attribute on
+    ``<time>`` elements so screen readers and the local-time JS have
+    the same authoritative UTC source.
+
+    Args:
+        epoch_ms: Milliseconds since the Unix epoch. Accepts ``Decimal``.
+
+    Returns:
+        ``"2024-01-15T14:30:00Z"`` or ``""`` for empty input.
+    """
+    if not epoch_ms:
+        return ""
+    ts = int(epoch_ms) / 1000
+    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

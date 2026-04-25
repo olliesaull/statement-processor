@@ -11,9 +11,8 @@ This handler:
 import time
 from typing import Any
 
-from botocore.exceptions import ClientError
-
 import stripe
+from botocore.exceptions import ClientError
 
 from config import S3_BUCKET_NAME, s3_client, tenant_billing_table, tenant_data_table, tenant_statements_table
 from logger import logger
@@ -80,15 +79,29 @@ def _delete_statement_rows(tenant_id: str) -> int:
 
 
 def _mark_as_erased(tenant_id: str) -> None:
-    """Set status to ERASED and clean up attributes.
+    """Set status to ERASED and clear every sync-lifecycle attribute.
 
     Uses a conditional write to prevent race conditions — if the tenant
     reconnected and cleared EraseTenantDataTime, this raises
     ConditionalCheckFailedException (handled by the caller).
+
+    IMPORTANT: the REMOVE list below mirrors _PROGRESS_RESOURCES in
+    service/tenant_data_repository.py plus the other sync-state attrs
+    (ReconcileReadyAt, LastFullLoadCompletedAt, LastHeartbeatAt,
+    LastSyncTime). Any new progress-tracked resource added in the
+    service must be added here too — this Lambda does not import from
+    the service. See plans/2026-04-23-tenant-management-ux-fixes-design.md
+    Issue 4a.
     """
     tenant_data_table.update_item(
         Key={"TenantID": tenant_id},
-        UpdateExpression="SET TenantStatus = :erased REMOVE EraseTenantDataTime, LastSyncTime",
+        UpdateExpression=(
+            "SET TenantStatus = :erased "
+            "REMOVE EraseTenantDataTime, LastSyncTime, LastHeartbeatAt, "
+            "ReconcileReadyAt, LastFullLoadCompletedAt, "
+            "ContactsProgress, InvoicesProgress, CreditNotesProgress, "
+            "PaymentsProgress, PerContactIndexProgress"
+        ),
         ExpressionAttributeValues={":erased": "ERASED"},
         ConditionExpression="attribute_exists(EraseTenantDataTime)",
     )
@@ -101,10 +114,7 @@ def _cancel_stripe_subscription_if_active(tenant_id: str) -> None:
     data is actually erased. This preserves the subscription during the
     grace period so reconnecting tenants find everything intact.
     """
-    response = tenant_billing_table.get_item(
-        Key={"TenantID": tenant_id},
-        ProjectionExpression="StripeSubscriptionID",
-    )
+    response = tenant_billing_table.get_item(Key={"TenantID": tenant_id}, ProjectionExpression="StripeSubscriptionID")
     item = response.get("Item")
     if not item:
         return

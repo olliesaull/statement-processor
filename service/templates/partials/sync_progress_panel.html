@@ -22,10 +22,15 @@
 <ul id="sync-progress-panel"
     class="tenant-card-list"
     aria-label="Connected tenants"
-    hx-get="/tenants/sync-progress"
-    {# Visibility / AFK gating via afk.js toggling hx-disable on this element. #}
-    {% if polling %}hx-trigger="every 3s"{% endif %}
-    hx-swap="outerHTML">
+    {# Visibility / AFK gating via afk.js toggling hx-disable on this element.
+       hx-* attrs are all behind the polling gate because HTMX's default
+       trigger on a <ul> is 'click' — leaving hx-get on a not-polling panel
+       meant card clicks fired phantom /tenants/sync-progress requests. #}
+    {% if polling %}
+      hx-get="/tenants/sync-progress"
+      hx-trigger="every 3s"
+      hx-swap="outerHTML"
+    {% endif %}>
   {% if not tenant_views %}
     <li class="tenant-card-empty">
       <div class="tenant-card-empty-inner">

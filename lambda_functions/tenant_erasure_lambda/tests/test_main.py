@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import main
 
@@ -306,3 +306,66 @@ def test_cancel_subscription_stripe_error_does_not_raise(monkeypatch) -> None:
     with patch("main.stripe.Subscription.cancel", side_effect=stripe_lib.StripeError("test error")):
         # Should not raise — error is caught and logged.
         main._cancel_stripe_subscription_if_active("t1")
+
+
+def test_mark_as_erased_removes_every_sync_state_attribute(monkeypatch) -> None:
+    """_mark_as_erased must REMOVE every sync-lifecycle attribute."""
+    calls: list[dict] = []
+
+    class FakeTable:
+        @staticmethod
+        def update_item(**kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(main, "tenant_data_table", FakeTable())
+
+    main._mark_as_erased("t-erased-1")
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["Key"] == {"TenantID": "t-erased-1"}
+    assert kwargs["ExpressionAttributeValues"] == {":erased": "ERASED"}
+    assert kwargs["ConditionExpression"] == "attribute_exists(EraseTenantDataTime)"
+
+    expr = kwargs["UpdateExpression"]
+    assert "SET TenantStatus = :erased" in expr
+
+    # Every sync-lifecycle attribute must appear in the REMOVE list.
+    # Use a single substring assertion per attribute so a missing one
+    # produces a precise failure message.
+    expected_removes = [
+        "EraseTenantDataTime",
+        "LastSyncTime",
+        "LastHeartbeatAt",
+        "ReconcileReadyAt",
+        "LastFullLoadCompletedAt",
+        "ContactsProgress",
+        "InvoicesProgress",
+        "CreditNotesProgress",
+        "PaymentsProgress",
+        "PerContactIndexProgress",
+    ]
+    remove_clause = expr.split("REMOVE", 1)[1]
+    for attr in expected_removes:
+        assert attr in remove_clause, f"REMOVE clause missing {attr!r}: {remove_clause!r}"
+
+
+def test_mark_as_erased_does_not_remove_unrelated_attributes(monkeypatch) -> None:
+    """Canary: erasure must only clear sync-state, not everything."""
+    calls: list[dict] = []
+
+    class FakeTable:
+        @staticmethod
+        def update_item(**kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(main, "tenant_data_table", FakeTable())
+
+    main._mark_as_erased("t-erased-2")
+
+    assert len(calls) == 1
+    remove_clause = calls[0]["UpdateExpression"].split("REMOVE", 1)[1]
+    # Attributes the Lambda must NOT touch — these belong to domains
+    # (banners, billing, statement history) outside sync lifecycle.
+    for attr in ("DismissedBanners", "StripeSubscriptionID", "TenantID"):
+        assert attr not in remove_clause, f"REMOVE clause unexpectedly touches {attr!r}"

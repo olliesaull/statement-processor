@@ -77,6 +77,11 @@ class TenantStatus(StrEnum):
     ERASED = "ERASED"
 
 
+# IMPORTANT: the attribute names on the right-hand side are duplicated in
+# lambda_functions/tenant_erasure_lambda/main.py (_mark_as_erased REMOVE
+# expression). Any addition/rename here MUST be mirrored there — the
+# erasure Lambda does not share code with the service. See decision log
+# 2026-04-23 ("Tenant management UX fixes — five choices") for context.
 _PROGRESS_RESOURCES: dict[str, str] = {
     "contacts": "ContactsProgress",
     "invoices": "InvoicesProgress",
@@ -84,6 +89,17 @@ _PROGRESS_RESOURCES: dict[str, str] = {
     "payments": "PaymentsProgress",
     "per_contact_index": "PerContactIndexProgress",
 }
+
+ALL_SYNC_RESOURCES: Final[tuple[str, ...]] = tuple(_PROGRESS_RESOURCES.keys())
+"""Every progress-tracked resource, in persistence order.
+
+Consumed by:
+- ``sync.sync_data`` to scope the start-of-run progress-map reset.
+- ``utils.sync_progress.is_retry_recommended`` to iterate retry candidates.
+- ``routes.api._collect_retry_resources`` for the same.
+
+Source of truth is ``_PROGRESS_RESOURCES`` above; this tuple is derived so
+adding a new sync resource means one edit, not three."""
 
 
 def _progress_attribute_name(resource: str) -> str:
@@ -327,6 +343,35 @@ class TenantDataRepository:
             ExpressionAttributeNames={"#progress": attribute_name},
             ExpressionAttributeValues={":progress": progress, ":heartbeat": now_ms},
         )
+
+    @classmethod
+    def reset_resource_progress(cls, tenant_id: str, resources: Iterable[str]) -> None:
+        """Reset the named progress sub-maps to ``{status: pending}``.
+
+        Called by ``sync_data`` at start so a new run doesn't inherit stale
+        FAILED / IN_PROGRESS markers from an interrupted prior attempt.
+        Resources not listed stay untouched — retry paths rely on this to
+        preserve COMPLETE markers for the resources they're skipping.
+
+        Caller contract: the tenant row must already exist — in practice this
+        is only called after ``try_acquire_sync`` has succeeded, which writes
+        the row as part of the lock-claim ``UpdateItem``. No
+        ``ConditionExpression`` is used here: a missing row is an invariant
+        violation, not a runtime condition to guard.
+
+        Args:
+            tenant_id: Tenant whose maps are being reset.
+            resources: Snake-case resource identifiers to reset. Unknown
+                identifiers raise via ``_progress_attribute_name``.
+        """
+        resources = list(resources)
+        if not resources:
+            return
+        names = {f"#r{i}": _progress_attribute_name(r) for i, r in enumerate(resources)}
+        set_clauses = [f"{alias} = :pending" for alias in names]
+        # Mirror update_resource_progress's StrEnum coercion.
+        pending: dict[str, Any] = {"status": str(ProgressStatus.PENDING)}
+        cls._table.update_item(Key={"TenantID": tenant_id}, UpdateExpression="SET " + ", ".join(set_clauses), ExpressionAttributeNames=names, ExpressionAttributeValues={":pending": pending})
 
     @classmethod
     def mark_reconcile_ready(cls, tenant_id: str) -> None:
